@@ -12,9 +12,12 @@ struct PDFKitView: UIViewRepresentable {
     let initialPage: Int
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
+    var onTranslate: (String) -> Void = { _ in }
 
     func makeCoordinator() -> ReaderCoordinator {
-        ReaderCoordinator(onPageChanged: onPageChanged, onSelectionInfo: onSelectionInfo)
+        let coordinator = ReaderCoordinator(onPageChanged: onPageChanged, onSelectionInfo: onSelectionInfo)
+        coordinator.onTranslate = onTranslate
+        return coordinator
     }
 
     func makeUIView(context: Context) -> PDFView {
@@ -43,6 +46,7 @@ struct PDFKitView: UIViewRepresentable {
     func updateUIView(_ uiView: PDFView, context: Context) {
         context.coordinator.onPageChanged = onPageChanged
         context.coordinator.onSelectionInfo = onSelectionInfo
+        context.coordinator.onTranslate = onTranslate
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {

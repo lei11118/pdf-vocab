@@ -1,21 +1,23 @@
 import UIKit
 import PDFKit
+import AVFoundation
 
-/// 取词交互协调器(v0.2.9)。
+/// 取词交互协调器(v0.3.0)。
 ///
-/// 架构:**手指与 Pencil 统一走自有取词管线**,全程**不再设置 PDFView 的选区状态**
-/// (`setCurrentSelection` 已移除)——黄高亮由我们自己绘制,信息条/菜单全部来自自有 Selection,
+/// 架构:**手指与 Pencil 统一走自有取词管线**,全程**不设置 PDFView 的选区状态**
+/// (`setCurrentSelection` 已移除),黄高亮/信息条/菜单全部由自有状态驱动,
 /// 从根上消除"PDFKit 因异常文档几何自动滚动/跳页"的触发面。
 /// 同时停用 PDFKit 内置选择手势(长按/双击),保留滚动、缩放、链接单击。
 ///
-/// - 取词:selectionForWord / selectionForLine / selection(from:to:),纯点坐标(规避 iOS 18+ 索引回归)
-/// - 高亮:差量更新 + 页面边界校验(越界矩形拒绝)
-/// - 防跳页:pageDidChange 检出"紧跟选区变化的前跳"时自动拉回
-/// - 诊断日志:全量记录到 Documents/diagnostics.log
+/// v0.3.0:
+/// - 长按拖动期间**冻结滚动**(pan 手势临时禁用),拖动=稳定扩选,不再被滚动抢走;
+/// - 编辑菜单补全:复制 / 翻译(translationPresentation)/ 朗读(美音)/ 共享(系统分享)。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: ((SelectionInfo?) -> Void)
+    /// 「翻译」菜单项的回调(由 SwiftUI 层弹出系统翻译面板)
+    var onTranslate: ((String) -> Void)?
     /// 当前文档标识(sha 前 8 位,取自文件名),仅用于日志
     var docLabel = ""
 
@@ -32,8 +34,15 @@ final class ReaderCoordinator: NSObject {
     private var lastAnySelectionChangeTime: CFAbsoluteTime = 0
     private var lastAppliedCharCount = 0
     private var suppressLogged = false
-    /// 自有路线最近一次选中的文本(菜单"复制"与手势结束判断用)
+    /// 自有路线最近一次选中的文本(菜单各项与手势结束判断用)
     private var lastOurSelectionText = ""
+
+    // 拖动期间冻结滚动
+    private weak var frozenScrollView: UIScrollView?
+    private var scrollWasEnabled = false
+
+    // 朗读
+    private let speaker = AVSpeechSynthesizer()
 
     // 防跳页
     private var lastGoodPage: (index: Int, time: CFAbsoluteTime) = (0, 0)
@@ -107,6 +116,7 @@ final class ReaderCoordinator: NSObject {
         jumpGuardUntil = 0
         let index = pdfView.document.flatMap { doc in pdfView.currentPage.map { doc.index(for: $0) } } ?? 0
         lastGoodPage = (index, CFAbsoluteTimeGetCurrent())
+        freezeScrolling(false)
         suppressNativeSelection(in: pdfView)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, let view = self.pdfView else { return }
@@ -222,6 +232,7 @@ final class ReaderCoordinator: NSObject {
             let snippet = Self.logSnippet(word.string ?? "")
             DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d pickup=%.0fms", kind, snippet, word.string?.count ?? 0, ms))
             drag = DragState(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
+            freezeScrolling(true) // 拖动期间页面不再滚动,拖动=稳定扩选
             applyOurSelection(word)
 
         case .changed:
@@ -245,6 +256,7 @@ final class ReaderCoordinator: NSObject {
             let hadDrag = drag != nil
             let isEnded = gesture.state == .ended
             drag = nil
+            freezeScrolling(false)
             DiagLog.log("press.end(\(kind)) ours=\(hadDrag) ended=\(isEnded)")
             if hadDrag, isEnded, !lastOurSelectionText.isEmpty {
                 let point = gesture.location(in: pdfView)
@@ -388,6 +400,7 @@ final class ReaderCoordinator: NSObject {
     private func clearSelectionEverything() {
         guard let pdfView else { return }
         DiagLog.log("clearSelection")
+        freezeScrolling(false)
         suppressSelectionNotification = true
         pdfView.currentSelection = nil
         pdfView.clearSelection()
@@ -469,6 +482,63 @@ final class ReaderCoordinator: NSObject {
         guard bounds.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
         return (page, point)
     }
+
+    private func pdfScrollView(_ view: PDFView) -> UIScrollView? {
+        if let scroll = view.documentView?.superview as? UIScrollView { return scroll }
+        return Self.findScrollView(in: view)
+    }
+
+    private static func findScrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        for subview in view.subviews {
+            if let scroll = findScrollView(in: subview) { return scroll }
+        }
+        return nil
+    }
+
+    /// 长按拖动期间冻结/恢复页面滚动(与原生选择手感一致,避免拖动被滚动抢走)。
+    private func freezeScrolling(_ freeze: Bool) {
+        guard let pdfView else { return }
+        if freeze {
+            if frozenScrollView == nil, let sv = pdfScrollView(pdfView) {
+                scrollWasEnabled = sv.panGestureRecognizer.isEnabled
+                if scrollWasEnabled {
+                    sv.panGestureRecognizer.isEnabled = false
+                }
+                frozenScrollView = sv
+                DiagLog.log("scroll frozen")
+            }
+        } else {
+            if let sv = frozenScrollView, scrollWasEnabled {
+                sv.panGestureRecognizer.isEnabled = true
+            }
+            frozenScrollView = nil
+        }
+    }
+
+    private static func topViewController(from view: UIView) -> UIViewController? {
+        var vc = view.window?.rootViewController
+        while let presented = vc?.presentedViewController {
+            vc = presented
+        }
+        return vc
+    }
+
+    private func presentShare(text: String, sourcePoint: CGPoint) {
+        guard let pdfView, let host = Self.topViewController(from: pdfView) else {
+            DiagLog.log("share: no host")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let vc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+            if let pop = vc.popoverPresentationController {
+                pop.sourceView = pdfView
+                pop.sourceRect = CGRect(x: sourcePoint.x, y: sourcePoint.y, width: 1, height: 1)
+            }
+            host.present(vc, animated: true)
+            DiagLog.log("share presented")
+        }
+    }
 }
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
@@ -486,13 +556,35 @@ extension ReaderCoordinator: UIEditMenuInteractionDelegate {
         menuFor configuration: UIEditMenuConfiguration,
         suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
-        let copy = UIAction(title: "复制") { [weak self] _ in
+        let text = lastOurSelectionText.isEmpty ? (pdfView?.currentSelection?.string ?? "") : lastOurSelectionText
+
+        let copy = UIAction(title: "复制", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
             guard let self else { return }
-            var text = self.lastOurSelectionText
-            if text.isEmpty { text = self.pdfView?.currentSelection?.string ?? "" }
-            guard !text.isEmpty else { return }
-            UIPasteboard.general.string = text
+            var value = self.lastOurSelectionText
+            if value.isEmpty { value = self.pdfView?.currentSelection?.string ?? "" }
+            guard !value.isEmpty else { return }
+            UIPasteboard.general.string = value
         }
-        return UIMenu(children: [copy])
+
+        let translate = UIAction(title: "翻译", image: UIImage(systemName: "translate")) { [weak self] _ in
+            guard let self, !text.isEmpty else { return }
+            self.onTranslate?(text)
+        }
+
+        let speak = UIAction(title: "朗读", image: UIImage(systemName: "speaker.wave.2")) { [weak self] _ in
+            guard let self, !text.isEmpty else { return }
+            self.speaker.stopSpeaking(at: .immediate)
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            self.speaker.speak(utterance)
+            DiagLog.log("speak selection")
+        }
+
+        let share = UIAction(title: "共享", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            guard let self, !text.isEmpty else { return }
+            self.presentShare(text: text, sourcePoint: configuration.sourcePoint)
+        }
+
+        return UIMenu(children: [copy, translate, speak, share])
     }
 }
