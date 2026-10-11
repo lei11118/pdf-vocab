@@ -1,0 +1,19 @@
+# —— 生成物(工程文件由 XcodeGen 生成,不入库)——
+*.xcodeproj/
+*.xcworkspace/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+
+# —— 生成的大文件(CI 里重新生成)——
+Resources/ecdict.sqlite
+Resources/ecdict.sqlite.gz
+
+# —— macOS ——
+.DS_Store
+
+# —— Python ——
+__pycache__/
+*.pyc

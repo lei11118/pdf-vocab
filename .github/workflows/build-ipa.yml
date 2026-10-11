@@ -1,0 +1,85 @@
+name: build-ipa
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PROJECT: PdfVocab.xcodeproj
+  SCHEME: PdfVocab
+  # 固定工具链(见 docs/PLAN.md):macos-26 镜像 + Xcode 26.6
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/PdfVocab.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP="build/PdfVocab.xcarchive/Products/Applications/PdfVocab.app"
+          test -d "$APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          ( cd build && zip -qry "PdfVocab-unsigned.ipa" Payload )
+
+      - name: Verify IPA
+        run: |
+          set -euo pipefail
+          unzip -l build/PdfVocab-unsigned.ipa | head -15
+          unzip -l build/PdfVocab-unsigned.ipa | grep -q "Payload/PdfVocab.app/Info.plist"
+          lipo -info build/Payload/PdfVocab.app/PdfVocab
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PdfVocab-unsigned-ipa
+          path: build/PdfVocab-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/PdfVocab-unsigned.ipa
+          generate_release_notes: true
