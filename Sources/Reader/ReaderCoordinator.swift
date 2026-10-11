@@ -1,15 +1,18 @@
 import UIKit
 import PDFKit
 
-/// 取词交互协调器(v0.2.3)。
+/// 取词交互协调器(v0.2.4)。
 ///
-/// - 手指:依赖 PDFView 原生选择(监听 `.PDFViewSelectionChanged`)。
-/// - Pencil:自定义长按/拖选。命中与范围全部走「点坐标」API
-///   (`selectionForWord` / `selectionForLine` / `selection(from:to:)`),
-///   不经过字符串索引——规避 iOS 18+ PDFKit `characterBounds(at:)`/`page.string`
-///   顺序回归导致的"选词位置与笔触偏差 / 拖动跳变"问题。
-/// - 临时高亮:差量更新(只增删变化的行注解,不再清空重建),大选区不卡顿。
-/// - 点空白清除;Pencil 手势结束后保留原生选择(可用手指手柄继续调整)。
+/// 设计:
+/// - 手指:PDFView 原生选择(监听 .PDFViewSelectionChanged)。
+/// - Pencil:**让位于原生**。PDFKit 原生选择在 iPadOS 26 可响应 Pencil(含编辑菜单);
+///   我们的自定义长按手势延后到 0.75s,且若 0.7s 内检测到"原生驱动的选择变化"就完全让位
+///   (修复编辑栏概率性不出现/被顶掉的问题)。原生确实未响应时,我们兜底接管。
+/// - 取词/扩展:纯点坐标 API(selectionForWord / selectionForLine / selection(from:to:)),
+///   不经字符串索引(规避 iOS 18+ PDFKit 索引回归)。
+/// - **选区合法性校验**:异常巨大/跨页过多的选择(内部数据损坏时出现)一律拒绝,
+///   不设置不高亮——避免"跳转到最后一页 + 卡死数秒"(由巨型非法选区触发)。
+/// - 临时高亮:差量更新;行数先截取再取边界;选区越大节流步进越大。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
@@ -21,6 +24,12 @@ final class ReaderCoordinator: NSObject {
     private var lastAppliedSelectionKey: String?
     private var observers: [NSObjectProtocol] = []
 
+    // Pencil 让位逻辑
+    private var lastNativeSelectionChangeTime: CFAbsoluteTime = 0
+    private var lastOwnSelectionActionTime: CFAbsoluteTime = 0
+    private var yieldedToNative = false
+    private var lastAppliedCharCount = 0
+
     private struct PencilDrag {
         var page: PDFPage
         var anchorPoint: CGPoint
@@ -29,7 +38,7 @@ final class ReaderCoordinator: NSObject {
     }
     private var pencilDrag: PencilDrag?
 
-    private static let maxHighlightLines = 120
+    private static let maxHighlightLines = 150
 
     init(
         onPageChanged: @escaping (Int) -> Void,
@@ -73,7 +82,7 @@ final class ReaderCoordinator: NSObject {
 
     func installGestures(on view: PDFView) {
         let pencilSelect = UILongPressGestureRecognizer(target: self, action: #selector(handlePencilLongPress(_:)))
-        pencilSelect.minimumPressDuration = 0.3
+        pencilSelect.minimumPressDuration = 0.75 // 晚于原生(约 0.5s):让原生优先
         pencilSelect.allowableMovement = 14
         pencilSelect.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         view.addGestureRecognizer(pencilSelect)
@@ -93,25 +102,35 @@ final class ReaderCoordinator: NSObject {
 
         switch gesture.state {
         case .began:
+            yieldedToNative = false
+            // 若 0.7s 内有"原生驱动"的选择变化,说明原生已接管这次按压 → 让位
+            if CFAbsoluteTimeGetCurrent() - lastNativeSelectionChangeTime < 0.7 {
+                yieldedToNative = true
+                return
+            }
             guard let hit = pageHit(viewPoint),
                   let word = hit.page.selectionForWord(at: hit.point)
-                      ?? hit.page.selectionForLine(at: hit.point) else { return }
+                      ?? hit.page.selectionForLine(at: hit.point),
+                  Self.isSane(word, maxPages: 1, maxChars: 300) else { return }
             pencilDrag = PencilDrag(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
             setCurrentSelection(word)
 
         case .changed:
+            guard !yieldedToNative else { return }
             guard let drag = pencilDrag,
                   let hit = pageHit(viewPoint), hit.page === drag.page else { return }
+            // 自适应节流:选区越大步进越大(长跨度拖动减负)
+            let step: CGFloat = lastAppliedCharCount > 800 ? 8 : 3
             let dx = hit.point.x - drag.lastPoint.x
             let dy = hit.point.y - drag.lastPoint.y
-            guard dx * dx + dy * dy >= 9 else { return } // 移动小于 3pt 不重算(节流防卡顿)
+            guard dx * dx + dy * dy >= step * step else { return }
             pencilDrag?.lastPoint = hit.point
             if let selection = selectionBetween(drag, and: hit.point) {
                 setCurrentSelection(selection)
             }
 
         case .ended, .cancelled, .failed:
-            // 保留原生选择(之后可用手指拖动手柄继续调整;点空白处清除)
+            yieldedToNative = false
             pencilDrag = nil
 
         default:
@@ -139,33 +158,54 @@ final class ReaderCoordinator: NSObject {
 
     private func selectionDidChange() {
         guard !suppressSelectionNotification, let pdfView else { return }
+
+        // 记录"原生驱动"的选择变化时间(用于 Pencil 让位判断;50ms 窗口滤掉我们自己的设置)
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastOwnSelectionActionTime > 0.05 {
+            lastNativeSelectionChangeTime = now
+        }
+
         let selection = pdfView.currentSelection
         let text = selection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         if let selection, !selection.pages.isEmpty, !text.isEmpty {
+            // 合法性校验:异常选择(内部数据损坏时出现的全文档巨型选区)一律跳过,
+            // 避免 PDFKit 滚动到"最后一页"以及 selectionsByLine 展开数千行导致的主线程卡死
+            guard Self.isSane(selection, maxPages: 5, maxChars: 10_000) else {
+                lastAppliedSelectionKey = nil
+                lastAppliedCharCount = 0
+                clearTempHighlight()
+                onSelectionInfo(nil)
+                return
+            }
             let pageIndex = selection.pages.first.flatMap { pdfView.document?.index(for: $0) } ?? -1
             let key = "\(pageIndex)|\(text.count)|\(text.hashValue)"
             guard key != lastAppliedSelectionKey else { return } // 内容未变不重建
             lastAppliedSelectionKey = key
+            lastAppliedCharCount = text.count
             updateTempHighlight(for: selection)
             let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
             onSelectionInfo(SelectionInfo(text: display, wordCount: WordPicker.countWords(in: text)))
         } else {
             lastAppliedSelectionKey = nil
+            lastAppliedCharCount = 0
             clearTempHighlight()
             onSelectionInfo(nil)
         }
     }
 
-    /// 差量更新临时高亮:只移除消失的行、只新增出现的行(避免"清空重建"造成的大文档卡顿)。
+    /// 差量更新临时高亮:只移除消失的行、只新增出现的行。
     private func updateTempHighlight(for selection: PDFSelection) {
         var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
         for page in selection.pages {
-            let lineSelections = selection.selectionsByLine().filter { $0.pages.first === page }
+            // 先截取行数上限,再取 bounds(避免在超大选区上展开数千行)
+            let lineSelections = selection.selectionsByLine()
+                .prefix(Self.maxHighlightLines)
+                .filter { $0.pages.first === page }
             var rects = lineSelections.map { $0.bounds(for: page) }
             if rects.isEmpty { rects = [selection.bounds(for: page)] }
 
-            for rect in rects.prefix(Self.maxHighlightLines) where Self.isValid(rect) {
+            for rect in rects where Self.isValid(rect) {
                 desired[annotationKey(page, rect)] = (page, rect)
             }
         }
@@ -190,7 +230,6 @@ final class ReaderCoordinator: NSObject {
             tempAnnotations[key] = (entry.page, annotation)
         }
 
-        // 命中判断用的矩形(无注解开销)
         tempRects = desired.values.map { ($0.page, $0.rect) }
     }
 
@@ -209,6 +248,7 @@ final class ReaderCoordinator: NSObject {
         pdfView.clearSelection()
         suppressSelectionNotification = false
         lastAppliedSelectionKey = nil
+        lastAppliedCharCount = 0
         clearTempHighlight()
         onSelectionInfo(nil)
     }
@@ -226,12 +266,13 @@ final class ReaderCoordinator: NSObject {
                 let rightPoint = CGPoint(x: currentRect.maxX - 0.6, y: currentRect.midY)
                 let (from, to) = Self.ordered(leftPoint, rightPoint)
                 if let selection = page.selection(from: from, to: to),
+                   Self.isSane(selection, maxPages: 2, maxChars: 6_000),
                    let text = selection.string, !text.isEmpty {
                     return selection
                 }
             }
         }
-        // 退化:锚点到当前点之间的字符级选择
+        // 退化:锚点到当前点之间的字符级选择(setCurrentSelection 里还有一次合法性校验)
         return page.selection(from: drag.anchorPoint, to: current)
     }
 
@@ -239,6 +280,12 @@ final class ReaderCoordinator: NSObject {
     private static func ordered(_ a: CGPoint, _ b: CGPoint) -> (CGPoint, CGPoint) {
         if abs(a.y - b.y) < 6 { return a.x <= b.x ? (a, b) : (b, a) }
         return a.y > b.y ? (a, b) : (b, a)
+    }
+
+    private static func isSane(_ selection: PDFSelection, maxPages: Int, maxChars: Int) -> Bool {
+        guard !selection.pages.isEmpty, selection.pages.count <= maxPages else { return false }
+        guard let text = selection.string, !text.isEmpty, text.count <= maxChars else { return false }
+        return true
     }
 
     private static func isValid(_ rect: CGRect) -> Bool {
@@ -270,6 +317,8 @@ final class ReaderCoordinator: NSObject {
 
     private func setCurrentSelection(_ selection: PDFSelection?) {
         guard let pdfView, let selection, let text = selection.string, !text.isEmpty else { return }
+        guard Self.isSane(selection, maxPages: 2, maxChars: 6_000) else { return }
+        lastOwnSelectionActionTime = CFAbsoluteTimeGetCurrent()
         pdfView.setCurrentSelection(selection, animate: false)
     }
 }
