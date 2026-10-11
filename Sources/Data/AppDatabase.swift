@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// 应用数据库(GRDB)。位置:Application Support/readword.sqlite
-final class AppDatabase {
+final class AppDatabase: @unchecked Sendable {
     static let shared: AppDatabase? = try? AppDatabase()
 
     let dbQueue: DatabaseQueue

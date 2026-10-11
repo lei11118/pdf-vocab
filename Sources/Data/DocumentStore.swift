@@ -4,7 +4,7 @@ import GRDB
 import PDFKit
 
 /// 文档导入与查询。导入流程:计算 SHA-256 → 拷贝到沙盒 → 解析 PDF → 入库。
-struct DocumentStore {
+struct DocumentStore: Sendable {
     let db: AppDatabase
 
     var pdfDirectory: URL {

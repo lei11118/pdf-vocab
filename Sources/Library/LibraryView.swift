@@ -126,6 +126,7 @@ struct LibraryView: View {
 
     private func startImport(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
+        let store = self.store
         importingLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) 个文件"
 
         Task { @MainActor in
