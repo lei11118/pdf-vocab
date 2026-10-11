@@ -11,8 +11,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.2.5"
-    CURRENT_PROJECT_VERSION: "6"
+    MARKETING_VERSION: "0.2.6"
+    CURRENT_PROJECT_VERSION: "7"
 
 packages:
   GRDB:
@@ -43,6 +43,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UILaunchScreen: {}

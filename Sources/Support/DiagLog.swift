@@ -7,11 +7,28 @@ enum DiagLog {
     private static let maxBytes = 256 * 1024
     private static let queue = DispatchQueue(label: "diaglog.write")
 
+    /// 日志文件(「文件」App / 分享面板 / 诊断页共用)
+    static var fileURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("diagnostics.log")
+    }
+
+    /// 读取全部日志
+    static func readAll() -> String {
+        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// 清空日志
+    static func clear() {
+        queue.sync {
+            if let url = fileURL { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
     static func log(_ message: String) {
         queue.async {
-            guard let url = FileManager.default
-                .urls(for: .documentDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("diagnostics.log") else { return }
+            guard let url = fileURL else { return }
 
             let formatter = DateFormatter()
             formatter.dateFormat = "HH:mm:ss.SSS"

@@ -6,6 +6,8 @@ struct PdfVocabApp: App {
 
     init() {
         self.store = AppDatabase.shared.map { DocumentStore(db: $0) }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        DiagLog.log("app launched v\(version)")
     }
 
     var body: some Scene {

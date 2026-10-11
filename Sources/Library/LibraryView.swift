@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var importingLabel: String?
     @State private var errorMessage: String?
     @State private var pendingDelete: DocumentRecord?
+    @State private var showDiagnostics = false
 
     var body: some View {
         NavigationStack {
@@ -22,6 +23,13 @@ struct LibraryView: View {
             }
             .navigationTitle("读词")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showDiagnostics = true
+                    } label: {
+                        Label("诊断", systemImage: "info.circle")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showImporter = true
@@ -44,6 +52,9 @@ struct LibraryView: View {
                     }
                 )
                 .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showDiagnostics) {
+                DiagnosticsView()
             }
             .overlay {
                 if let importingLabel {
