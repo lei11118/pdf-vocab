@@ -3,7 +3,10 @@ import CryptoKit
 import GRDB
 import PDFKit
 
-/// 文档导入与查询。导入流程:计算 SHA-256 → 拷贝到沙盒 → 解析 PDF → 入库。
+/// 文档导入与查询。
+/// 导入管线(对所有来源统一):安全作用域(如需要)→ 拷贝到沙盒临时档 → 校验 %PDF →
+/// 计算 SHA-256 → 去重 → 移动到 PDFs/<sha>.pdf → 入库。
+/// 先落地再处理,兼容 iCloud/网盘等文件提供商(读 FileHandle 前先 copy 触发物化)。
 struct DocumentStore: Sendable {
     let db: AppDatabase
 
@@ -35,26 +38,66 @@ struct DocumentStore: Sendable {
         }
     }
 
-    /// 导入一个 PDF 文件(来自文件选择器或"用读词打开")。
-    /// 同一文件重复导入时直接返回已有记录(保留阅读进度)。
+    /// Documents 根目录与 Inbox 里未被管理的 PDF(用户从"文件"App 拖入,或其他 App 拷贝进来)。
+    func looseImportables() -> [URL] {
+        let fm = FileManager.default
+        guard let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
+            return []
+        }
+        var result: [URL] = []
+        let dirs = [docs, docs.appendingPathComponent("Inbox", isDirectory: true)]
+        for dir in dirs {
+            guard let items = try? fm.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for item in items {
+                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                if !isDir, item.pathExtension.lowercased() == "pdf" {
+                    result.append(item)
+                }
+            }
+        }
+        return result
+    }
+
+    /// 导入一个 PDF 文件(来自选择器、共享打开、或拖入文件夹)。
+    /// 同一文件重复导入时返回已有记录(保留阅读进度)。
     @discardableResult
     func importFile(from url: URL) throws -> DocumentRecord {
+        let fm = FileManager.default
+        let destDir = try pdfDirectory
+        let scratch = try scratchDirectory()
+        let staged = scratch.appendingPathComponent(UUID().uuidString + ".pdf")
+        defer { try? fm.removeItem(at: staged) } // 成功 move 后此处静默失效
+
+        // 1) 先拷贝进沙盒——选择器已给沙盒副本时相当于同卷复制;iCloud/文件提供商在此触发物化
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            try fm.copyItem(at: url, to: staged)
+        } catch {
+            throw ImportError.cannotRead(error)
+        }
 
-        let sha = try Self.sha256(ofFileAt: url)
+        // 2) 校验是不是 PDF(文件头 1KB 内应含 %PDF)
+        guard Self.looksLikePDF(staged) else { throw ImportError.notAPDF }
+
+        // 3) 哈希 + 去重
+        let sha = try Self.sha256(ofFileAt: staged)
         if let existing = try document(sha256: sha) { return existing }
 
-        let destDir = try pdfDirectory
-        let dest = destDir.appendingPathComponent("\(sha).pdf")
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-        try fm.copyItem(at: url, to: dest)
-
-        guard let pdf = PDFDocument(url: dest) else {
-            try? fm.removeItem(at: dest)
-            throw ImportError.unreadablePDF
+        // 4) 能否解析(含加密检测)
+        guard let pdf = PDFDocument(url: staged) else { throw ImportError.unreadablePDF }
+        if pdf.isLocked, !pdf.unlock(withPassword: "") {
+            throw ImportError.encryptedPDF
         }
+
+        // 5) 移入正式位置 + 入库
+        let dest = destDir.appendingPathComponent("\(sha).pdf")
+        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+        try fm.moveItem(at: staged, to: dest)
 
         let rec = DocumentRecord(
             sha256: sha,
@@ -91,9 +134,31 @@ struct DocumentStore: Sendable {
 
     // MARK: - Helpers
 
+    private func scratchDirectory() throws -> URL {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("import-scratch", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path) {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
     private static func displayTitle(from url: URL) -> String {
         let name = url.deletingPathExtension().lastPathComponent
         return name.isEmpty ? "未命名" : name
+    }
+
+    /// PDF 文件头校验:%PDF 出现在开头 1KB 内。
+    private static func looksLikePDF(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let head: Data
+        do {
+            head = try handle.read(upToCount: 1024) ?? Data()
+        } catch {
+            return false
+        }
+        return head.range(of: Data("%PDF".utf8)) != nil
     }
 
     /// 是否含文字层(抽查前 5 页)。扫描版为 false,取词走 OCR(M6)。
@@ -122,12 +187,22 @@ struct DocumentStore: Sendable {
 }
 
 enum ImportError: LocalizedError {
+    case cannotRead(Error)
+    case notAPDF
     case unreadablePDF
+    case encryptedPDF
 
     var errorDescription: String? {
         switch self {
+        case .cannotRead(let error):
+            let ns = error as NSError
+            return "无法读取文件(\(ns.domain) \(ns.code)):\(error.localizedDescription)"
+        case .notAPDF:
+            return "所选文件不是有效的 PDF"
         case .unreadablePDF:
-            return "无法读取该 PDF 文件(可能已损坏或受密码保护)"
+            return "PDF 无法解析(文件可能已损坏)"
+        case .encryptedPDF:
+            return "PDF 受密码保护,暂不支持导入(后续版本加入)"
         }
     }
 }

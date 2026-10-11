@@ -122,3 +122,4 @@ pdf-vocab/
 5. Pencil 触觉类型受系统限制(仅对齐 / 路径完成两类)
 6. M1/M4 需要真机实测反馈(交互问题无法在无设备环境发现)
 7. Anki 客户端版本差异 —— 采用最保守的 genanki 同款格式,附导入测试步骤
+8. ✅ 已处理(2026-10-11):iPadOS 26 上 SwiftUI `.fileImporter` 安全作用域失效(社区已验证的 iOS 26 回归)→ 改用 UIKit `UIDocumentPickerViewController`(`asCopy: true`,系统先拷进沙盒再交付,无需安全作用域);导入管线重构为"先落地沙盒再处理";选择器类型放宽 `[.pdf, .data]`;新增"拖入文件夹 / Inbox 自动导入"通道
