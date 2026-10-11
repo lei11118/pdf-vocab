@@ -1,20 +1,23 @@
 import UIKit
 import PDFKit
 
-/// 取词交互协调器(v0.2.5)。
+/// 取词交互协调器(v0.2.8)。
 ///
-/// - 手指:PDFView 原生选择(监听 .PDFViewSelectionChanged)。
-/// - Pencil:让位于原生(手势延后 0.75s;检测到"原生驱动的非空选择变化"即让位);
-///   原生未接管时走自定义路径,并在手势结束时**主动弹出我们自己的编辑菜单**(复制),
-///   不再依赖系统概率性弹菜单。
-/// - 取词/扩展:纯点坐标 API(selectionForWord / selectionForLine / selection(from:to:))。
-/// - 防护:选区合法性校验(非法巨型选区拒绝)/ 设置选区后恢复滚动位置(防"跳最后一页")/
-///   差量高亮 / 自适应节流。
-/// - **诊断日志**:关键路径与耗时写入 Documents/diagnostics.log,便于定位真机卡顿。
+/// 架构:**手指与 Pencil 统一走自有取词管线**(长按 → 点坐标取词 → 拖动扩展 → 自绘编辑菜单),
+/// 并**停用 PDFKit 内置的选择手势**(长按/双击)。
+/// 依据(真机日志实证):内置选择机制在部分 PDF 上会把选区/自动显现解析到文档末尾,
+/// 触发"跳最后一页 + 卡死数秒";而自有管线的 Pencil 取词实测干净(pickup 2ms、无跳页)。
+///
+/// - 取词:selectionForWord / selectionForLine / selection(from:to:),纯点坐标(规避 iOS 18+ 索引回归)
+/// - 高亮:差量更新 + 页面边界校验(越界矩形拒绝)
+/// - 防跳页:设置选区后恢复滚动位置;pageDidChange 检出"紧跟选区变化的前跳"时自动拉回
+/// - 诊断日志:全量记录到 Documents/diagnostics.log
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: ((SelectionInfo?) -> Void)
+    /// 当前文档标识(sha 前 8 位,取自文件名),仅用于日志
+    var docLabel = ""
 
     private var tempAnnotations: [String: (page: PDFPage, annotation: PDFAnnotation)] = [:]
     private var tempRects: [(page: PDFPage, rect: CGRect)] = []
@@ -22,22 +25,28 @@ final class ReaderCoordinator: NSObject {
     private var lastAppliedSelectionKey: String?
     private var observers: [NSObjectProtocol] = []
 
-    // Pencil 让位逻辑
-    private var lastNativeSelectionChangeTime: CFAbsoluteTime = 0
+    // 手势状态
+    private weak var fingerSelectRef: UILongPressGestureRecognizer?
+    private weak var pencilSelectRef: UILongPressGestureRecognizer?
     private var lastOwnSelectionActionTime: CFAbsoluteTime = 0
-    private var yieldedToNative = false
+    private var lastAnySelectionChangeTime: CFAbsoluteTime = 0
     private var lastAppliedCharCount = 0
+    private var suppressLogged = false
 
-    // 自定义编辑菜单(用于自定义路径)
+    // 防跳页
+    private var lastGoodPage: (index: Int, time: CFAbsoluteTime) = (0, 0)
+    private var jumpGuardUntil: CFAbsoluteTime = 0
+
+    // 自定义编辑菜单
     private var editMenuInteraction: UIEditMenuInteraction?
 
-    private struct PencilDrag {
+    private struct DragState {
         var page: PDFPage
         var anchorPoint: CGPoint
         var anchorWord: PDFSelection
         var lastPoint: CGPoint
     }
-    private var pencilDrag: PencilDrag?
+    private var drag: DragState?
 
     private static let maxHighlightLines = 150
 
@@ -64,6 +73,9 @@ final class ReaderCoordinator: NSObject {
         observers.append(nc.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             self?.selectionDidChange()
         })
+        observers.append(nc.addObserver(forName: .PDFViewDocumentChanged, object: pdfView, queue: .main) { [weak self] _ in
+            self?.documentDidChange()
+        })
     }
 
     func removeObservers() {
@@ -73,93 +85,168 @@ final class ReaderCoordinator: NSObject {
         observers.removeAll()
     }
 
+    /// 文档加载完成后调用:记录信息 + 压制内置手势(PDFKit 可能在加载后重建内部手势,延时再压一次)
+    func documentDidLoad(_ document: PDFDocument) {
+        DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
+        suppressNativeSelection(in: pdfView)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, let view = self.pdfView else { return }
+            self.suppressNativeSelection(in: view)
+        }
+    }
+
+    private func documentDidChange() {
+        guard let pdfView else { return }
+        if let doc = pdfView.document {
+            DiagLog.log("docChanged: \(doc.pageCount) pages")
+        }
+        jumpGuardUntil = 0
+        let index = pdfView.document.flatMap { doc in pdfView.currentPage.map { doc.index(for: $0) } } ?? 0
+        lastGoodPage = (index, CFAbsoluteTimeGetCurrent())
+        suppressNativeSelection(in: pdfView)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, let view = self.pdfView else { return }
+            self.suppressNativeSelection(in: view)
+        }
+    }
+
     private func pageDidChange() {
         guard let pdfView, let page = pdfView.currentPage else { return }
         let index = pdfView.document?.index(for: page) ?? 0
+        let now = CFAbsoluteTimeGetCurrent()
         DiagLog.log("page->\(index)")
+
+        // 防跳页:紧跟选区变化(0.3s 内)的跨页"前跳"判为异常,拉回上次稳定页
+        if now > jumpGuardUntil,
+           now - lastAnySelectionChangeTime < 0.3,
+           abs(index - lastGoodPage.index) > 5,
+           index > lastGoodPage.index {
+            DiagLog.log("JUMP suspected \(lastGoodPage.index)->\(index); restore")
+            jumpGuardUntil = now + 1.0
+            if let target = pdfView.document?.page(at: lastGoodPage.index) {
+                pdfView.go(to: target)
+            }
+            return
+        }
+
+        lastGoodPage = (index, now)
+        suppressNativeSelection(in: pdfView)
         onPageChanged(index)
     }
 
     // MARK: - 手势
 
     func installGestures(on view: PDFView) {
-        let pencilSelect = UILongPressGestureRecognizer(target: self, action: #selector(handlePencilLongPress(_:)))
-        pencilSelect.minimumPressDuration = 0.75 // 晚于原生(约 0.5s):让原生优先
+        // 手指长按选词(0.5s)
+        let fingerSelect = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        fingerSelect.minimumPressDuration = 0.5
+        fingerSelect.allowableMovement = 14
+        fingerSelect.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        view.addGestureRecognizer(fingerSelect)
+        fingerSelectRef = fingerSelect
+
+        // Pencil 长按选词(0.45s)
+        let pencilSelect = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        pencilSelect.minimumPressDuration = 0.45
         pencilSelect.allowableMovement = 14
         pencilSelect.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         view.addGestureRecognizer(pencilSelect)
+        pencilSelectRef = pencilSelect
 
+        // 自绘编辑菜单
         let menuInteraction = UIEditMenuInteraction(delegate: self)
         view.addInteraction(menuInteraction)
         editMenuInteraction = menuInteraction
 
+        // 单击:点在已加亮词上保持,点空白清除;须等长按失败(避免与长按双击发)
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.allowedTouchTypes = [
             NSNumber(value: UITouch.TouchType.direct.rawValue),
             NSNumber(value: UITouch.TouchType.pencil.rawValue),
         ]
         tap.delegate = self
+        tap.require(toFail: fingerSelect)
+        tap.require(toFail: pencilSelect)
         view.addGestureRecognizer(tap)
+
+        suppressNativeSelection(in: view)
     }
 
-    @objc private func handlePencilLongPress(_ gesture: UILongPressGestureRecognizer) {
+    /// 停用 PDFKit 内置的选择手势(长按 / 双击)。
+    /// 这些机制在异常文本层文档上会触发"跳最后一页 + 卡死",且与自有管线冲突;
+    /// 保留滚动、缩放与链接单击。
+    func suppressNativeSelection(in view: UIView?) {
+        guard let view else { return }
+        var disabled = 0
+        func walk(_ v: UIView) {
+            for gr in v.gestureRecognizers ?? [] {
+                if gr === fingerSelectRef || gr === pencilSelectRef { continue }
+                let isLongPress = gr is UILongPressGestureRecognizer
+                let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
+                if (isLongPress || isMultiTap), gr.isEnabled {
+                    gr.isEnabled = false
+                    disabled += 1
+                }
+            }
+            for sub in v.subviews { walk(sub) }
+        }
+        walk(view)
+        if disabled > 0, !suppressLogged {
+            suppressLogged = true
+            DiagLog.log("suppressNative: disabled \(disabled) recognizers")
+        }
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let pdfView else { return }
+        let kind = Self.kind(of: gesture)
         let viewPoint = gesture.location(in: pdfView)
 
         switch gesture.state {
         case .began:
-            yieldedToNative = false
-            if CFAbsoluteTimeGetCurrent() - lastNativeSelectionChangeTime < 0.7 {
-                yieldedToNative = true
-                DiagLog.log("pencil.began: gave way to native")
-                return
-            }
             guard let hit = pageHit(viewPoint) else {
-                DiagLog.log("pencil.began: no page at point")
+                DiagLog.log("press.began(\(kind)): no page")
                 return
             }
             let t0 = CFAbsoluteTimeGetCurrent()
             let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point)
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             guard let word, Self.isSane(word, maxPages: 1, maxChars: 300) else {
-                DiagLog.log(String(format: "pencil.began: no word (%.0fms)", ms))
+                DiagLog.log(String(format: "press.began(%@): no word (%.0fms)", kind, ms))
                 return
             }
-            let snippet = String((word.string ?? "").prefix(20))
-            DiagLog.log(String(format: "pencil.began: word=「%@」 len=%d pickup=%.0fms", snippet, word.string?.count ?? 0, ms))
-            pencilDrag = PencilDrag(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
+            let snippet = Self.logSnippet(word.string ?? "")
+            DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d pickup=%.0fms", kind, snippet, word.string?.count ?? 0, ms))
+            drag = DragState(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
             setCurrentSelection(word)
 
         case .changed:
-            guard !yieldedToNative else { return }
-            guard let drag = pencilDrag,
-                  let hit = pageHit(viewPoint), hit.page === drag.page else { return }
+            guard let dragState = drag,
+                  let hit = pageHit(viewPoint), hit.page === dragState.page else { return }
             let step: CGFloat = lastAppliedCharCount > 800 ? 8 : 3
-            let dx = hit.point.x - drag.lastPoint.x
-            let dy = hit.point.y - drag.lastPoint.y
+            let dx = hit.point.x - dragState.lastPoint.x
+            let dy = hit.point.y - dragState.lastPoint.y
             guard dx * dx + dy * dy >= step * step else { return }
-            pencilDrag?.lastPoint = hit.point
+            drag?.lastPoint = hit.point
             let t0 = CFAbsoluteTimeGetCurrent()
-            if let selection = selectionBetween(drag, and: hit.point) {
+            if let selection = selectionBetween(dragState, and: hit.point) {
                 let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
                 if ms > 60 {
-                    DiagLog.log(String(format: "pencil.changed: build selection slow %.0fms", ms))
+                    DiagLog.log(String(format: "press.changed slow %.0fms", ms))
                 }
                 setCurrentSelection(selection)
             }
 
         case .ended, .cancelled, .failed:
-            let ours = pencilDrag != nil
+            let hadDrag = drag != nil
             let isEnded = gesture.state == .ended
-            yieldedToNative = false
-            pencilDrag = nil
-            DiagLog.log("pencil.end ours=\(ours) ended=\(isEnded)")
-            if ours, isEnded,
+            drag = nil
+            DiagLog.log("press.end(\(kind)) ours=\(hadDrag) ended=\(isEnded)")
+            if hadDrag, isEnded,
                let selText = pdfView.currentSelection?.string, !selText.isEmpty {
-                // 自定义路径:主动弹出我们自己的编辑菜单(不依赖系统)
                 let point = gesture.location(in: pdfView)
                 editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-                DiagLog.log("pencil.ended: presented own menu")
+                DiagLog.log("menu presented")
             }
 
         default:
@@ -193,17 +280,19 @@ final class ReaderCoordinator: NSObject {
         let selection = pdfView.currentSelection
         let text = selection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        // 记录"原生驱动的非空选择变化"(用于 Pencil 让位判断;50ms 窗口滤掉我们自己的设置)
         let now = CFAbsoluteTimeGetCurrent()
         let isOurs = now - lastOwnSelectionActionTime <= 0.05
+        lastAnySelectionChangeTime = now
         if !isOurs, !text.isEmpty {
-            lastNativeSelectionChangeTime = now
+            // 内置手势没能压住(被重建):再次压制,并留下证据
+            DiagLog.log("native sel detected; re-suppress")
+            suppressNativeSelection(in: pdfView)
         }
-        DiagLog.log("selChange(\(isOurs ? "own" : "native")): len=\(text.count) pages=\(selection?.pages.count ?? 0)")
+        DiagLog.log("selChange(\(isOurs ? "own" : "native")): len=\(text.count) pages=\(selection?.pages.count ?? 0) 「\(Self.logSnippet(text))」")
 
         if let selection, !selection.pages.isEmpty, !text.isEmpty {
-            guard Self.isSane(selection, maxPages: 5, maxChars: 10_000) else {
-                DiagLog.log("selChanged: rejected pages=\(selection.pages.count) len=\(text.count)")
+            guard Self.isSane(selection, maxPages: 2, maxChars: 3_000) else {
+                DiagLog.log("selChange rejected: pages=\(selection.pages.count) len=\(text.count)")
                 lastAppliedSelectionKey = nil
                 lastAppliedCharCount = 0
                 clearTempHighlight()
@@ -226,18 +315,22 @@ final class ReaderCoordinator: NSObject {
         }
     }
 
-    /// 差量更新临时高亮:只移除消失的行、只新增出现的行。
+    /// 差量更新临时高亮:只移除消失的行、只新增出现的行;越界矩形拒绝并计数。
     private func updateTempHighlight(for selection: PDFSelection) {
         let t0 = CFAbsoluteTimeGetCurrent()
         var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
+        var rejected = 0
         for page in selection.pages {
+            let pageBounds = page.bounds(for: pdfView?.displayBox ?? .cropBox)
             let lineSelections = selection.selectionsByLine()
                 .prefix(Self.maxHighlightLines)
                 .filter { $0.pages.first === page }
             var rects = lineSelections.map { $0.bounds(for: page) }
             if rects.isEmpty { rects = [selection.bounds(for: page)] }
 
-            for rect in rects where Self.isValid(rect) {
+            for rect in rects {
+                guard Self.isValid(rect) else { rejected += 1; continue }
+                guard rect.intersects(pageBounds.insetBy(dx: -24, dy: -24)) else { rejected += 1; continue }
                 desired[annotationKey(page, rect)] = (page, rect)
             }
         }
@@ -263,9 +356,7 @@ final class ReaderCoordinator: NSObject {
         tempRects = desired.values.map { ($0.page, $0.rect) }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 40 {
-            DiagLog.log(String(format: "highlight update slow: %.0fms lines=%d", ms, desired.count))
-        }
+        DiagLog.log(String(format: "hl: lines=%d ms=%.0f rej=%d", desired.count, ms, rejected))
     }
 
     func clearTempHighlight() {
@@ -289,11 +380,11 @@ final class ReaderCoordinator: NSObject {
         onSelectionInfo(nil)
     }
 
-    // MARK: - Pencil 拖选计算(纯点坐标)
+    // MARK: - 拖选计算(纯点坐标)
 
-    private func selectionBetween(_ drag: PencilDrag, and current: CGPoint) -> PDFSelection? {
-        let page = drag.page
-        let anchorRect = drag.anchorWord.bounds(for: page)
+    private func selectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
+        let page = dragState.page
+        let anchorRect = dragState.anchorWord.bounds(for: page)
 
         if let currentWord = page.selectionForWord(at: current) {
             let currentRect = currentWord.bounds(for: page)
@@ -308,7 +399,7 @@ final class ReaderCoordinator: NSObject {
                 }
             }
         }
-        return page.selection(from: drag.anchorPoint, to: current)
+        return page.selection(from: dragState.anchorPoint, to: current)
     }
 
     /// 页面坐标 y 向上:先按行(容差 6pt),同行按 x 排序,保证 from 在 to 之前。
@@ -328,6 +419,17 @@ final class ReaderCoordinator: NSObject {
             && rect.origin.x.isFinite && rect.origin.y.isFinite
             && rect.size.width.isFinite && rect.size.height.isFinite
             && rect.width < 10_000 && rect.height < 10_000
+    }
+
+    private static func kind(of gesture: UILongPressGestureRecognizer) -> String {
+        if let t = gesture.allowedTouchTypes.first, t.intValue == Int32(UITouch.TouchType.pencil.rawValue) {
+            return "pencil"
+        }
+        return "finger"
+    }
+
+    private static func logSnippet(_ s: String) -> String {
+        String(s.replacingOccurrences(of: "\n", with: " ").prefix(16))
     }
 
     // MARK: - 工具

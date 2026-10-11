@@ -26,6 +26,7 @@ struct PDFKitView: UIViewRepresentable {
         view.backgroundColor = .systemGroupedBackground
 
         context.coordinator.pdfView = view
+        context.coordinator.docLabel = url.deletingPathExtension().lastPathComponent
         context.coordinator.installGestures(on: view)
         context.coordinator.installObservers()
 
@@ -34,6 +35,7 @@ struct PDFKitView: UIViewRepresentable {
             if initialPage > 0, let page = document.page(at: min(initialPage, document.pageCount - 1)) {
                 view.go(to: page)
             }
+            context.coordinator.documentDidLoad(document)
         }
         return view
     }
