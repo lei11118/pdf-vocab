@@ -76,6 +76,7 @@ final class ReaderCoordinator: NSObject {
     private func pageDidChange() {
         guard let pdfView, let page = pdfView.currentPage else { return }
         let index = pdfView.document?.index(for: page) ?? 0
+        DiagLog.log("page->\(index)")
         onPageChanged(index)
     }
 
@@ -152,6 +153,7 @@ final class ReaderCoordinator: NSObject {
             let isEnded = gesture.state == .ended
             yieldedToNative = false
             pencilDrag = nil
+            DiagLog.log("pencil.end ours=\(ours) ended=\(isEnded)")
             if ours, isEnded,
                let selText = pdfView.currentSelection?.string, !selText.isEmpty {
                 // 自定义路径:主动弹出我们自己的编辑菜单(不依赖系统)
@@ -174,10 +176,12 @@ final class ReaderCoordinator: NSObject {
             let hitRect = CGRect(x: pagePoint.x - 2, y: pagePoint.y - 2, width: 4, height: 4)
             let onHighlight = tempRects.contains { $0.page === page && $0.rect.intersects(hitRect) }
             if onHighlight {
+                DiagLog.log("tap: onHighlight")
                 // 点在已加亮的词上:M1 保持高亮;M2 起在此打开/切换词卡
                 return
             }
         }
+        DiagLog.log("tap: clear")
         clearSelectionEverything()
     }
 
@@ -191,9 +195,11 @@ final class ReaderCoordinator: NSObject {
 
         // 记录"原生驱动的非空选择变化"(用于 Pencil 让位判断;50ms 窗口滤掉我们自己的设置)
         let now = CFAbsoluteTimeGetCurrent()
-        if now - lastOwnSelectionActionTime > 0.05, !text.isEmpty {
+        let isOurs = now - lastOwnSelectionActionTime <= 0.05
+        if !isOurs, !text.isEmpty {
             lastNativeSelectionChangeTime = now
         }
+        DiagLog.log("selChange(\(isOurs ? "own" : "native")): len=\(text.count) pages=\(selection?.pages.count ?? 0)")
 
         if let selection, !selection.pages.isEmpty, !text.isEmpty {
             guard Self.isSane(selection, maxPages: 5, maxChars: 10_000) else {
@@ -257,7 +263,7 @@ final class ReaderCoordinator: NSObject {
         tempRects = desired.values.map { ($0.page, $0.rect) }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 80 {
+        if ms > 40 {
             DiagLog.log(String(format: "highlight update slow: %.0fms lines=%d", ms, desired.count))
         }
     }
@@ -272,6 +278,7 @@ final class ReaderCoordinator: NSObject {
 
     private func clearSelectionEverything() {
         guard let pdfView else { return }
+        DiagLog.log("clearSelection")
         suppressSelectionNotification = true
         pdfView.currentSelection = nil
         pdfView.clearSelection()
@@ -378,7 +385,7 @@ final class ReaderCoordinator: NSObject {
         }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 80 {
+        if ms > 60 {
             DiagLog.log(String(format: "setCurrentSelection slow: %.0fms len=%d", ms, text.count))
         }
     }
