@@ -27,7 +27,6 @@ struct PDFKitView: UIViewRepresentable {
 
         context.coordinator.pdfView = view
         context.coordinator.docLabel = url.deletingPathExtension().lastPathComponent
-        context.coordinator.installGestures(on: view)
         context.coordinator.installObservers()
 
         if let document = PDFDocument(url: url) {
