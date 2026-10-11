@@ -426,7 +426,7 @@ final class ReaderCoordinator: NSObject {
     private func observeScrolling() {
         guard let pdfView else { return }
         guard let sv = pdfScrollView(pdfView) else { return }
-        if scrollObservers.first?.isValid == true, scrollObservers.count == 2, observedScrollView === sv {
+        if observedScrollView === sv, scrollObservers.count == 2 {
             return
         }
         scrollObservers.forEach { $0.invalidate() }
