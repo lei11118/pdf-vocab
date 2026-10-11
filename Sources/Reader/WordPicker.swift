@@ -1,5 +1,4 @@
 import Foundation
-import NaturalLanguage
 import PDFKit
 
 /// 统一取词接口(文本层实现;扫描版 OCR 词框实现见 M6)。
@@ -64,11 +63,31 @@ enum WordPicker {
         return NSRange(location: lower, length: upper - lower + 1)
     }
 
-    /// 统计词数(用于"整句卡"与信息条)。
+    /// 统计词数(线性扫描,不用 NLTokenizer——长文本上会造成明显卡顿)。
     static func countWords(in text: String) -> Int {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-        return tokenizer.tokens(for: text.startIndex..<text.endIndex).count
+        var count = 0
+        var inWord = false
+        for scalar in text.unicodeScalars {
+            if isCJKScalar(scalar) {
+                count += 1
+                inWord = false
+            } else if CharacterSet.alphanumerics.contains(scalar) {
+                if !inWord { count += 1 }
+                inWord = true
+            } else {
+                inWord = false
+            }
+        }
+        return count
+    }
+
+    private static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x2E80...0x9FFF, 0xAC00...0xD7AF, 0xF900...0xFAFF:
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - 字符分类

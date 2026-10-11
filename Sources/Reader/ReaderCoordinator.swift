@@ -1,21 +1,21 @@
 import UIKit
 import PDFKit
 
-/// 取词交互协调器(v0.2.2 重写)。
+/// 取词交互协调器(v0.2.3)。
 ///
 /// - 手指:依赖 PDFView 原生选择(监听 `.PDFViewSelectionChanged`)。
 /// - Pencil:自定义长按/拖选。命中与范围全部走「点坐标」API
 ///   (`selectionForWord` / `selectionForLine` / `selection(from:to:)`),
 ///   不经过字符串索引——规避 iOS 18+ PDFKit `characterBounds(at:)`/`page.string`
 ///   顺序回归导致的"选词位置与笔触偏差 / 拖动跳变"问题。
-/// - 选中后立即创建"临时高亮"注解;点空白清除。
-/// - Pencil 手势结束后保留原生选择:手指可继续拖动手柄调整,或使用复制菜单。
+/// - 临时高亮:差量更新(只增删变化的行注解,不再清空重建),大选区不卡顿。
+/// - 点空白清除;Pencil 手势结束后保留原生选择(可用手指手柄继续调整)。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: ((SelectionInfo?) -> Void)
 
-    private var tempAnnotations: [(page: PDFPage, annotation: PDFAnnotation)] = []
+    private var tempAnnotations: [String: (page: PDFPage, annotation: PDFAnnotation)] = [:]
     private var tempRects: [(page: PDFPage, rect: CGRect)] = []
     private var suppressSelectionNotification = false
     private var lastAppliedSelectionKey: String?
@@ -28,6 +28,8 @@ final class ReaderCoordinator: NSObject {
         var lastPoint: CGPoint
     }
     private var pencilDrag: PencilDrag?
+
+    private static let maxHighlightLines = 120
 
     init(
         onPageChanged: @escaping (Int) -> Void,
@@ -102,7 +104,7 @@ final class ReaderCoordinator: NSObject {
                   let hit = pageHit(viewPoint), hit.page === drag.page else { return }
             let dx = hit.point.x - drag.lastPoint.x
             let dy = hit.point.y - drag.lastPoint.y
-            guard dx * dx + dy * dy >= 4 else { return } // 移动小于 2pt 不重算(节流防卡顿)
+            guard dx * dx + dy * dy >= 9 else { return } // 移动小于 3pt 不重算(节流防卡顿)
             pencilDrag?.lastPoint = hit.point
             if let selection = selectionBetween(drag, and: hit.point) {
                 setCurrentSelection(selection)
@@ -142,11 +144,12 @@ final class ReaderCoordinator: NSObject {
 
         if let selection, !selection.pages.isEmpty, !text.isEmpty {
             let pageIndex = selection.pages.first.flatMap { pdfView.document?.index(for: $0) } ?? -1
-            let key = "\(pageIndex)|\(text)"
-            guard key != lastAppliedSelectionKey else { return } // 内容未变不重建(防重复高亮风暴)
+            let key = "\(pageIndex)|\(text.count)|\(text.hashValue)"
+            guard key != lastAppliedSelectionKey else { return } // 内容未变不重建
             lastAppliedSelectionKey = key
-            applyTempHighlight(for: selection)
-            onSelectionInfo(SelectionInfo(text: text, wordCount: WordPicker.countWords(in: text)))
+            updateTempHighlight(for: selection)
+            let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
+            onSelectionInfo(SelectionInfo(text: display, wordCount: WordPicker.countWords(in: text)))
         } else {
             lastAppliedSelectionKey = nil
             clearTempHighlight()
@@ -154,31 +157,46 @@ final class ReaderCoordinator: NSObject {
         }
     }
 
-    private func applyTempHighlight(for selection: PDFSelection) {
-        clearTempHighlight()
-
+    /// 差量更新临时高亮:只移除消失的行、只新增出现的行(避免"清空重建"造成的大文档卡顿)。
+    private func updateTempHighlight(for selection: PDFSelection) {
+        var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
         for page in selection.pages {
             let lineSelections = selection.selectionsByLine().filter { $0.pages.first === page }
             var rects = lineSelections.map { $0.bounds(for: page) }
             if rects.isEmpty { rects = [selection.bounds(for: page)] }
 
-            for rect in rects.prefix(80) where Self.isValid(rect) {
-                let annotation = PDFAnnotation(
-                    bounds: rect.insetBy(dx: -1, dy: -1),
-                    forType: .highlight,
-                    withProperties: nil
-                )
-                annotation.color = UIColor.systemYellow.withAlphaComponent(0.45)
-                page.addAnnotation(annotation)
-                tempAnnotations.append((page, annotation))
-                tempRects.append((page, rect))
+            for rect in rects.prefix(Self.maxHighlightLines) where Self.isValid(rect) {
+                desired[annotationKey(page, rect)] = (page, rect)
             }
         }
+
+        // 移除不再需要的
+        let staleKeys = tempAnnotations.keys.filter { desired[$0] == nil }
+        for key in staleKeys {
+            if let entry = tempAnnotations.removeValue(forKey: key) {
+                entry.page.removeAnnotation(entry.annotation)
+            }
+        }
+
+        // 新增缺少的
+        for (key, entry) in desired where tempAnnotations[key] == nil {
+            let annotation = PDFAnnotation(
+                bounds: entry.rect.insetBy(dx: -1, dy: -1),
+                forType: .highlight,
+                withProperties: nil
+            )
+            annotation.color = UIColor.systemYellow.withAlphaComponent(0.45)
+            entry.page.addAnnotation(annotation)
+            tempAnnotations[key] = (entry.page, annotation)
+        }
+
+        // 命中判断用的矩形(无注解开销)
+        tempRects = desired.values.map { ($0.page, $0.rect) }
     }
 
     func clearTempHighlight() {
-        for (page, annotation) in tempAnnotations {
-            page.removeAnnotation(annotation)
+        for (_, entry) in tempAnnotations {
+            entry.page.removeAnnotation(entry.annotation)
         }
         tempAnnotations.removeAll()
         tempRects.removeAll()
@@ -231,6 +249,11 @@ final class ReaderCoordinator: NSObject {
     }
 
     // MARK: - 工具
+
+    private func annotationKey(_ page: PDFPage, _ rect: CGRect) -> String {
+        let r = String(format: "%.1f_%.1f_%.1f_%.1f", rect.minX, rect.minY, rect.width, rect.height)
+        return "\(ObjectIdentifier(page).hashValue)_\(r)"
+    }
 
     private func pageHit(_ viewPoint: CGPoint) -> (page: PDFPage, point: CGPoint)? {
         guard let pdfView else { return nil }
