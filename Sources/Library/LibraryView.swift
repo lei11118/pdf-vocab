@@ -1,14 +1,10 @@
 import SwiftUI
 
 /// 文档库:导入 PDF、查看列表、进入阅读。
-/// 导入通道(三条):
-/// 1. 文件选择器(UIKit 文档选择器,asCopy 模式,绕开 iOS 26 fileImporter 问题)
-/// 2. 共享/其他 App「用读词打开」
-/// 3. 把 PDF 放进「文件」App → 我的 iPad → 读词(或读词/Inbox),启动/回前台自动导入
+/// 导入方式:文件选择器(UIKit 文档选择器,asCopy 模式,绕开 iOS 26 fileImporter 问题)。
 struct LibraryView: View {
     let store: DocumentStore
 
-    @Environment(\.scenePhase) private var scenePhase
     @State private var documents: [DocumentRecord] = []
     @State private var showImporter = false
     @State private var importingLabel: String?
@@ -41,7 +37,7 @@ struct LibraryView: View {
                 PDFDocumentPicker(
                     onPick: { urls in
                         showImporter = false
-                        importURLs(urls, removeSourceAfterSuccess: true)
+                        importURLs(urls)
                     },
                     onCancel: {
                         showImporter = false
@@ -71,20 +67,7 @@ struct LibraryView: View {
             } message: {
                 Text("同时删除本地副本与阅读进度,且不可撤销。")
             }
-            .onOpenURL { url in
-                guard url.isFileURL else { return }
-                importURLs([url], removeSourceAfterSuccess: url.path.contains("/Inbox/"))
-            }
-            .task {
-                reload()
-                scanDropFolder()
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active {
-                    reload()
-                    scanDropFolder()
-                }
-            }
+            .task { reload() }
         }
     }
 
@@ -92,7 +75,7 @@ struct LibraryView: View {
         ContentUnavailableView {
             Label("还没有文档", systemImage: "text.book.closed")
         } description: {
-            Text("导入英文 PDF,长按单词开始学习。\n也可以把 PDF 放进「文件」App → 我的 iPad → 读词,会自动导入。")
+            Text("导入英文 PDF,长按单词开始学习。")
         } actions: {
             Button("导入 PDF") { showImporter = true }
                 .buttonStyle(.borderedProminent)
@@ -134,14 +117,7 @@ struct LibraryView: View {
         reload()
     }
 
-    /// 扫描被拖入「读词」文件夹 / Inbox 的散装 PDF,自动导入。
-    private func scanDropFolder() {
-        let found = store.looseImportables()
-        guard !found.isEmpty else { return }
-        importURLs(found, removeSourceAfterSuccess: true)
-    }
-
-    private func importURLs(_ urls: [URL], removeSourceAfterSuccess: Bool) {
+    private func importURLs(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         let store = self.store
         importingLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) 个文件"
@@ -153,9 +129,8 @@ struct LibraryView: View {
                     _ = try await Task.detached(priority: .userInitiated) {
                         try store.importFile(from: url)
                     }.value
-                    if removeSourceAfterSuccess || url.path.contains("/Inbox/") {
-                        try? FileManager.default.removeItem(at: url)
-                    }
+                    // 清理选择器交付的临时副本(tmp)
+                    try? FileManager.default.removeItem(at: url)
                 } catch {
                     failures.append("\(url.lastPathComponent):\(error.localizedDescription)")
                 }

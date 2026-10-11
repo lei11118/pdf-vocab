@@ -38,31 +38,7 @@ struct DocumentStore: Sendable {
         }
     }
 
-    /// Documents 根目录与 Inbox 里未被管理的 PDF(用户从"文件"App 拖入,或其他 App 拷贝进来)。
-    func looseImportables() -> [URL] {
-        let fm = FileManager.default
-        guard let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
-            return []
-        }
-        var result: [URL] = []
-        let dirs = [docs, docs.appendingPathComponent("Inbox", isDirectory: true)]
-        for dir in dirs {
-            guard let items = try? fm.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for item in items {
-                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                if !isDir, item.pathExtension.lowercased() == "pdf" {
-                    result.append(item)
-                }
-            }
-        }
-        return result
-    }
-
-    /// 导入一个 PDF 文件(来自选择器、共享打开、或拖入文件夹)。
+    /// 导入一个 PDF 文件(来自文件选择器)。
     /// 同一文件重复导入时返回已有记录(保留阅读进度)。
     @discardableResult
     func importFile(from url: URL) throws -> DocumentRecord {

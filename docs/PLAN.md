@@ -123,3 +123,4 @@ pdf-vocab/
 6. M1/M4 需要真机实测反馈(交互问题无法在无设备环境发现)
 7. Anki 客户端版本差异 —— 采用最保守的 genanki 同款格式,附导入测试步骤
 8. ✅ 已处理(2026-10-11):iPadOS 26 上 SwiftUI `.fileImporter` 安全作用域失效(社区已验证的 iOS 26 回归)→ 改用 UIKit `UIDocumentPickerViewController`(`asCopy: true`,系统先拷进沙盒再交付,无需安全作用域);导入管线重构为"先落地沙盒再处理";选择器类型放宽 `[.pdf, .data]`;新增"拖入文件夹 / Inbox 自动导入"通道
+9. ✅ 已处理(2026-10-11,v0.2.2):Pencil 取词偏移 / 拖选跳变 / 偶发卡顿退出——**根因:iOS 18+ PDFKit `characterBounds(at:)` 与 `page.string` 顺序回归**(Apple 论坛 FB14843671、SO 78977349 等均有记录),字符串索引 ↔ 几何位置不再可靠,大范围错选还会导致高亮注解风暴卡死主线程。**修复:取词改为纯点坐标路线**(`selectionForWord` / `selectionForLine` / `selection(from:to:)`,不经字符串索引);手势结束保留原生选择(可用手柄继续调整);高亮重建去重 + 移动节流 + NaN/异常矩形防护。另:按用户要求删除两条备用导入路径(共享打开、拖入文件夹自动导入),仅保留文件选择器

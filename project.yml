@@ -10,8 +10,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.2.1"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "0.2.2"
+    CURRENT_PROJECT_VERSION: "3"
 
 packages:
   GRDB:
@@ -34,17 +34,10 @@ targets:
       path: Resources/Info.plist
       properties:
         CFBundleDisplayName: 读词
-        CFBundleDocumentTypes:
-          - CFBundleTypeName: PDF Document
-            CFBundleTypeRole: Viewer
-            LSHandlerRank: Alternate
-            LSItemContentTypes:
-              - com.adobe.pdf
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UIFileSharingEnabled: true
-        LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UILaunchScreen: {}

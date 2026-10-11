@@ -7,7 +7,7 @@
 - **自签侧载**:只用免费 Apple ID(AltStore / SideStore / Sideloadly)
 - **不需要 Mac**:全部通过 GitHub Actions 出包(未签名 IPA)
 
-> 当前状态:**M1** —— PDF 导入(选择器 / 共享打开 / 拖入文件夹)、阅读、长按/拖选取词(手指与 Pencil)、临时加亮、阅读进度记忆(标签 `v0.2.1`)。
+> 当前状态:**M1(修复版 `v0.2.2`)** —— PDF 导入(文件选择器)、阅读、长按/拖选取词(手指与 Pencil,点坐标路线)、临时加亮、阅读进度记忆。
 > 开发方案、核实结论与里程碑见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 获取 IPA
