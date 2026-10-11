@@ -7,6 +7,8 @@ struct ReaderView: View {
 
     @State private var selectionInfo: SelectionInfo?
     @State private var currentPage: Int
+    @State private var resolvedURL: URL?
+    @State private var optimizing = false
 
     init(doc: DocumentRecord, store: DocumentStore) {
         self.doc = doc
@@ -31,17 +33,29 @@ struct ReaderView: View {
     }
 
     private func reader(for url: URL) -> some View {
-        PDFKitView(
-            url: url,
-            initialPage: doc.lastPage,
-            onPageChanged: { page in
-                currentPage = page
-                try? store.setLastPage(page, for: doc.sha256)
-            },
-            onSelectionInfo: { info in
-                selectionInfo = info
+        Group {
+            if let resolvedURL {
+                PDFKitView(
+                    url: resolvedURL,
+                    initialPage: doc.lastPage,
+                    onPageChanged: { page in
+                        currentPage = page
+                        try? store.setLastPage(page, for: doc.sha256)
+                    },
+                    onSelectionInfo: { info in
+                        selectionInfo = info
+                    }
+                )
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("正在准备文档…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        )
+        }
         .overlay(alignment: .bottom) {
             if let info = selectionInfo {
                 selectionBar(info)
@@ -49,6 +63,26 @@ struct ReaderView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             pageIndicator
+        }
+        .overlay(alignment: .bottom) {
+            if optimizing {
+                Text("首次打开:正在生成优化副本…")
+                    .font(.caption2)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, 44)
+            }
+        }
+        .task(id: doc.sha256) {
+            let store = self.store
+            let doc = self.doc
+            optimizing = true
+            let url = await Task.detached(priority: .userInitiated) {
+                store.normalizedForReading(doc)
+            }.value
+            resolvedURL = url
+            optimizing = false
         }
     }
 

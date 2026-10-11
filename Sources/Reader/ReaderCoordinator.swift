@@ -1,16 +1,16 @@
 import UIKit
 import PDFKit
 
-/// 取词交互协调器(v0.2.8)。
+/// 取词交互协调器(v0.2.9)。
 ///
-/// 架构:**手指与 Pencil 统一走自有取词管线**(长按 → 点坐标取词 → 拖动扩展 → 自绘编辑菜单),
-/// 并**停用 PDFKit 内置的选择手势**(长按/双击)。
-/// 依据(真机日志实证):内置选择机制在部分 PDF 上会把选区/自动显现解析到文档末尾,
-/// 触发"跳最后一页 + 卡死数秒";而自有管线的 Pencil 取词实测干净(pickup 2ms、无跳页)。
+/// 架构:**手指与 Pencil 统一走自有取词管线**,全程**不再设置 PDFView 的选区状态**
+/// (`setCurrentSelection` 已移除)——黄高亮由我们自己绘制,信息条/菜单全部来自自有 Selection,
+/// 从根上消除"PDFKit 因异常文档几何自动滚动/跳页"的触发面。
+/// 同时停用 PDFKit 内置选择手势(长按/双击),保留滚动、缩放、链接单击。
 ///
 /// - 取词:selectionForWord / selectionForLine / selection(from:to:),纯点坐标(规避 iOS 18+ 索引回归)
 /// - 高亮:差量更新 + 页面边界校验(越界矩形拒绝)
-/// - 防跳页:设置选区后恢复滚动位置;pageDidChange 检出"紧跟选区变化的前跳"时自动拉回
+/// - 防跳页:pageDidChange 检出"紧跟选区变化的前跳"时自动拉回
 /// - 诊断日志:全量记录到 Documents/diagnostics.log
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
@@ -32,6 +32,8 @@ final class ReaderCoordinator: NSObject {
     private var lastAnySelectionChangeTime: CFAbsoluteTime = 0
     private var lastAppliedCharCount = 0
     private var suppressLogged = false
+    /// 自有路线最近一次选中的文本(菜单"复制"与手势结束判断用)
+    private var lastOurSelectionText = ""
 
     // 防跳页
     private var lastGoodPage: (index: Int, time: CFAbsoluteTime) = (0, 0)
@@ -85,13 +87,15 @@ final class ReaderCoordinator: NSObject {
         observers.removeAll()
     }
 
-    /// 文档加载完成后调用:记录信息 + 压制内置手势(PDFKit 可能在加载后重建内部手势,延时再压一次)
+    /// 文档加载完成后调用:记录信息 + 压制内置手势(PDFKit 可能在加载后重建内部手势,延时再压)
     func documentDidLoad(_ document: PDFDocument) {
         DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
         suppressNativeSelection(in: pdfView)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self, let view = self.pdfView else { return }
-            self.suppressNativeSelection(in: view)
+        for delay in [0.5, 2.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, let view = self.pdfView else { return }
+                self.suppressNativeSelection(in: view)
+            }
         }
     }
 
@@ -116,9 +120,9 @@ final class ReaderCoordinator: NSObject {
         let now = CFAbsoluteTimeGetCurrent()
         DiagLog.log("page->\(index)")
 
-        // 防跳页:紧跟选区变化(0.3s 内)的跨页"前跳"判为异常,拉回上次稳定页
+        // 防跳页:紧跟选区变化(0.8s 内)的跨页"前跳"判为异常,拉回上次稳定页
         if now > jumpGuardUntil,
-           now - lastAnySelectionChangeTime < 0.3,
+           now - lastAnySelectionChangeTime < 0.8,
            abs(index - lastGoodPage.index) > 5,
            index > lastGoodPage.index {
             DiagLog.log("JUMP suspected \(lastGoodPage.index)->\(index); restore")
@@ -218,7 +222,7 @@ final class ReaderCoordinator: NSObject {
             let snippet = Self.logSnippet(word.string ?? "")
             DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d pickup=%.0fms", kind, snippet, word.string?.count ?? 0, ms))
             drag = DragState(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
-            setCurrentSelection(word)
+            applyOurSelection(word)
 
         case .changed:
             guard let dragState = drag,
@@ -234,7 +238,7 @@ final class ReaderCoordinator: NSObject {
                 if ms > 60 {
                     DiagLog.log(String(format: "press.changed slow %.0fms", ms))
                 }
-                setCurrentSelection(selection)
+                applyOurSelection(selection)
             }
 
         case .ended, .cancelled, .failed:
@@ -242,8 +246,7 @@ final class ReaderCoordinator: NSObject {
             let isEnded = gesture.state == .ended
             drag = nil
             DiagLog.log("press.end(\(kind)) ours=\(hadDrag) ended=\(isEnded)")
-            if hadDrag, isEnded,
-               let selText = pdfView.currentSelection?.string, !selText.isEmpty {
+            if hadDrag, isEnded, !lastOurSelectionText.isEmpty {
                 let point = gesture.location(in: pdfView)
                 editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
                 DiagLog.log("menu presented")
@@ -274,6 +277,16 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - 选择 / 高亮
 
+    /// 自有路线选中:只更新黄高亮与信息条,**不触碰 PDFView 的选区状态**。
+    private func applyOurSelection(_ selection: PDFSelection) {
+        guard let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        lastOwnSelectionActionTime = now
+        lastAnySelectionChangeTime = now
+        lastOurSelectionText = text
+        applySelection(selection, text: text, src: "own")
+    }
+
     private func selectionDidChange() {
         guard !suppressSelectionNotification, let pdfView else { return }
 
@@ -291,28 +304,33 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("selChange(\(isOurs ? "own" : "native")): len=\(text.count) pages=\(selection?.pages.count ?? 0) 「\(Self.logSnippet(text))」")
 
         if let selection, !selection.pages.isEmpty, !text.isEmpty {
-            guard Self.isSane(selection, maxPages: 2, maxChars: 3_000) else {
-                DiagLog.log("selChange rejected: pages=\(selection.pages.count) len=\(text.count)")
-                lastAppliedSelectionKey = nil
-                lastAppliedCharCount = 0
-                clearTempHighlight()
-                onSelectionInfo(nil)
-                return
-            }
-            let pageIndex = selection.pages.first.flatMap { pdfView.document?.index(for: $0) } ?? -1
-            let key = "\(pageIndex)|\(text.count)|\(text.hashValue)"
-            guard key != lastAppliedSelectionKey else { return }
-            lastAppliedSelectionKey = key
-            lastAppliedCharCount = text.count
-            updateTempHighlight(for: selection)
-            let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
-            onSelectionInfo(SelectionInfo(text: display, wordCount: WordPicker.countWords(in: text)))
+            applySelection(selection, text: text, src: isOurs ? "own" : "native")
         } else {
+            lastAppliedSelectionKey = nil
+            lastAppliedCharCount = 0
+            lastOurSelectionText = ""
+            clearTempHighlight()
+            onSelectionInfo(nil)
+        }
+    }
+
+    private func applySelection(_ selection: PDFSelection, text: String, src: String) {
+        guard Self.isSane(selection, maxPages: 1, maxChars: 6_000) else {
+            DiagLog.log("applySelection rejected(\(src)): pages=\(selection.pages.count) len=\(text.count)")
             lastAppliedSelectionKey = nil
             lastAppliedCharCount = 0
             clearTempHighlight()
             onSelectionInfo(nil)
+            return
         }
+        let pageIndex = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) } ?? -1
+        let key = "\(pageIndex)|\(text.count)|\(text.hashValue)"
+        guard key != lastAppliedSelectionKey else { return }
+        lastAppliedSelectionKey = key
+        lastAppliedCharCount = text.count
+        updateTempHighlight(for: selection)
+        let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
+        onSelectionInfo(SelectionInfo(text: display, wordCount: WordPicker.countWords(in: text)))
     }
 
     /// 差量更新临时高亮:只移除消失的行、只新增出现的行;越界矩形拒绝并计数。
@@ -376,6 +394,7 @@ final class ReaderCoordinator: NSObject {
         suppressSelectionNotification = false
         lastAppliedSelectionKey = nil
         lastAppliedCharCount = 0
+        lastOurSelectionText = ""
         clearTempHighlight()
         onSelectionInfo(nil)
     }
@@ -450,47 +469,6 @@ final class ReaderCoordinator: NSObject {
         guard bounds.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
         return (page, point)
     }
-
-    private func pdfScrollView(_ view: PDFView) -> UIScrollView? {
-        if let scroll = view.documentView?.superview as? UIScrollView { return scroll }
-        return Self.findScrollView(in: view)
-    }
-
-    private static func findScrollView(in view: UIView) -> UIScrollView? {
-        if let scroll = view as? UIScrollView { return scroll }
-        for subview in view.subviews {
-            if let scroll = findScrollView(in: subview) { return scroll }
-        }
-        return nil
-    }
-
-    /// 设置选择;若 PDFKit 因异常数据出现跳页滚动,则恢复原滚动位置(防"跳最后一页")。
-    private func setCurrentSelection(_ selection: PDFSelection?) {
-        guard let pdfView, let selection, let text = selection.string, !text.isEmpty else { return }
-        guard Self.isSane(selection, maxPages: 1, maxChars: 6_000) else {
-            DiagLog.log("setSelection rejected pages=\(selection.pages.count) len=\(text.count)")
-            return
-        }
-        lastOwnSelectionActionTime = CFAbsoluteTimeGetCurrent()
-
-        let t0 = CFAbsoluteTimeGetCurrent()
-        let scroll = pdfScrollView(pdfView)
-        let offset = scroll?.contentOffset
-        pdfView.setCurrentSelection(selection, animate: false)
-
-        if let scroll, let offset {
-            let current = scroll.contentOffset
-            if abs(current.y - offset.y) > 1 || abs(current.x - offset.x) > 1 {
-                scroll.setContentOffset(offset, animated: false)
-                DiagLog.log(String(format: "scroll restored y:%.0f -> y:%.0f", offset.y, current.y))
-            }
-        }
-
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 60 {
-            DiagLog.log(String(format: "setCurrentSelection slow: %.0fms len=%d", ms, text.count))
-        }
-    }
 }
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
@@ -509,7 +487,10 @@ extension ReaderCoordinator: UIEditMenuInteractionDelegate {
         suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
         let copy = UIAction(title: "复制") { [weak self] _ in
-            guard let text = self?.pdfView?.currentSelection?.string, !text.isEmpty else { return }
+            guard let self else { return }
+            var text = self.lastOurSelectionText
+            if text.isEmpty { text = self.pdfView?.currentSelection?.string ?? "" }
+            guard !text.isEmpty else { return }
             UIPasteboard.general.string = text
         }
         return UIMenu(children: [copy])

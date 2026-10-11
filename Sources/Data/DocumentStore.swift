@@ -26,6 +26,46 @@ struct DocumentStore: Sendable {
         try pdfDirectory.appendingPathComponent(rec.fileName)
     }
 
+    /// 规范化副本路径(仅当已生成时返回)
+    func normalizedURL(for rec: DocumentRecord) -> URL? {
+        guard let original = try? pdfURL(for: rec) else { return nil }
+        let norm = original.deletingLastPathComponent().appendingPathComponent(rec.sha256 + ".norm.pdf")
+        return FileManager.default.fileExists(atPath: norm.path) ? norm : nil
+    }
+
+    /// 为阅读准备的 URL:优先"规范化副本"(非破坏性,原文件不动),生成失败则回退原文件。
+    /// 依据:对 PDFKit 有行为异常的非线性化文档,社区实测"重存一份副本"可恢复正常行为。
+    func normalizedForReading(_ rec: DocumentRecord) -> URL {
+        guard let original = try? pdfURL(for: rec) else { return URL(fileURLWithPath: "/") }
+        let norm = original.deletingLastPathComponent().appendingPathComponent(rec.sha256 + ".norm.pdf")
+
+        // 已有且校验通过:直接用
+        if FileManager.default.fileExists(atPath: norm.path),
+           let check = PDFDocument(url: norm), check.pageCount == rec.pageCount {
+            return norm
+        }
+
+        let t0 = CFAbsoluteTimeGetCurrent()
+        guard let src = PDFDocument(url: original) else {
+            DiagLog.log("normalize: 原文件打不开")
+            return original
+        }
+        let tmp = norm.appendingPathExtension("tmp")
+        try? FileManager.default.removeItem(at: tmp)
+        let ok = src.write(to: tmp)
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        if ok, let check = PDFDocument(url: tmp), check.pageCount == rec.pageCount {
+            try? FileManager.default.removeItem(at: norm)
+            if (try? FileManager.default.moveItem(at: tmp, to: norm)) != nil {
+                DiagLog.log(String(format: "normalize: ok %.0fms pages=%d", ms, check.pageCount))
+                return norm
+            }
+        }
+        try? FileManager.default.removeItem(at: tmp)
+        DiagLog.log(String(format: "normalize: FAIL ok=%d %.0fms", ok ? 1 : 0, ms))
+        return original
+    }
+
     func allDocuments() throws -> [DocumentRecord] {
         try db.dbQueue.read { db in
             try DocumentRecord.all().order(Column("importedAt").desc).fetchAll(db)
@@ -87,6 +127,10 @@ struct DocumentStore: Sendable {
         try db.dbQueue.write { db in
             try rec.insert(db)
         }
+
+        // 6) 生成"规范化读取副本"(非破坏性;失败静默,首次打开时还会再试)
+        _ = normalizedForReading(rec)
+
         return rec
     }
 
@@ -105,6 +149,8 @@ struct DocumentStore: Sendable {
         }
         if let url = try? pdfURL(for: rec) {
             try? FileManager.default.removeItem(at: url)
+            let norm = url.deletingLastPathComponent().appendingPathComponent(rec.sha256 + ".norm.pdf")
+            try? FileManager.default.removeItem(at: norm)
         }
     }
 
