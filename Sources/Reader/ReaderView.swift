@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 /// 阅读页:PDF 渲染 + 取词 + 临时高亮 + 阅读进度记忆。
 struct ReaderView: View {
@@ -9,6 +10,8 @@ struct ReaderView: View {
     @State private var currentPage: Int
     @State private var resolvedURL: URL?
     @State private var optimizing = false
+    @State private var translateText = ""
+    @State private var showTranslate = false
 
     init(doc: DocumentRecord, store: DocumentStore) {
         self.doc = doc
@@ -44,6 +47,10 @@ struct ReaderView: View {
                     },
                     onSelectionInfo: { info in
                         selectionInfo = info
+                    },
+                    onTranslate: { text in
+                        translateText = text
+                        showTranslate = true
                     }
                 )
             } else {
@@ -84,6 +91,7 @@ struct ReaderView: View {
             resolvedURL = url
             optimizing = false
         }
+        .translationPresentation(isPresented: $showTranslate, text: translateText)
     }
 
     /// 底部信息条:选中内容的临时占位显示(M2 起由侧边词卡接管)。
