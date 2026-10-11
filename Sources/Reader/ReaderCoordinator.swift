@@ -152,7 +152,7 @@ final class ReaderCoordinator: NSObject {
             let isEnded = gesture.state == .ended
             yieldedToNative = false
             pencilDrag = nil
-            if ours, isEnded, let pdfView,
+            if ours, isEnded,
                let selText = pdfView.currentSelection?.string, !selText.isEmpty {
                 // 自定义路径:主动弹出我们自己的编辑菜单(不依赖系统)
                 let point = gesture.location(in: pdfView)
@@ -343,9 +343,16 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func pdfScrollView(_ view: PDFView) -> UIScrollView? {
-        if let scroll = view as? UIScrollView { return scroll }
         if let scroll = view.documentView?.superview as? UIScrollView { return scroll }
-        return view.subviews.compactMap { $0 as? UIScrollView }.first
+        return Self.findScrollView(in: view)
+    }
+
+    private static func findScrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        for subview in view.subviews {
+            if let scroll = findScrollView(in: subview) { return scroll }
+        }
+        return nil
     }
 
     /// 设置选择;若 PDFKit 因异常数据出现跳页滚动,则恢复原滚动位置(防"跳最后一页")。

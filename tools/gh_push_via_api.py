@@ -71,10 +71,12 @@ def main():
 
     chk = subprocess.run(["git", "merge-base", "--is-ancestor", remote_head, "HEAD"], capture_output=True)
     if chk.returncode != 0:
-        print("⚠️ 远端 head 不是本地 HEAD 的祖先,历史可能不一致;中止以免误写。")
-        raise SystemExit(2)
-
-    commit_list = git("rev-list", "--reverse", f"{remote_head}..HEAD").decode().split()
+        # 远端曾被 API 镜像推送(哈希与本地不同、非字符串祖先)时,退回"内容式单提交":
+        # 把本地 HEAD 的完整内容作为一个新 commit 挂到远端 head 之后(远端历史只前进,不改写)。
+        print("⚠️ 远端 head 不是本地 HEAD 的祖先(可能曾走 API 镜像推送);改用内容式单提交模式。")
+        commit_list = [head]
+    else:
+        commit_list = git("rev-list", "--reverse", f"{remote_head}..HEAD").decode().split()
     print(f"待推送 commit:{len(commit_list)} 个")
 
     blob_cache = {}

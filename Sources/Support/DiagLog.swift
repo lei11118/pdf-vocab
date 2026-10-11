@@ -25,7 +25,7 @@ enum DiagLog {
             }
 
             if let handle = try? FileHandle(forWritingTo: url) {
-                _ = try? handle.seekToEndOfFile()
+                _ = handle.seekToEndOfFile()
                 try? handle.write(contentsOf: Data(line.utf8))
                 try? handle.close()
             } else {
