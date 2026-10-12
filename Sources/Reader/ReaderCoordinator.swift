@@ -1,22 +1,28 @@
 import UIKit
 import PDFKit
 
-/// 自绘拖动柄:选区两端的圆点,iPad 原生风格(蓝底白边)。
+/// 自绘拖动柄:原生风格的蓝点 + 指向文字的短柄(起点柄在文字上方、终点柄在文字下方)。
 final class SelectionHandleView: UIView {
     private let dot = UIView()
+    private let stem = UIView()
+    private let isStart: Bool
 
-    init() {
+    init(isStart: Bool) {
+        self.isStart = isStart
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
         backgroundColor = .clear
         dot.backgroundColor = .systemBlue
-        dot.layer.cornerRadius = 11
+        dot.layer.cornerRadius = 7
         dot.layer.borderColor = UIColor.white.cgColor
-        dot.layer.borderWidth = 2
+        dot.layer.borderWidth = 1.5
         dot.layer.shadowColor = UIColor.black.cgColor
-        dot.layer.shadowOpacity = 0.3
-        dot.layer.shadowRadius = 2
-        dot.layer.shadowOffset = CGSize(width: 0, height: 1)
+        dot.layer.shadowOpacity = 0.25
+        dot.layer.shadowRadius = 1.5
+        dot.layer.shadowOffset = CGSize(width: 0, height: 0.5)
         addSubview(dot)
+        stem.backgroundColor = .systemBlue
+        stem.layer.cornerRadius = 1.25
+        addSubview(stem)
     }
 
     required init?(coder: NSCoder) {
@@ -25,7 +31,16 @@ final class SelectionHandleView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        dot.frame = CGRect(x: (bounds.width - 22) / 2, y: (bounds.height - 22) / 2, width: 22, height: 22)
+        let dotSize: CGFloat = 14
+        if isStart {
+            // 圆点在上,短柄向下指向选区首行
+            dot.frame = CGRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2 - 6, width: dotSize, height: dotSize)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 6)
+        } else {
+            // 圆点在下,短柄向上指向选区末行
+            dot.frame = CGRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2 + 6, width: dotSize, height: dotSize)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.minY - 6, width: 2.5, height: 6)
+        }
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -41,8 +56,9 @@ final class SelectionHandleView: UIView {
 /// 全程**不设置 PDFView 的选区状态**(setCurrentSelection 不存在),
 /// 黄高亮/拖动柄/信息条/菜单全部由自有状态驱动。
 ///
-/// v0.3.2 新增:
-/// - **自研拖动柄**:选区两端蓝点,可拖动微调(走自有扩选逻辑,不会带回跳页风险);
+/// v0.3.3:
+/// - 选区样式**对齐原生**(系统蓝、半透明);拖动柄为原生风格(蓝点 + 指向文字的短柄);
+/// - **再次点击选区 = 关闭/呼出编辑菜单**(切换);点空白 = 取消选中;
 /// - 编辑菜单:复制 / 查询(系统词典)/ 翻译(系统翻译面板)/ 搜索网页 / 共享。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
@@ -84,6 +100,7 @@ final class ReaderCoordinator: NSObject {
 
     // 自定义编辑菜单
     private var editMenuInteraction: UIEditMenuInteraction?
+    private var isMenuPresented = false
 
     private struct DragState {
         var page: PDFPage
@@ -221,12 +238,12 @@ final class ReaderCoordinator: NSObject {
         tap.require(toFail: pencilSelect)
         view.addGestureRecognizer(tap)
 
-        // 自研拖动柄
-        let start = SelectionHandleView()
+        // 自研拖动柄(原生风格:蓝点 + 指向文字的短柄)
+        let start = SelectionHandleView(isStart: true)
         start.isHidden = true
         view.addSubview(start)
         startHandle = start
-        let end = SelectionHandleView()
+        let end = SelectionHandleView(isStart: false)
         end.isHidden = true
         view.addSubview(end)
         endHandle = end
@@ -371,8 +388,15 @@ final class ReaderCoordinator: NSObject {
             let hitRect = CGRect(x: pagePoint.x - 2, y: pagePoint.y - 2, width: 4, height: 4)
             let onHighlight = tempRects.contains { $0.page === page && $0.rect.intersects(hitRect) }
             if onHighlight {
-                DiagLog.log("tap: onHighlight")
-                // 点在已加亮的词上:M1 保持高亮;M2 起在此打开/切换词卡
+                // 点选区:切换编辑菜单(再次点击可关闭 / 重新呼出)
+                if isMenuPresented {
+                    editMenuInteraction?.dismissMenu()
+                    isMenuPresented = false
+                    DiagLog.log("tap: dismiss menu")
+                } else {
+                    editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+                    DiagLog.log("tap: show menu")
+                }
                 return
             }
         }
@@ -533,7 +557,7 @@ final class ReaderCoordinator: NSObject {
                 forType: .highlight,
                 withProperties: nil
             )
-            annotation.color = UIColor.systemYellow.withAlphaComponent(0.45)
+            annotation.color = UIColor.systemBlue.withAlphaComponent(0.35)
             entry.page.addAnnotation(annotation)
             tempAnnotations[key] = (entry.page, annotation)
         }
@@ -556,6 +580,10 @@ final class ReaderCoordinator: NSObject {
     private func clearSelectionEverything() {
         guard let pdfView else { return }
         DiagLog.log("clearSelection")
+        if isMenuPresented {
+            editMenuInteraction?.dismissMenu()
+            isMenuPresented = false
+        }
         freezeScrolling(false)
         pdfView.currentSelection = nil
         pdfView.clearSelection()
@@ -720,6 +748,22 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
 }
 
 extension ReaderCoordinator: UIEditMenuInteractionDelegate {
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        willPresentMenuFor configuration: UIEditMenuConfiguration,
+        animator: UIEditMenuAnimating
+    ) {
+        isMenuPresented = true
+    }
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        willDismissMenuFor configuration: UIEditMenuConfiguration,
+        animator: UIEditMenuAnimating
+    ) {
+        isMenuPresented = false
+    }
+
     func editMenuInteraction(
         _ interaction: UIEditMenuInteraction,
         menuFor configuration: UIEditMenuConfiguration,
