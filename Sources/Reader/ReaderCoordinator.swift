@@ -56,10 +56,10 @@ final class SelectionHandleView: UIView {
 /// 全程**不设置 PDFView 的选区状态**(setCurrentSelection 不存在),
 /// 黄高亮/拖动柄/信息条/菜单全部由自有状态驱动。
 ///
-/// v0.3.4:
-/// - 选区蓝贴近 iOS 原生(systemBlue 半透明);
-/// - 拖动柄与原生同款**不对称布局**:起点柄在选区**下方**(短柄朝上)、终点柄在选区**上方**(短柄朝下);
-/// - 点击规则:点选区=仅切换编辑菜单(**永不关闭选区**,编辑栏关闭≠选区关闭);点空白=菜单开着时先只关菜单,否则取消选中。
+/// v0.4.0「仿原生重构」:
+/// - 手势全面对齐原生:**双击选词**、**三击选行**(对应原生三击选段落)、**长按选区本体拖动微调**;
+/// - 拖动过程接入**系统放大镜**(`UITextLoupeSession`,iOS 17+ 公开 API,任意视图可用);
+/// - 其余(v0.3.4):选区原生蓝、不对称拖动柄、点选区切换菜单永不关选区、点空白先关菜单再取消。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
@@ -101,6 +101,11 @@ final class ReaderCoordinator: NSObject {
     // 自定义编辑菜单
     private var editMenuInteraction: UIEditMenuInteraction?
     private var isMenuPresented = false
+
+    // 系统放大镜(iOS 17+ 公开 API,任意视图可用)与新增手势
+    private var loupeSession: UITextLoupeSession?
+    private var doubleTapRef: UITapGestureRecognizer?
+    private var tripleTapRef: UITapGestureRecognizer?
 
     private struct DragState {
         var page: PDFPage
@@ -238,6 +243,28 @@ final class ReaderCoordinator: NSObject {
         tap.require(toFail: pencilSelect)
         view.addGestureRecognizer(tap)
 
+        // 双击选词 / 三击选行(与 iOS 原生手势一致:双击选词并弹菜单,三击选"段落"——PDF 取整行)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
+        view.addGestureRecognizer(doubleTap)
+        doubleTapRef = doubleTap
+
+        let tripleTap = UITapGestureRecognizer(target: self, action: #selector(handleTripleTap(_:)))
+        tripleTap.numberOfTapsRequired = 3
+        tripleTap.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
+        view.addGestureRecognizer(tripleTap)
+        tripleTapRef = tripleTap
+
+        tap.require(toFail: doubleTap)
+        doubleTap.require(toFail: tripleTap)
+
         // 自研拖动柄(原生风格:蓝点 + 指向文字的短柄)
         let start = SelectionHandleView(isStart: true)
         start.isHidden = true
@@ -264,7 +291,7 @@ final class ReaderCoordinator: NSObject {
         var disabled = 0
         func walk(_ v: UIView) {
             for gr in v.gestureRecognizers ?? [] {
-                if gr === fingerSelectRef || gr === pencilSelectRef { continue }
+                if gr === fingerSelectRef || gr === pencilSelectRef || gr === doubleTapRef || gr === tripleTapRef { continue }
                 let isLongPress = gr is UILongPressGestureRecognizer
                 let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
                 if (isLongPress || isMultiTap), gr.isEnabled {
@@ -292,6 +319,22 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log("press.began(\(kind)): no page")
                 return
             }
+            // ① 长按落在已有选区内 → 选区本体拖动微调(以远端为锚,与原生"按住选区拖动"一致)
+            if let (page, rects) = orderedSelectionRects(),
+               page === hit.page,
+               let firstLine = rects.first, let lastLine = rects.last,
+               rects.contains(where: { $0.insetBy(dx: -6, dy: -6).contains(hit.point) }) {
+                let startAnchor = CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
+                let endAnchor = CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
+                let isStart = Self.distanceSquared(hit.point, startAnchor) < Self.distanceSquared(hit.point, endAnchor)
+                let fixedPoint = isStart ? endAnchor : startAnchor
+                guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
+                drag = DragState(page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: hit.point)
+                freezeScrolling(true)
+                if kind == "finger" { showLoupe(at: viewPoint, in: pdfView, widget: nil) }
+                DiagLog.log("press.began(\(kind)): body-drag")
+                return
+            }
             let t0 = CFAbsoluteTimeGetCurrent()
             let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point)
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -304,6 +347,7 @@ final class ReaderCoordinator: NSObject {
             drag = DragState(page: hit.page, anchorPoint: hit.point, anchorWord: word, lastPoint: hit.point)
             freezeScrolling(true) // 拖动期间页面不再滚动,拖动=稳定扩选
             applyOurSelection(word)
+            if kind == "finger" { showLoupe(at: viewPoint, in: pdfView, widget: nil) }
 
         case .changed:
             guard let dragState = drag,
@@ -313,6 +357,7 @@ final class ReaderCoordinator: NSObject {
             let dy = hit.point.y - dragState.lastPoint.y
             guard dx * dx + dy * dy >= step * step else { return }
             drag?.lastPoint = hit.point
+            updateLoupe(at: viewPoint)
             let t0 = CFAbsoluteTimeGetCurrent()
             if let selection = selectionBetween(dragState, and: hit.point) {
                 let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -326,6 +371,7 @@ final class ReaderCoordinator: NSObject {
             let hadDrag = drag != nil
             let isEnded = gesture.state == .ended
             drag = nil
+            hideLoupe()
             freezeScrolling(false)
             DiagLog.log("press.end(\(kind)) ours=\(hadDrag) ended=\(isEnded)")
             refreshHandles()
@@ -356,6 +402,7 @@ final class ReaderCoordinator: NSObject {
             guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
             handleDrag = DragState(page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint)
             freezeScrolling(true)
+            showLoupe(at: viewPoint, in: pdfView, widget: isStart ? startHandle : endHandle)
             DiagLog.log("handle.drag began isStart=\(isStart)")
 
         case .changed:
@@ -364,12 +411,14 @@ final class ReaderCoordinator: NSObject {
             let dy = hit.point.y - hd.lastPoint.y
             guard dx * dx + dy * dy >= 4 else { return } // 2pt 细粒度
             handleDrag?.lastPoint = hit.point
+            updateLoupe(at: viewPoint)
             if let selection = selectionBetween(hd, and: hit.point) {
                 applyOurSelection(selection)
             }
 
         case .ended, .cancelled, .failed:
             handleDrag = nil
+            hideLoupe()
             freezeScrolling(false)
             DiagLog.log("handle.drag end")
             refreshHandles()
@@ -409,6 +458,59 @@ final class ReaderCoordinator: NSObject {
         }
         DiagLog.log("tap: clear")
         clearSelectionEverything()
+    }
+
+    // MARK: - 双击 / 三击(原生同款手势)
+
+    /// 双击选词:选中点击处单词并直接弹出编辑菜单(原生行为)。
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard let pdfView, gesture.state == .ended else { return }
+        let viewPoint = gesture.location(in: pdfView)
+        guard let hit = pageHit(viewPoint),
+              let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
+              Self.isSane(word, maxPages: 1, maxChars: 300) else { return }
+        DiagLog.log("doubleTap: word=「\(Self.logSnippet(word.string ?? ""))」")
+        drag = nil
+        applyOurSelection(word)
+        refreshHandles()
+        editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: viewPoint))
+    }
+
+    /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
+    @objc private func handleTripleTap(_ gesture: UITapGestureRecognizer) {
+        guard let pdfView, gesture.state == .ended else { return }
+        let viewPoint = gesture.location(in: pdfView)
+        guard let hit = pageHit(viewPoint),
+              let line = hit.page.selectionForLine(at: hit.point),
+              Self.isSane(line, maxPages: 1, maxChars: 2_000) else { return }
+        DiagLog.log("tripleTap: line=「\(Self.logSnippet(line.string ?? ""))」")
+        drag = nil
+        applyOurSelection(line)
+        refreshHandles()
+        editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: viewPoint))
+    }
+
+    // MARK: - 系统放大镜(iOS 17+ UITextLoupeSession,任意视图可用)
+
+    /// 显示系统放大镜(widget 传"选区把手视图"时,系统从它开始动画;传 nil 则从触点开始)。
+    private func showLoupe(at viewPoint: CGPoint, in pdfView: PDFView, widget: UIView?) {
+        if loupeSession == nil {
+            loupeSession = UITextLoupeSession.begin(at: viewPoint, fromSelectionWidgetView: widget, in: pdfView)
+            DiagLog.log("loupe: begin")
+        } else {
+            updateLoupe(at: viewPoint)
+        }
+    }
+
+    private func updateLoupe(at viewPoint: CGPoint) {
+        loupeSession?.move(to: viewPoint, withCaretRect: .null, trackingCaret: false)
+    }
+
+    private func hideLoupe() {
+        guard loupeSession != nil else { return }
+        loupeSession?.invalidate()
+        loupeSession = nil
+        DiagLog.log("loupe: end")
     }
 
     // MARK: - 拖动柄显示/计算
@@ -588,6 +690,7 @@ final class ReaderCoordinator: NSObject {
     private func clearSelectionEverything() {
         guard let pdfView else { return }
         DiagLog.log("clearSelection")
+        hideLoupe()
         if isMenuPresented {
             editMenuInteraction?.dismissMenu()
             isMenuPresented = false
@@ -622,6 +725,12 @@ final class ReaderCoordinator: NSObject {
             }
         }
         return page.selection(from: dragState.anchorPoint, to: current)
+    }
+
+    private static func distanceSquared(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = a.x - b.x
+        let dy = a.y - b.y
+        return dx * dx + dy * dy
     }
 
     /// 页面坐标 y 向上:先按行(容差 6pt),同行按 x 排序,保证 from 在 to 之前。
