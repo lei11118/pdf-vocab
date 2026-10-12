@@ -33,13 +33,13 @@ final class SelectionHandleView: UIView {
         super.layoutSubviews()
         let dotSize: CGFloat = 14
         if isStart {
-            // 圆点在上,短柄向下指向选区首行
-            dot.frame = CGRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2 - 6, width: dotSize, height: dotSize)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 6)
-        } else {
-            // 圆点在下,短柄向上指向选区末行
+            // 起点柄:圆点在选区下方,短柄朝上指向首行(与 iOS 原生不对称布局一致)
             dot.frame = CGRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2 + 6, width: dotSize, height: dotSize)
             stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.minY - 6, width: 2.5, height: 6)
+        } else {
+            // 终点柄:圆点在选区上方,短柄朝下指向末行
+            dot.frame = CGRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2 - 6, width: dotSize, height: dotSize)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 6)
         }
     }
 
@@ -56,10 +56,10 @@ final class SelectionHandleView: UIView {
 /// 全程**不设置 PDFView 的选区状态**(setCurrentSelection 不存在),
 /// 黄高亮/拖动柄/信息条/菜单全部由自有状态驱动。
 ///
-/// v0.3.3:
-/// - 选区样式**对齐原生**(系统蓝、半透明);拖动柄为原生风格(蓝点 + 指向文字的短柄);
-/// - **再次点击选区 = 关闭/呼出编辑菜单**(切换);点空白 = 取消选中;
-/// - 编辑菜单:复制 / 查询(系统词典)/ 翻译(系统翻译面板)/ 搜索网页 / 共享。
+/// v0.3.4:
+/// - 选区蓝贴近 iOS 原生(systemBlue 半透明);
+/// - 拖动柄与原生同款**不对称布局**:起点柄在选区**下方**(短柄朝上)、终点柄在选区**上方**(短柄朝下);
+/// - 点击规则:点选区=仅切换编辑菜单(**永不关闭选区**,编辑栏关闭≠选区关闭);点空白=菜单开着时先只关菜单,否则取消选中。
 final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
@@ -385,20 +385,27 @@ final class ReaderCoordinator: NSObject {
 
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
-            let hitRect = CGRect(x: pagePoint.x - 2, y: pagePoint.y - 2, width: 4, height: 4)
-            let onHighlight = tempRects.contains { $0.page === page && $0.rect.intersects(hitRect) }
+            // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
+            let onHighlight = tempRects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
             if onHighlight {
-                // 点选区:切换编辑菜单(再次点击可关闭 / 重新呼出)
+                // 点选区:只切换编辑菜单,**永不关闭选区**
                 if isMenuPresented {
                     editMenuInteraction?.dismissMenu()
                     isMenuPresented = false
-                    DiagLog.log("tap: dismiss menu")
+                    DiagLog.log("tap: dismiss menu (selection kept)")
                 } else {
                     editMenuInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-                    DiagLog.log("tap: show menu")
+                    DiagLog.log("tap: show menu (selection kept)")
                 }
                 return
             }
+        }
+        // 点空白:若编辑菜单开着,先只关菜单(选区保留);菜单已关时再取消选中
+        if isMenuPresented {
+            editMenuInteraction?.dismissMenu()
+            isMenuPresented = false
+            DiagLog.log("tap: dismiss menu only")
+            return
         }
         DiagLog.log("tap: clear")
         clearSelectionEverything()
@@ -429,10 +436,11 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
-        let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 18))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 18))
+        // 与 iOS 原生同款不对称布局:起点柄在首行**下方**(圆点在下),终点柄在末行**上方**(圆点在上)
+        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.minY), from: page)
+        let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.maxY), from: page)
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y + 16))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y - 16))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
@@ -557,7 +565,7 @@ final class ReaderCoordinator: NSObject {
                 forType: .highlight,
                 withProperties: nil
             )
-            annotation.color = UIColor.systemBlue.withAlphaComponent(0.35)
+            annotation.color = UIColor.systemBlue.withAlphaComponent(0.30)
             entry.page.addAnnotation(annotation)
             tempAnnotations[key] = (entry.page, annotation)
         }
