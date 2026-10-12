@@ -670,11 +670,11 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // 与 iOS 原生同款不对称布局:起点柄在首行**上方**(圆点在上方),终点柄在末行**下方**(圆点在下方)
+        // v0.6.1:两端各一个蓝色圆点(去短柄)——起点圆点在首行上方、终点圆点在末行下方
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 15))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 15))
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 12))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 12))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
@@ -688,19 +688,15 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:选区上边中点(视图坐标)——菜单出现在选区**上方居中**(原生行为)。
+    /// 编辑菜单锚点:永远在**第一个小柄(起点圆点)正上方**(用户要求,v0.6.1)。
     private func menuSourcePoint() -> CGPoint {
-        guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
+        guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
             return lastTouchViewPoint
         }
-        var union: CGRect = .null
-        for rect in lineRects {
-            union = union.union(pdfView.convert(rect, from: page))
-        }
-        guard !union.isNull else { return lastTouchViewPoint }
+        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let bounds = pdfView.bounds
-        let x = min(max(union.midX, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(union.minY - 6, bounds.minY + 44), bounds.maxY - 16)
+        let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
+        let y = min(max(startView.y - 26, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
     }
 

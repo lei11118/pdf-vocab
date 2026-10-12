@@ -1,15 +1,13 @@
 import UIKit
 import PDFKit
 
-// MARK: - 拖动柄(原生同款不对称布局)
+// MARK: - 拖动柄(两端各一个蓝色圆点;v0.6.1 用户要求)
 
-/// 选区拖柄:实心蓝圆点 + 指向文字的短柄。
-/// 起点柄:圆点在选区**上方**、短柄朝下;终点柄:圆点在选区**下方**、短柄朝上
-/// (与真机参考截图——iPadOS 26 原生选择——逐像素一致)。
+/// 选区拖柄:单个实心蓝色圆点(去掉了短柄——用户要求"改为两个点")。
+/// 起点圆点位于选区首行**上方**、终点圆点位于末行**下方**(位置由 ReaderCoordinator 摆放)。
 final class SelectionHandleView: UIView {
     let isStart: Bool
     private let dot = UIView()
-    private let stem = UIView()
 
     init(isStart: Bool) {
         self.isStart = isStart
@@ -22,9 +20,6 @@ final class SelectionHandleView: UIView {
         dot.layer.shadowRadius = 2
         dot.layer.shadowOffset = CGSize(width: 0, height: 1)
         addSubview(dot)
-        stem.backgroundColor = .systemBlue
-        stem.layer.cornerRadius = 1.25
-        addSubview(stem)
     }
 
     required init?(coder: NSCoder) {
@@ -34,15 +29,7 @@ final class SelectionHandleView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let d: CGFloat = 14
-        if isStart {
-            // 起点柄:圆点在选区上方,长柄朝下**直达选区边界**(真机参考 + 用户要求)
-            dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2 - 6, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 13)
-        } else {
-            // 终点柄:圆点在选区下方,长柄朝上直达选区边界
-            dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2 + 6, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.minY - 13, width: 2.5, height: 13)
-        }
+        dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2, width: d, height: d)
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {

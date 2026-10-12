@@ -21,7 +21,6 @@ struct WordCardPanel: View {
                 SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord)
             }
         }
-        .background(Color(.secondarySystemGroupedBackground))
     }
 }
 
