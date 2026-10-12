@@ -15,6 +15,7 @@ struct ReaderView: View {
     @State private var translateText = ""
     @State private var showTranslate = false
     @State private var showPageJump = false
+    @State private var cardContent: ReaderCardContent?
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
@@ -75,6 +76,23 @@ struct ReaderView: View {
     }
 
     private func reader(for url: URL) -> some View {
+        HStack(spacing: 0) {
+            pdfArea
+            if let content = cardContent {
+                Divider()
+                WordCardPanel(
+                    content: content,
+                    onClose: { closeCard() },
+                    onSelectWord: { word in cardContent = .word(word) }
+                )
+                .frame(width: 330)
+                .transition(.move(edge: .trailing))
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: cardContent)
+    }
+
+    private var pdfArea: some View {
         Group {
             if let resolvedURL {
                 PDFKitView(
@@ -87,6 +105,15 @@ struct ReaderView: View {
                     },
                     onSelectionInfo: { info in
                         selectionInfo = info
+                        if let info, !info.text.isEmpty {
+                            if info.wordCount <= 1, !info.primaryTerm.isEmpty {
+                                cardContent = .word(info.primaryTerm)
+                            } else {
+                                cardContent = .sentence(info.text, info.wordCount)
+                            }
+                        } else {
+                            cardContent = nil
+                        }
                     },
                     onReadingTick: {
                         scheduleSave()
@@ -154,6 +181,13 @@ struct ReaderView: View {
         .padding(.bottom, 14)
         .frame(maxWidth: 560)
         .allowsHitTesting(false)
+    }
+
+    // MARK: - 侧边词卡
+
+    private func closeCard() {
+        cardContent = nil
+        readerHandle.coordinator?.dismissSelection()
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)

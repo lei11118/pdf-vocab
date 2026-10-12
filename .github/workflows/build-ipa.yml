@@ -38,6 +38,15 @@ jobs:
           fi
           xcodegen --version
 
+      - name: Cache ECDICT source (stardict zip)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pdfvocab/ecdict-sqlite-28.zip
+          key: ecdict-sqlite-1.0.28
+
+      - name: Build bundled dictionary (ECDICT slim)
+        run: python3 scripts/build_dict.py
+
       - name: Generate Xcode project
         run: xcodegen generate
 

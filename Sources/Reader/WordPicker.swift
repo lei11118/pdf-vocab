@@ -81,6 +81,38 @@ enum WordPicker {
         return count
     }
 
+    /// 取文本中第一个"可查询词"(连续字母/连字符/撇号,排除 CJK)。
+    static func firstLexicalWord(in text: String) -> String? {
+        lexicalWords(in: text, limit: 1).first
+    }
+
+    /// 提取"可查询词"列表(小写、去重、保序、限量)。
+    static func lexicalWords(in text: String, limit: Int = 120) -> [String] {
+        var words: [String] = []
+        var seen = Set<String>()
+        var current = ""
+        func flush() {
+            let trimmed = current.trimmingCharacters(in: CharacterSet(charactersIn: "'’-"))
+            current = ""
+            guard !trimmed.isEmpty, trimmed.count <= 40 else { return }
+            let lower = trimmed.lowercased()
+            if seen.insert(lower).inserted {
+                words.append(lower)
+            }
+        }
+        for ch in text {
+            let isCJKChar = ch.utf16.first.map { isCJK($0) } ?? false
+            if (ch.isLetter && !isCJKChar) || ch == "'" || ch == "’" || ch == "-" {
+                current.append(ch)
+            } else if !current.isEmpty {
+                flush()
+                if words.count >= limit { return Array(words.prefix(limit)) }
+            }
+        }
+        if !current.isEmpty { flush() }
+        return Array(words.prefix(limit))
+    }
+
     private static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
         case 0x2E80...0x9FFF, 0xAC00...0xD7AF, 0xF900...0xFAFF:

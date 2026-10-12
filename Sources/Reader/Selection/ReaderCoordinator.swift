@@ -571,7 +571,11 @@ final class ReaderCoordinator: NSObject {
         updateHighlight(for: selection)
         refreshHandles()
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
-        onSelectionInfo(SelectionInfo(text: display, wordCount: WordPicker.countWords(in: text)))
+        onSelectionInfo(SelectionInfo(
+            text: display,
+            wordCount: WordPicker.countWords(in: text),
+            primaryTerm: WordPicker.firstLexicalWord(in: text) ?? ""
+        ))
     }
 
     /// 差量更新蓝色高亮:只移除消失的行、只新增出现的行;越界矩形拒绝并计数。
@@ -639,6 +643,11 @@ final class ReaderCoordinator: NSObject {
         clearTempHighlight()
         refreshHandles()
         onSelectionInfo(nil)
+    }
+
+    /// 关闭整条选中链(供侧边词卡关闭按钮等外部调用)。
+    func dismissSelection() {
+        clearSelection()
     }
 
     // MARK: - 拖柄显示(拖动中也实时跟随)
