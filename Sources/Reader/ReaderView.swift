@@ -57,7 +57,7 @@ struct ReaderView: View {
             PageJumpSheet(
                 pageCount: doc.pageCount,
                 current: currentPage,
-                document: readerHandle.coordinator?.pdfView?.document
+                url: resolvedURL
             ) { target in
                 readerHandle.coordinator?.go(toPage: target)
                 currentPage = min(max(target, 0), doc.pageCount - 1)
@@ -177,21 +177,20 @@ struct ReaderView: View {
 private struct PageJumpSheet: View {
     let pageCount: Int
     let current: Int
-    let document: PDFDocument?
     let onJump: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var loader: ThumbnailLoader
     @State private var mode = 0
     @State private var input = ""
     @State private var sliderValue: Double
     @State private var hint: String?
-    @State private var thumbCache: [Int: UIImage] = [:]
 
-    init(pageCount: Int, current: Int, document: PDFDocument?, onJump: @escaping (Int) -> Void) {
+    init(pageCount: Int, current: Int, url: URL?, onJump: @escaping (Int) -> Void) {
         self.pageCount = pageCount
         self.current = current
-        self.document = document
         self.onJump = onJump
+        _loader = StateObject(wrappedValue: ThumbnailLoader(url: url))
         let current1 = min(max(current + 1, 1), max(pageCount, 1))
         _sliderValue = State(initialValue: Double(current1))
     }
@@ -221,6 +220,7 @@ private struct PageJumpSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
+            .onDisappear { loader.invalidate() }
         }
     }
 
@@ -285,7 +285,7 @@ private struct PageJumpSheet: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color(.secondarySystemBackground))
-                    if let image = thumbCache[index] {
+                    if let image = loader.images[index] {
                         Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
@@ -304,10 +304,7 @@ private struct PageJumpSheet: View {
         }
         .buttonStyle(.plain)
         .task(id: index) {
-            if thumbCache[index] == nil, let doc = document, let page = doc.page(at: index) {
-                let image = page.thumbnail(of: CGSize(width: 220, height: 300), for: .cropBox)
-                thumbCache[index] = image
-            }
+            loader.request(index)
         }
     }
 

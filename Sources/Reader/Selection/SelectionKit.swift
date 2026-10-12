@@ -35,13 +35,13 @@ final class SelectionHandleView: UIView {
         super.layoutSubviews()
         let d: CGFloat = 14
         if isStart {
-            // 起点柄:圆点在选区上方,短柄朝下指向首行(真机参考:iPadOS 26 原生)
+            // 起点柄:圆点在选区上方,长柄朝下**直达选区边界**(真机参考 + 用户要求)
             dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2 - 6, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 6)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY, width: 2.5, height: 13)
         } else {
-            // 终点柄:圆点在选区下方,短柄朝上指向末行
+            // 终点柄:圆点在选区下方,长柄朝上直达选区边界
             dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2 + 6, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.minY - 6, width: 2.5, height: 6)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.minY - 13, width: 2.5, height: 13)
         }
     }
 

@@ -377,7 +377,7 @@ final class ReaderCoordinator: NSObject {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, let d = self.drag, d.kind == .word, !d.didMove,
                       !self.selectionText.isEmpty, !self.menu.isPresented else { return }
-                self.menu.present(at: self.lastTouchViewPoint)
+                self.menu.present(at: self.menuSourcePoint())
                 DiagLog.log("menu presented (hold)")
             }
             holdMenuWork = work
@@ -419,7 +419,7 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("press.end(\(kind)) moved=\(wasDrag?.didMove ?? false) ended=\(isEnded)")
             refreshHandles()
             if isEnded, wasDrag != nil, !selectionText.isEmpty, !menu.isPresented {
-                menu.present(at: lastTouchViewPoint)
+                menu.present(at: menuSourcePoint())
             }
 
         default:
@@ -480,7 +480,7 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("handle.drag end")
             refreshHandles()
             if gesture.state == .ended, !selectionText.isEmpty, !menu.isPresented {
-                menu.present(at: lastTouchViewPoint)
+                menu.present(at: menuSourcePoint())
             }
 
         default:
@@ -510,7 +510,7 @@ final class ReaderCoordinator: NSObject {
             let onSelection = rects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
             if onSelection {
                 // 点选区:只切换菜单,**永不关闭选区**
-                menu.toggle(at: point)
+                menu.toggle(at: menuSourcePoint())
                 DiagLog.log(menu.isPresented ? "tap: show menu (selection kept)" : "tap: dismiss menu (selection kept)")
                 return
             }
@@ -532,7 +532,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
         applySelection(word, src: "doubleTap")
         refreshHandles()
-        menu.present(at: viewPoint)
+        menu.present(at: menuSourcePoint())
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
@@ -546,7 +546,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("tripleTap: line=「\(SelectionGeometry.logSnippet(line.string ?? ""))」")
         applySelection(line, src: "tripleTap")
         refreshHandles()
-        menu.present(at: viewPoint)
+        menu.present(at: menuSourcePoint())
     }
 
     // MARK: - 选区应用 / 高亮
@@ -677,6 +677,22 @@ final class ReaderCoordinator: NSObject {
     private func hideHandles() {
         startHandle?.isHidden = true
         endHandle?.isHidden = true
+    }
+
+    /// 编辑菜单锚点:选区上边中点(视图坐标)——菜单出现在选区**上方居中**(原生行为)。
+    private func menuSourcePoint() -> CGPoint {
+        guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
+            return lastTouchViewPoint
+        }
+        var union: CGRect = .null
+        for rect in lineRects {
+            union = union.union(pdfView.convert(rect, from: page))
+        }
+        guard !union.isNull else { return lastTouchViewPoint }
+        let bounds = pdfView.bounds
+        let x = min(max(union.midX, bounds.minX + 44), bounds.maxX - 44)
+        let y = min(max(union.minY - 6, bounds.minY + 44), bounds.maxY - 16)
+        return CGPoint(x: x, y: y)
     }
 
     // MARK: - 滚动观察(拖柄跟随 + 阅读位置节流回调)
