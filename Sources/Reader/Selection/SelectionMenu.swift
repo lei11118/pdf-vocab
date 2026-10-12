@@ -8,6 +8,8 @@ final class SelectionMenuController: NSObject {
     weak var host: UIView?
     /// 当前选中文本(由协调器喂入;菜单动作全部经由它取词)
     var textProvider: (() -> String)?
+    /// 菜单定位矩形(由协调器喂入;系统把编辑栏放在该矩形上方,避免压住选区)
+    var targetRectProvider: ((CGPoint) -> CGRect?)?
     /// 「翻译」动作(宿主负责弹系统翻译面板)
     var onTranslate: ((String) -> Void)?
 
@@ -98,6 +100,19 @@ extension SelectionMenuController: UIEditMenuInteractionDelegate {
         animator: UIEditMenuInteractionAnimating
     ) {
         isPresented = false
+    }
+
+    /// 菜单定位:以"选区矩形"为基准——系统会把编辑栏放到矩形**上方**(原生行为),
+    /// 而不是像"裸锚点"那样挂在下边(会盖住选区、挡住点词)。
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        targetRectFor configuration: UIEditMenuConfiguration
+    ) -> CGRect {
+        if let rect = targetRectProvider?(configuration.sourcePoint) {
+            return rect
+        }
+        let p = configuration.sourcePoint
+        return CGRect(x: p.x - 1, y: p.y - 1, width: 2, height: 2)
     }
 
     func editMenuInteraction(

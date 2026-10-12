@@ -288,6 +288,9 @@ final class ReaderCoordinator: NSObject {
             self?.selectionText ?? ""
         }
         menu.install(on: view)
+        menu.targetRectProvider = { [weak self] _ in
+            self?.menuTargetRect()
+        }
 
         suppressNativeSelection(in: view)
         observeScrolling()
@@ -699,6 +702,23 @@ final class ReaderCoordinator: NSObject {
         let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
         let y = min(max(startView.y - 19, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
+    }
+
+    /// 菜单定位矩形(视图坐标,v0.6.3):整个选区 + 向上扩 24pt(含起点圆点区域)。
+    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点),不再像裸锚点那样盖住文字。
+    private func menuTargetRect() -> CGRect? {
+        guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
+            return nil
+        }
+        var union: CGRect = .null
+        for rect in lineRects {
+            union = union.union(pdfView.convert(rect, from: page))
+        }
+        guard !union.isNull else { return nil }
+        var result = union.insetBy(dx: -4, dy: 0)
+        result.origin.y -= 24
+        result.size.height += 24
+        return result
     }
 
     // MARK: - 滚动观察(拖柄跟随 + 阅读位置节流回调)
