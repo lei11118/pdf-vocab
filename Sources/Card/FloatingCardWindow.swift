@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// 悬浮词卡窗口(v0.6.1 引入,v0.6.2 增加缩放;用户要求"像 iPad 原生窗口"):
+/// 悬浮词卡窗口(v0.6.1 引入;v0.6.2 缩放;v0.6.4 胶囊形态 + 迷你模式;用户要求"像 iPad 原生窗口"):
 /// - 按住顶部拖条**自由拖动**;右下角手柄**自由改变大小**;
-/// - 位置与尺寸持久化(@AppStorage),重开仍在原处;
-/// - 点 × 才关闭;始终约束在阅读区内(最小 240×220,四周留 8pt,防出屏);
-/// - 拖动/缩放都用**全局坐标**(局部坐标会随窗口移动产生反馈抖动——"抽风"修复);
+/// - **缩到最小时变成胶囊**:横排显示「单词 + 声音 + 翻译」基本信息(双击胶囊可切换迷你/完整);
+/// - 位置与尺寸持久化(@AppStorage);
+/// - **点空白清选区时随选区一起消失**(v0.6.4 用户要求);点 × 关闭;
+/// - 形状:连续圆角 min(30, 高/2)——迷你时即标准胶囊;
+/// - 拖动/缩放都用**全局坐标**(局部坐标会随窗口移动产生反馈抖动);
 /// - 独立成视图:拖动/缩放只重绘窗口自身,不再牵动整页 PDF。
 struct FloatingCardWindow: View {
     let content: ReaderCardContent
@@ -18,24 +20,34 @@ struct FloatingCardWindow: View {
     @State private var moveStart: CGPoint?
     @State private var resizeBase: CGSize?
     @State private var resizeStart: CGPoint?
+    @State private var sizeBeforeCompact: CGSize?
     @AppStorage("readerCardX") private var storedX: Double = -1
     @AppStorage("readerCardY") private var storedY: Double = -1
     @AppStorage("readerCardW") private var storedW: Double = -1
     @AppStorage("readerCardH") private var storedH: Double = -1
 
-    private let minSize = CGSize(width: 240, height: 220)
+    /// 最小尺寸(可缩成胶囊)
+    private let minSize = CGSize(width: 180, height: 48)
+    /// 低于此高度切换为「胶囊迷你」布局
+    private let compactThreshold: CGFloat = 140
+    private let defaultSize = CGSize(width: 320, height: 430)
+
+    private var isCompact: Bool { size.height < compactThreshold }
+    private var cornerRadius: CGFloat { min(30, size.height / 2) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            dragStrip
-            Divider()
-            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord)
+        Group {
+            if isCompact {
+                compactBody
+            } else {
+                fullBody
+            }
         }
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         )
         .overlay(alignment: .bottomTrailing) { resizeGrip }
@@ -59,7 +71,15 @@ struct FloatingCardWindow: View {
         }
     }
 
-    // MARK: - 拖动条(移动窗口)
+    // MARK: - 完整词卡
+
+    private var fullBody: some View {
+        VStack(spacing: 0) {
+            dragStrip
+            Divider()
+            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord)
+        }
+    }
 
     private var dragStrip: some View {
         ZStack {
@@ -70,34 +90,46 @@ struct FloatingCardWindow: View {
         .frame(maxWidth: .infinity)
         .frame(height: 26)
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { value in
-                    if moveBase == nil {
-                        moveBase = currentPosition
-                        moveStart = value.location
-                    }
-                    guard let base = moveBase, let start = moveStart else { return }
-                    position = clampedPosition(CGPoint(
-                        x: base.x + value.location.x - start.x,
-                        y: base.y + value.location.y - start.y
-                    ))
+        .gesture(moveGesture)
+    }
+
+    // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
+
+    private var compactBody: some View {
+        CompactCardView(content: content)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(moveGesture)
+            .onTapGesture(count: 2) { toggleCompact() }
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .onChanged { value in
+                if moveBase == nil {
+                    moveBase = currentPosition
+                    moveStart = value.location
                 }
-                .onEnded { _ in
-                    moveBase = nil
-                    moveStart = nil
-                    persist()
-                }
-        )
+                guard let base = moveBase, let start = moveStart else { return }
+                position = clampedPosition(CGPoint(
+                    x: base.x + value.location.x - start.x,
+                    y: base.y + value.location.y - start.y
+                ))
+            }
+            .onEnded { _ in
+                moveBase = nil
+                moveStart = nil
+                persist()
+            }
     }
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
     private var resizeGrip: some View {
         Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: isCompact ? 9 : 11, weight: .semibold))
             .foregroundStyle(.secondary)
-            .frame(width: 34, height: 34)
+            .frame(width: isCompact ? 22 : 34, height: isCompact ? 22 : 34)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
@@ -121,6 +153,22 @@ struct FloatingCardWindow: View {
                         persist()
                     }
             )
+    }
+
+    // MARK: - 迷你/展开切换(双击胶囊)
+
+    private func toggleCompact() {
+        if isCompact {
+            size = clampedSize(sizeBeforeCompact ?? defaultSize)
+            sizeBeforeCompact = nil
+        } else {
+            sizeBeforeCompact = size
+            size = clampedSize(CGSize(width: size.width, height: minSize.height))
+        }
+        if let p = position {
+            position = clampedPosition(p)
+        }
+        persist()
     }
 
     // MARK: - 几何约束与持久化
