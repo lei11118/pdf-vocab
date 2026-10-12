@@ -688,7 +688,8 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:永远在**第一个小柄(起点圆点)正上方**(用户要求,v0.6.1)。
+    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.2 用户要求;
+    /// 圆点中心 = startView.y - 12,直径 14 → 顶部 = startView.y - 19)。
     private func menuSourcePoint() -> CGPoint {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
             return lastTouchViewPoint
@@ -696,7 +697,7 @@ final class ReaderCoordinator: NSObject {
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let bounds = pdfView.bounds
         let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(startView.y - 26, bounds.minY + 44), bounds.maxY - 16)
+        let y = min(max(startView.y - 19, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
     }
 

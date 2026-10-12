@@ -16,11 +16,6 @@ struct ReaderView: View {
     @State private var showTranslate = false
     @State private var showPageJump = false
     @State private var cardContent: ReaderCardContent?
-    @State private var cardPosition: CGPoint?
-    @State private var cardDragBase: CGPoint?
-    @AppStorage("readerCardX") private var storedCardX: Double = -1
-    @AppStorage("readerCardY") private var storedCardY: Double = -1
-    private let cardSize = CGSize(width: 320, height: 430)
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
@@ -85,90 +80,16 @@ struct ReaderView: View {
             .overlay {
                 GeometryReader { geo in
                     if let content = cardContent {
-                        floatingCard(content, bounds: geo.size)
+                        FloatingCardWindow(
+                            content: content,
+                            bounds: geo.size,
+                            onClose: { cardContent = nil },
+                            onSelectWord: { word in cardContent = .word(word) }
+                        )
                     }
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: cardContent)
-    }
-
-    // MARK: - 悬浮词卡(可拖动、位置持久、点 × 才关闭;v0.6.1 用户要求)
-
-    private func floatingCard(_ content: ReaderCardContent, bounds: CGSize) -> some View {
-        VStack(spacing: 0) {
-            cardDragStrip(bounds: bounds)
-            Divider()
-            WordCardPanel(
-                content: content,
-                onClose: { cardContent = nil },
-                onSelectWord: { word in cardContent = .word(word) }
-            )
-        }
-        .frame(width: cardSize.width, height: cardSize.height)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08))
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .offset(x: cardCurrentPosition(bounds: bounds).x, y: cardCurrentPosition(bounds: bounds).y)
-        .onAppear {
-            if cardPosition == nil {
-                cardPosition = cardCurrentPosition(bounds: bounds)
-            }
-        }
-        .onChange(of: bounds) { _, newBounds in
-            if let p = cardPosition {
-                cardPosition = cardClamp(p, in: newBounds)
-            }
-        }
-    }
-
-    private func cardDragStrip(bounds: CGSize) -> some View {
-        ZStack {
-            Capsule()
-                .fill(Color.secondary.opacity(0.35))
-                .frame(width: 36, height: 5)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 26)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    let base = cardDragBase ?? cardCurrentPosition(bounds: bounds)
-                    if cardDragBase == nil { cardDragBase = base }
-                    cardPosition = cardClamp(
-                        CGPoint(x: base.x + value.translation.width, y: base.y + value.translation.height),
-                        in: bounds
-                    )
-                }
-                .onEnded { _ in
-                    cardDragBase = nil
-                    if let p = cardPosition {
-                        storedCardX = Double(p.x)
-                        storedCardY = Double(p.y)
-                    }
-                }
-        )
-    }
-
-    private func cardCurrentPosition(bounds: CGSize) -> CGPoint {
-        if let cardPosition {
-            return cardClamp(cardPosition, in: bounds)
-        }
-        if storedCardX >= 0, storedCardY >= 0 {
-            return cardClamp(CGPoint(x: storedCardX, y: storedCardY), in: bounds)
-        }
-        return cardClamp(CGPoint(x: bounds.width - cardSize.width - 16, y: 16), in: bounds)
-    }
-
-    private func cardClamp(_ point: CGPoint, in bounds: CGSize) -> CGPoint {
-        let maxX = max(8, bounds.width - cardSize.width - 8)
-        let maxY = max(8, bounds.height - cardSize.height - 8)
-        return CGPoint(x: min(max(point.x, 8), maxX), y: min(max(point.y, 8), maxY))
     }
 
     private var pdfArea: some View {
