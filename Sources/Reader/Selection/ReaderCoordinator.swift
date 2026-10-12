@@ -26,6 +26,8 @@ final class ReaderCoordinator: NSObject {
     var docLabel = ""
     /// 待恢复的阅读位置(由 PDFKitView 在加载文档前注入)
     var pendingRestore: ReadingState?
+    /// 视图拆卸前的兜底回调(保存阅读位置等)
+    var onTeardown: (() -> Void)?
 
     // MARK: - 选区状态
 
@@ -146,8 +148,9 @@ final class ReaderCoordinator: NSObject {
         }
     }
 
-    /// 视图拆卸前调用(停掉所有活动机制,防止悬挂)
+    /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
     func prepareForTeardown() {
+        onTeardown?()
         holdMenuWork?.cancel()
         holdMenuWork = nil
         stopAutoscroll()
@@ -512,13 +515,9 @@ final class ReaderCoordinator: NSObject {
                 return
             }
         }
-        // 点空白:菜单开着先只关菜单(选区保留);菜单已关时再取消选中
-        if menu.isPresented {
-            menu.dismiss()
-            DiagLog.log("tap: dismiss menu only")
-            return
-        }
-        DiagLog.log("tap: clear")
+        // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
+        guard !rects.isEmpty || menu.isPresented else { return }
+        DiagLog.log("tap: clear all (menu+selection together)")
         clearSelection()
     }
 
@@ -606,7 +605,7 @@ final class ReaderCoordinator: NSObject {
                 forType: .highlight,
                 withProperties: nil
             )
-            annotation.color = UIColor.systemBlue.withAlphaComponent(0.30)
+            annotation.color = UIColor.systemBlue.withAlphaComponent(0.35)
             entry.page.addAnnotation(annotation)
             annotations[key] = (entry.page, annotation)
         }
@@ -662,11 +661,11 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // 与 iOS 原生同款不对称布局:起点柄在首行**下方**(圆点在下方),终点柄在末行**上方**(圆点在上方)
-        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.minY), from: page)
-        let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.maxY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y + 16))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y - 16))
+        // 与 iOS 原生同款不对称布局:起点柄在首行**上方**(圆点在上方),终点柄在末行**下方**(圆点在下方)
+        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
+        let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 15))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 15))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {

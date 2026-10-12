@@ -1,5 +1,7 @@
 import SwiftUI
 import Translation
+import UIKit
+import PDFKit
 
 /// 阅读页:PDF 渲染 + 取词 + 选页 + 阅读位置记忆。
 struct ReaderView: View {
@@ -44,15 +46,23 @@ struct ReaderView: View {
                 } label: {
                     Text("\(min(currentPage + 1, doc.pageCount)) / \(doc.pageCount)")
                         .font(.footnote.monospacedDigit())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color(.secondarySystemBackground), in: Capsule())
                 }
                 .accessibilityLabel("跳转页码")
             }
         }
         .sheet(isPresented: $showPageJump) {
-            PageJumpSheet(pageCount: doc.pageCount, current: currentPage) { target in
+            PageJumpSheet(
+                pageCount: doc.pageCount,
+                current: currentPage,
+                document: readerHandle.coordinator?.pdfView?.document
+            ) { target in
                 readerHandle.coordinator?.go(toPage: target)
                 currentPage = min(max(target, 0), doc.pageCount - 1)
             }
+            .presentationDetents([.medium, .large])
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
@@ -80,6 +90,9 @@ struct ReaderView: View {
                     },
                     onReadingTick: {
                         scheduleSave()
+                    },
+                    onTeardown: {
+                        saveProgressNow()
                     },
                     onTranslate: { text in
                         translateText = text
@@ -160,18 +173,24 @@ struct ReaderView: View {
     }
 }
 
-/// 页码跳转面板:数字输入 + 滑杆 + 越界处理。
+/// 页码跳转面板:按页码(输入 + 滑杆)/ 按缩略图,两种方式;越界处理。
 private struct PageJumpSheet: View {
     let pageCount: Int
+    let current: Int
+    let document: PDFDocument?
     let onJump: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var mode = 0
     @State private var input = ""
     @State private var sliderValue: Double
     @State private var hint: String?
+    @State private var thumbCache: [Int: UIImage] = [:]
 
-    init(pageCount: Int, current: Int, onJump: @escaping (Int) -> Void) {
+    init(pageCount: Int, current: Int, document: PDFDocument?, onJump: @escaping (Int) -> Void) {
         self.pageCount = pageCount
+        self.current = current
+        self.document = document
         self.onJump = onJump
         let current1 = min(max(current + 1, 1), max(pageCount, 1))
         _sliderValue = State(initialValue: Double(current1))
@@ -179,34 +198,20 @@ private struct PageJumpSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("输入页码") {
-                    TextField("1 – \(pageCount)", text: $input)
-                        .keyboardType(.numberPad)
-                    if let hint {
-                        Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                    Button("跳转") { jumpFromInput() }
-                        .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+            VStack(spacing: 0) {
+                Picker("选页方式", selection: $mode) {
+                    Text("按页码").tag(0)
+                    Text("缩略图").tag(1)
                 }
-                if pageCount > 1 {
-                    Section("滑杆") {
-                        Slider(value: $sliderValue, in: 1...Double(pageCount), step: 1) { editing in
-                            if !editing {
-                                onJump(Int(sliderValue.rounded()) - 1)
-                                dismiss()
-                            }
-                        }
-                        HStack {
-                            Text("第 \(Int(sliderValue.rounded())) 页")
-                            Spacer()
-                            Text("共 \(pageCount) 页")
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.footnote)
-                    }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+
+                if mode == 0 {
+                    pageForm
+                } else {
+                    thumbnailGrid
                 }
             }
             .navigationTitle("选页")
@@ -215,6 +220,93 @@ private struct PageJumpSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
                 }
+            }
+        }
+    }
+
+    private var pageForm: some View {
+        Form {
+            Section("输入页码") {
+                TextField("1 – \(pageCount)", text: $input)
+                    .keyboardType(.numberPad)
+                if let hint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Button("跳转") { jumpFromInput() }
+                    .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if pageCount > 1 {
+                Section("滑杆") {
+                    Slider(value: $sliderValue, in: 1...Double(pageCount), step: 1) { editing in
+                        if !editing {
+                            onJump(Int(sliderValue.rounded()) - 1)
+                            dismiss()
+                        }
+                    }
+                    HStack {
+                        Text("第 \(Int(sliderValue.rounded())) 页")
+                        Spacer()
+                        Text("共 \(pageCount) 页")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.footnote)
+                }
+            }
+        }
+    }
+
+    private var thumbnailGrid: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 10)], spacing: 12) {
+                    ForEach(0..<pageCount, id: \.self) { index in
+                        thumbCell(index)
+                            .id(index)
+                    }
+                }
+                .padding(16)
+            }
+            .onAppear {
+                DispatchQueue.main.async {
+                    proxy.scrollTo(min(max(current, 0), max(pageCount - 1, 0)), anchor: .center)
+                }
+            }
+        }
+    }
+
+    private func thumbCell(_ index: Int) -> some View {
+        Button {
+            onJump(index)
+            dismiss()
+        } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(.secondarySystemBackground))
+                    if let image = thumbCache[index] {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .frame(height: 124)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(index == current ? Color.accentColor : Color.clear, lineWidth: 2.5)
+                )
+                Text("\(index + 1)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(index == current ? .primary : .secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .task(id: index) {
+            if thumbCache[index] == nil, let doc = document, let page = doc.page(at: index) {
+                let image = page.thumbnail(of: CGSize(width: 220, height: 300), for: .cropBox)
+                thumbCache[index] = image
             }
         }
     }

@@ -19,12 +19,14 @@ struct PDFKitView: UIViewRepresentable {
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
     var onReadingTick: () -> Void = {}
+    var onTeardown: () -> Void = {}
     var onTranslate: (String) -> Void = { _ in }
 
     func makeCoordinator() -> ReaderCoordinator {
         let coordinator = ReaderCoordinator(onPageChanged: onPageChanged, onSelectionInfo: onSelectionInfo)
         coordinator.onTranslate = onTranslate
         coordinator.onReadingTick = onReadingTick
+        coordinator.onTeardown = onTeardown
         coordinator.pendingRestore = restore
         return coordinator
     }
@@ -55,6 +57,7 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onSelectionInfo = onSelectionInfo
         context.coordinator.onTranslate = onTranslate
         context.coordinator.onReadingTick = onReadingTick
+        context.coordinator.onTeardown = onTeardown
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {
