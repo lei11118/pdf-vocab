@@ -28,6 +28,14 @@ final class AppDatabase: @unchecked Sendable {
                 t.column("lastPage", .integer).notNull().defaults(to: 0)
             }
         }
+        migrator.registerMigration("v2.readingProgress") { db in
+            try db.alter(table: "document") { t in
+                t.add(column: "pageX", .double).notNull().defaults(to: 0)
+                t.add(column: "pageY", .double).notNull().defaults(to: 0)
+                t.add(column: "zoom", .double).notNull().defaults(to: 1)
+                t.add(column: "zoomAuto", .boolean).notNull().defaults(to: true)
+            }
+        }
         return migrator
     }
 }

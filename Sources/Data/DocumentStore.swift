@@ -122,7 +122,11 @@ struct DocumentStore: Sendable {
             pageCount: pdf.pageCount,
             hasTextLayer: Self.detectTextLayer(pdf),
             importedAt: Date(),
-            lastPage: 0
+            lastPage: 0,
+            pageX: 0,
+            pageY: 0,
+            zoom: 1,
+            zoomAuto: true
         )
         try db.dbQueue.write { db in
             try rec.insert(db)
@@ -134,10 +138,15 @@ struct DocumentStore: Sendable {
         return rec
     }
 
-    func setLastPage(_ page: Int, for sha256: String) throws {
+    /// 保存阅读位置(页码 + 页内比例 + 缩放)。以内容哈希为键,多文件互不干扰。
+    func saveReadingState(_ state: ReadingState, for sha256: String) throws {
         try db.dbQueue.write { db in
             if var rec = try DocumentRecord.fetchOne(db, key: sha256) {
-                rec.lastPage = page
+                rec.lastPage = state.page
+                rec.pageX = state.pageX
+                rec.pageY = state.pageY
+                rec.zoom = state.zoom
+                rec.zoomAuto = state.zoomAuto
                 try rec.update(db)
             }
         }

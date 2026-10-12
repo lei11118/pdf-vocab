@@ -11,8 +11,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.4.0"
-    CURRENT_PROJECT_VERSION: "16"
+    MARKETING_VERSION: "0.5.0"
+    CURRENT_PROJECT_VERSION: "17"
 
 packages:
   GRDB:
@@ -34,7 +34,7 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
-        CFBundleDisplayName: 读词
+        CFBundleDisplayName: 跃文
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleLocalizations:
           - zh-Hans

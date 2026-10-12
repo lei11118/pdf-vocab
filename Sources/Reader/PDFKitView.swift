@@ -6,17 +6,26 @@ struct SelectionInfo: Equatable {
     var wordCount: Int
 }
 
-/// PDFView 的 SwiftUI 包装:渲染 + 取词交互(详见 ReaderCoordinator)。
+/// 阅读会话句柄:让 SwiftUI 侧在任意时刻取到协调器(保存阅读位置等)。
+final class ReaderHandle {
+    weak var coordinator: ReaderCoordinator?
+}
+
+/// PDFView 的 SwiftUI 包装:渲染 + 取词交互(详见 ReaderCoordinator)+ 阅读位置恢复。
 struct PDFKitView: UIViewRepresentable {
     let url: URL
-    let initialPage: Int
+    var restore: ReadingState?
+    let handle: ReaderHandle
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
+    var onReadingTick: () -> Void = {}
     var onTranslate: (String) -> Void = { _ in }
 
     func makeCoordinator() -> ReaderCoordinator {
         let coordinator = ReaderCoordinator(onPageChanged: onPageChanged, onSelectionInfo: onSelectionInfo)
         coordinator.onTranslate = onTranslate
+        coordinator.onReadingTick = onReadingTick
+        coordinator.pendingRestore = restore
         return coordinator
     }
 
@@ -30,14 +39,12 @@ struct PDFKitView: UIViewRepresentable {
 
         context.coordinator.pdfView = view
         context.coordinator.docLabel = url.deletingPathExtension().lastPathComponent
+        handle.coordinator = context.coordinator
         context.coordinator.installGestures(on: view)
         context.coordinator.installObservers()
 
         if let document = PDFDocument(url: url) {
             view.document = document
-            if initialPage > 0, let page = document.page(at: min(initialPage, document.pageCount - 1)) {
-                view.go(to: page)
-            }
             context.coordinator.documentDidLoad(document)
         }
         return view
@@ -47,10 +54,10 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onPageChanged = onPageChanged
         context.coordinator.onSelectionInfo = onSelectionInfo
         context.coordinator.onTranslate = onTranslate
+        context.coordinator.onReadingTick = onReadingTick
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {
-        coordinator.removeObservers()
-        coordinator.clearTempHighlight()
+        coordinator.prepareForTeardown()
     }
 }

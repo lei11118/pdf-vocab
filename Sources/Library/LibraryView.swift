@@ -21,7 +21,7 @@ struct LibraryView: View {
                     documentList
                 }
             }
-            .navigationTitle("读词")
+            .navigationTitle("跃文")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -79,6 +79,7 @@ struct LibraryView: View {
                 Text("同时删除本地副本与阅读进度,且不可撤销。")
             }
             .task { reload() }
+            .onAppear { reload() }
         }
     }
 
