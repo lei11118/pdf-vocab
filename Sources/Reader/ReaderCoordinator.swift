@@ -751,7 +751,7 @@ extension ReaderCoordinator: UIEditMenuInteractionDelegate {
     func editMenuInteraction(
         _ interaction: UIEditMenuInteraction,
         willPresentMenuFor configuration: UIEditMenuConfiguration,
-        animator: UIEditMenuAnimating
+        animator: UIEditMenuInteractionAnimating
     ) {
         isMenuPresented = true
     }
@@ -759,7 +759,7 @@ extension ReaderCoordinator: UIEditMenuInteractionDelegate {
     func editMenuInteraction(
         _ interaction: UIEditMenuInteraction,
         willDismissMenuFor configuration: UIEditMenuConfiguration,
-        animator: UIEditMenuAnimating
+        animator: UIEditMenuInteractionAnimating
     ) {
         isMenuPresented = false
     }
