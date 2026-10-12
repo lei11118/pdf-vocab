@@ -8,7 +8,6 @@ struct ReaderView: View {
     let doc: DocumentRecord
     let store: DocumentStore
 
-    @State private var selectionInfo: SelectionInfo?
     @State private var currentPage: Int
     @State private var resolvedURL: URL?
     @State private var optimizing = false
@@ -104,9 +103,11 @@ struct ReaderView: View {
                         scheduleSave()
                     },
                     onSelectionInfo: { info in
-                        selectionInfo = info
-                        // v0.6.1:选区变化只更新卡片内容;**选区清空不再自动关卡片**(只有点 × 才关)
-                        guard let info, !info.text.isEmpty else { return }
+                        // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
+                        guard let info, !info.text.isEmpty else {
+                            cardContent = nil
+                            return
+                        }
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
                             cardContent = .word(info.primaryTerm)
                         } else {
@@ -135,11 +136,6 @@ struct ReaderView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if let info = selectionInfo {
-                selectionBar(info)
-            }
-        }
-        .overlay(alignment: .bottom) {
             if optimizing {
                 Text("首次打开:正在生成优化副本…")
                     .font(.caption2)
@@ -160,25 +156,6 @@ struct ReaderView: View {
             optimizing = false
         }
         .translationPresentation(isPresented: $showTranslate, text: translateText)
-    }
-
-    /// 底部信息条:选中内容的显示(M2 起由侧边词卡接管)。
-    private func selectionBar(_ info: SelectionInfo) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(info.wordCount > 1 ? "已选中 \(info.wordCount) 个词" : "已选中单词")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(info.text)
-                .font(.callout)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 14)
-        .frame(maxWidth: 560)
-        .allowsHitTesting(false)
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)

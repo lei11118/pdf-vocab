@@ -285,3 +285,80 @@ struct WrapLayout: Layout {
         }
     }
 }
+
+// MARK: - 胶囊迷你卡(单词 + 声音 + 翻译,横着排;v0.6.4)
+
+/// 窗口缩到最小时显示的横向基本信息:单词、发音按钮、翻译(首行)。
+struct CompactCardView: View {
+    let content: ReaderCardContent
+
+    @State private var translation: String?
+
+    private var displayText: String {
+        switch content {
+        case .word(let term):
+            return term
+        case .sentence(let text, _):
+            return text.count > 60 ? String(text.prefix(60)) + "…" : text
+        }
+    }
+
+    private var speakText: String {
+        switch content {
+        case .word(let term):
+            return term
+        case .sentence(let text, _):
+            return text
+        }
+    }
+
+    private var lookupTerm: String? {
+        if case .word(let term) = content {
+            return term
+        }
+        return nil
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(displayText)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .layoutPriority(1)
+            Button {
+                SpeechService.shared.speak(speakText, language: SpeechService.usVoice)
+            } label: {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.footnote)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("发音")
+            if let translation, !translation.isEmpty {
+                Text(translation)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 26)
+        .task(id: displayText) { await loadTranslation() }
+    }
+
+    private func loadTranslation() async {
+        guard let term = lookupTerm else {
+            translation = nil
+            return
+        }
+        let outcome = await Task.detached(priority: .utility) {
+            DictionaryService.lookup(term)
+        }.value
+        if case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty {
+            translation = raw.split(separator: "\n").first.map(String.init)
+        } else {
+            translation = nil
+        }
+    }
+}
