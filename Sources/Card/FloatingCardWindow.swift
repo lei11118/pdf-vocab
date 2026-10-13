@@ -21,6 +21,8 @@ struct FloatingCardWindow: View {
     @State private var resizeBase: CGSize?
     @State private var resizeStart: CGPoint?
     @State private var sizeBeforeCompact: CGSize?
+    /// 拖动缩放期间冻结的形态(v0.6.6:防内容分支/手柄尺寸在拖拽中变化打断手势)
+    @State private var heldCompact: Bool?
     @AppStorage("readerCardX") private var storedX: Double = -1
     @AppStorage("readerCardY") private var storedY: Double = -1
     @AppStorage("readerCardW") private var storedW: Double = -1
@@ -33,6 +35,8 @@ struct FloatingCardWindow: View {
     private let defaultSize = CGSize(width: 320, height: 430)
 
     private var isCompact: Bool { size.height < compactThreshold }
+    /// 实际生效的形态(拖动缩放期间冻结,v0.6.6)
+    private var effectiveCompact: Bool { heldCompact ?? isCompact }
     /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
     private var cornerRadius: CGFloat {
         let capsule = size.height / 2
@@ -43,13 +47,13 @@ struct FloatingCardWindow: View {
 
     var body: some View {
         Group {
-            if isCompact {
+            if effectiveCompact {
                 compactBody
             } else {
                 fullBody
             }
         }
-        .animation(.easeInOut(duration: 0.22), value: isCompact)
+        .animation(.easeInOut(duration: 0.22), value: effectiveCompact)
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -132,35 +136,48 @@ struct FloatingCardWindow: View {
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
+    /// v0.6.6:白色小条缩放手柄(45° 贴角,替代箭头符号);按下放大变亮,spring 动画。
     private var resizeGrip: some View {
-        Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.system(size: isCompact ? 9 : 11, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: isCompact ? 22 : 34, height: isCompact ? 22 : 34)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if resizeBase == nil {
-                            resizeBase = size
-                            resizeStart = value.location
-                        }
-                        guard let base = resizeBase, let start = resizeStart else { return }
-                        size = clampedSize(CGSize(
-                            width: base.width + value.location.x - start.x,
-                            height: base.height + value.location.y - start.y
-                        ))
-                        if let p = position {
-                            position = clampedPosition(p)
-                        }
+        ZStack(alignment: .bottomTrailing) {
+            Capsule()
+                .fill(Color.white.opacity(resizeBase == nil ? 0.85 : 1.0))
+                .frame(width: 22, height: 4.5)
+                .rotationEffect(.degrees(-45))
+                .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.5)
+                .scaleEffect(resizeBase == nil ? 1.0 : 1.12)
+                .padding(.trailing, 5)
+                .padding(.bottom, 5)
+        }
+        .frame(width: gripSide, height: gripSide)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    if resizeBase == nil {
+                        resizeBase = size
+                        resizeStart = value.location
+                        heldCompact = isCompact
                     }
-                    .onEnded { _ in
-                        resizeBase = nil
-                        resizeStart = nil
-                        persist()
+                    guard let base = resizeBase, let start = resizeStart else { return }
+                    size = clampedSize(CGSize(
+                        width: base.width + value.location.x - start.x,
+                        height: base.height + value.location.y - start.y
+                    ))
+                    if let p = position {
+                        position = clampedPosition(p)
                     }
-            )
+                }
+                .onEnded { _ in
+                    resizeBase = nil
+                    resizeStart = nil
+                    heldCompact = nil
+                    persist()
+                }
+        )
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeBase == nil)
     }
+
+    private var gripSide: CGFloat { effectiveCompact ? 26 : 34 }
 
     // MARK: - 迷你/展开切换(双击胶囊)
 
