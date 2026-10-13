@@ -5,6 +5,9 @@
 (本机网络环境下常见)。为尽量保持哈希一致,commit 的 author/committer 字符串与
 本地一致;若成功且提示"哈希一致",则远端与本地完全同步。
 
+v2(2026-10):gh api 调用带**瞬断重试**(拨号失败/连接重置/边缘 401/5xx 均退避重试);
+blob 上传带**持久缓存**(tools/.blobcache.json),网络中断后重跑可快速续传。
+
 用法:
   python gh_push_via_api.py [owner/repo] [branch]
 环境变量:GH_BIN(gh 可执行文件路径,默认 "gh")
@@ -18,8 +21,27 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 GH = os.environ.get("GH_BIN", "gh")
+CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".blobcache.json")
+
+# 视为"瞬断"可重试的错误特征(网络抖动/边缘节点错误/凭据瞬时故障)
+TRANSIENT_MARKERS = (
+    "dial tcp",
+    "Bad credentials",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection refused",
+    "unexpected EOF",
+    "EOF",
+    "502",
+    "503",
+    "504",
+)
+# 明显"永久性"错误(出现即不重试)
+FATAL_MARKERS = ("Validation Failed", "HTTP 422", "HTTP 404", "Not Found")
 
 
 def git(*args):
@@ -30,16 +52,27 @@ def git(*args):
 
 
 def gh_api(method, path, payload=None):
-    cmd = [GH, "api", "--method", method, path]
-    if payload is not None:
-        cmd += ["--input", "-"]
-        p = subprocess.run(cmd, input=json.dumps(payload).encode(), capture_output=True)
-    else:
-        p = subprocess.run(cmd, capture_output=True)
-    if p.returncode != 0:
-        raise SystemExit(f"gh api 失败:{method} {path}\n{p.stderr.decode('utf-8', 'replace')}")
-    out = p.stdout.decode().strip()
-    return json.loads(out) if out else {}
+    last_err = ""
+    for attempt in range(6):
+        cmd = [GH, "api", "--method", method, path]
+        if payload is not None:
+            cmd += ["--input", "-"]
+            p = subprocess.run(cmd, input=json.dumps(payload).encode(), capture_output=True)
+        else:
+            p = subprocess.run(cmd, capture_output=True)
+        if p.returncode == 0:
+            out = p.stdout.decode().strip()
+            return json.loads(out) if out else {}
+        stderr = p.stderr.decode("utf-8", "replace")
+        last_err = stderr.strip()
+        if not any(k in stderr for k in FATAL_MARKERS) and attempt < 5:
+            wait = 3 * (attempt + 1)
+            head = last_err.splitlines()[0] if last_err else ""
+            print(f"  ↻ 瞬断,{wait}s 后重试({method} {path}):{head[:90]}")
+            time.sleep(wait)
+            continue
+        raise SystemExit(f"gh api 失败:{method} {path}\n{stderr}")
+    raise SystemExit(f"gh api 失败(重试耗尽):{method} {path}\n{last_err}")
 
 
 def commit_meta(csha):
@@ -79,15 +112,24 @@ def main():
         commit_list = git("rev-list", "--reverse", f"{remote_head}..HEAD").decode().split()
     print(f"待推送 commit:{len(commit_list)} 个")
 
+    # blob 缓存(本地 blob sha -> 远端新 blob sha):支持断点续传
     blob_cache = {}
+    if os.path.exists(CACHE_PATH):
+        try:
+            with open(CACHE_PATH) as f:
+                blob_cache = json.load(f)
+            print(f"(blob 缓存:{len(blob_cache)} 条)")
+        except Exception:
+            blob_cache = {}
+
     parent = remote_head
     for csha in commit_list:
         meta = commit_meta(csha)
         tree_entries = []
         raw = git("ls-tree", "-r", "-z", "--full-tree", csha)
-        for entry in raw.split(b"\x00"):
-            if not entry:
-                continue
+        entries = [e for e in raw.split(b"\x00") if e]
+        done = 0
+        for entry in entries:
             entry_meta, path = entry.split(b"\t", 1)
             mode, _type, bsha = entry_meta.decode().split(" ")
             if bsha in blob_cache:
@@ -100,6 +142,14 @@ def main():
                     {"content": base64.b64encode(content).decode(), "encoding": "base64"},
                 )["sha"]
                 blob_cache[bsha] = new_sha
+                try:
+                    with open(CACHE_PATH, "w") as f:
+                        json.dump(blob_cache, f)
+                except Exception:
+                    pass
+            done += 1
+            if done % 10 == 0:
+                print(f"  blob {done}/{len(entries)}")
             tree_entries.append(
                 {
                     "path": path.decode("utf-8", "surrogateescape"),
@@ -126,13 +176,24 @@ def main():
         print(f"commit {csha[:8]} -> {commit['sha'][:8]}  tree {tree['sha'][:8]} {mark}")
         parent = commit["sha"]
 
-    gh_api("PATCH", f"repos/{repo}/git/refs/heads/{branch}", {"sha": parent, "force": False})
+    # PATCH ref:若因"已在目标位置"报错则核对后放行
+    try:
+        gh_api("PATCH", f"repos/{repo}/git/refs/heads/{branch}", {"sha": parent, "force": False})
+    except SystemExit:
+        cur = gh_api("GET", f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
+        if cur != parent:
+            raise
     final = gh_api("GET", f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
     if final == head:
         print(f"✅ 推送完成(共 {len(commit_list)} 个 commit),远端 sha 与本地 HEAD 完全一致:{head}")
     else:
         print(f"⚠️ 已推送但最终哈希不同:远端 {final} / 本地 {head}")
         print("   github.com 通道恢复后建议:git fetch origin && git reset --soft origin/main && git commit 以校准历史。")
+    # 推送成功后清理 blob 缓存
+    try:
+        os.remove(CACHE_PATH)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
