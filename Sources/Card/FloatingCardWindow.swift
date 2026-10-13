@@ -22,8 +22,6 @@ struct FloatingCardWindow: View {
     @State private var resizeBase: CGSize?
     @State private var resizeStart: CGPoint?
     @State private var sizeBeforeCompact: CGSize?
-    /// 拖动缩放期间冻结的形态(v0.6.6:防内容分支/手柄尺寸在拖拽中变化打断手势)
-    @State private var heldCompact: Bool?
     @AppStorage("readerCardX") private var storedX: Double = -1
     @AppStorage("readerCardY") private var storedY: Double = -1
     @AppStorage("readerCardW") private var storedW: Double = -1
@@ -36,8 +34,6 @@ struct FloatingCardWindow: View {
     private let defaultSize = CGSize(width: 320, height: 430)
 
     private var isCompact: Bool { size.height < compactThreshold }
-    /// 实际生效的形态(拖动缩放期间冻结,v0.6.6)
-    private var effectiveCompact: Bool { heldCompact ?? isCompact }
     /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
     private var cornerRadius: CGFloat {
         let capsule = size.height / 2
@@ -49,13 +45,13 @@ struct FloatingCardWindow: View {
     var body: some View {
         ZStack {
             fullBody
-                .opacity(effectiveCompact ? 0 : 1)
-                .allowsHitTesting(!effectiveCompact)
+                .opacity(isCompact ? 0 : 1)
+                .allowsHitTesting(!isCompact)
             compactBody
-                .opacity(effectiveCompact ? 1 : 0)
-                .allowsHitTesting(effectiveCompact)
+                .opacity(isCompact ? 1 : 0)
+                .allowsHitTesting(isCompact)
         }
-        .animation(.easeInOut(duration: 0.25), value: effectiveCompact)
+        .animation(.easeInOut(duration: 0.25), value: isCompact)
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -160,7 +156,6 @@ struct FloatingCardWindow: View {
                         if resizeBase == nil {
                             resizeBase = size
                             resizeStart = value.location
-                            heldCompact = isCompact
                         }
                         guard let base = resizeBase, let start = resizeStart else { return }
                         size = clampedSize(CGSize(
@@ -174,7 +169,6 @@ struct FloatingCardWindow: View {
                     .onEnded { _ in
                         resizeBase = nil
                         resizeStart = nil
-                        heldCompact = nil
                         persist()
                     }
             )
@@ -182,7 +176,7 @@ struct FloatingCardWindow: View {
 
     private var resizeActive: Bool { resizeBase != nil }
 
-    private var gripSide: CGFloat { effectiveCompact ? 26 : 34 }
+    private let gripSide: CGFloat = 32
 
     // MARK: - 迷你/展开切换(双击胶囊)
 

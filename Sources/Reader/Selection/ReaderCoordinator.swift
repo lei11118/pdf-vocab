@@ -693,11 +693,11 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.6.7:蓝点+小柄——柄直达蓝选区边缘(SelectionHandleView 把柄端对齐到摆点 ±22)
+        // v0.6.8:蓝点+小柄——柄**穿进蓝选区约 6pt**(摆点 ±16 ⇒ 柄端落在选区内侧 6pt 处)
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 22))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 22))
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 16))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 16))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
@@ -711,8 +711,8 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.7 起:
-    /// 圆点中心 = startView.y - 28,直径 14 → 顶部 = startView.y - 35)。
+    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.8 起:
+    /// 圆点中心 = startView.y - 22,直径 14 → 顶部 = startView.y - 29)。
     private func menuSourcePoint() -> CGPoint {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
             return lastTouchViewPoint
@@ -720,11 +720,11 @@ final class ReaderCoordinator: NSObject {
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let bounds = pdfView.bounds
         let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(startView.y - 35, bounds.minY + 44), bounds.maxY - 16)
+        let y = min(max(startView.y - 29, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
     }
 
-    /// 菜单定位矩形(视图坐标,v0.6.7):整个选区 + 向上扩 36pt(含起点圆点与柄的新位置)。
+    /// 菜单定位矩形(视图坐标,v0.6.8):整个选区 + 向上扩 30pt(含起点圆点与柄的新位置)。
     /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点顶部),不再像裸锚点那样盖住文字。
     private func menuTargetRect() -> CGRect? {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
@@ -736,8 +736,8 @@ final class ReaderCoordinator: NSObject {
         }
         guard !union.isNull else { return nil }
         var result = union.insetBy(dx: -4, dy: 0)
-        result.origin.y -= 36
-        result.size.height += 36
+        result.origin.y -= 30
+        result.size.height += 30
         return result
     }
 
