@@ -209,9 +209,11 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView else { return }
         let text = pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !text.isEmpty {
-            // 内置手势没能压住(被重建):再次压制,并留下证据
-            DiagLog.log("native sel detected(len=\(text.count)); re-suppress")
+            // 内置手势漏网(被重建/再长按):立刻清掉原生选区 + 再压制(v0.6.5)
+            DiagLog.log("native sel detected(len=\(text.count)); kill + re-suppress")
             suppressNativeSelection(in: pdfView)
+            pdfView.currentSelection = nil
+            pdfView.clearSelection()
         }
     }
 
@@ -304,9 +306,13 @@ final class ReaderCoordinator: NSObject {
             for gr in v.gestureRecognizers ?? [] {
                 if gr === fingerPressRef || gr === pencilPressRef || gr === tapRef
                     || gr === doubleTapRef || gr === tripleTapRef { continue }
+                let name = String(describing: type(of: gr))
                 let isLongPress = gr is UILongPressGestureRecognizer
                 let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
-                if (isLongPress || isMultiTap), gr.isEnabled {
+                // v0.6.5:连同私有的"选择/放大镜/文本交互"手势一并压制(系统不同构建类名不同,按名称兜底)
+                let looksSelection = name.contains("Selection") || name.contains("Loupe")
+                    || name.contains("Caret") || name.contains("TextInteraction")
+                if (isLongPress || isMultiTap || looksSelection), gr.isEnabled {
                     gr.isEnabled = false
                     disabled += 1
                 }
@@ -317,6 +323,14 @@ final class ReaderCoordinator: NSObject {
         if disabled > 0, !suppressLogged {
             suppressLogged = true
             DiagLog.log("suppressNative: disabled \(disabled) recognizers")
+        }
+    }
+
+    /// 下一主线程周期再压一遍(v0.6.5):捕获"操作后系统重建选择手势"的窗口期。
+    private func resuppressSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.pdfView else { return }
+            self.suppressNativeSelection(in: view)
         }
     }
 
@@ -338,6 +352,8 @@ final class ReaderCoordinator: NSObject {
         case .began:
             hasUserInteracted = true
             guard drag == nil else { return }
+            // v0.6.5:长按生效前再压一遍(防"已有选区后再长按"时被重建的选择手势漏网)
+            suppressNativeSelection(in: pdfView)
             guard let hit = pageHit(viewPoint) else {
                 DiagLog.log("press.began(\(kind)): no page")
                 return
@@ -441,6 +457,7 @@ final class ReaderCoordinator: NSObject {
         case .began:
             hasUserInteracted = true
             guard drag == nil else { return }
+            suppressNativeSelection(in: pdfView)
             holdMenuWork?.cancel()
             holdMenuWork = nil
             menu.dismiss()
@@ -579,6 +596,7 @@ final class ReaderCoordinator: NSObject {
             wordCount: WordPicker.countWords(in: text),
             primaryTerm: WordPicker.firstLexicalWord(in: text) ?? ""
         ))
+        resuppressSoon()
     }
 
     /// 差量更新蓝色高亮:只移除消失的行、只新增出现的行;越界矩形拒绝并计数。
@@ -646,6 +664,7 @@ final class ReaderCoordinator: NSObject {
         clearTempHighlight()
         refreshHandles()
         onSelectionInfo(nil)
+        resuppressSoon()
     }
 
     /// 关闭整条选中链(供侧边词卡关闭按钮等外部调用)。
@@ -828,22 +847,26 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - 拖选计算(纯点坐标 + 词粒度)
 
+    /// 拖动扩选:v0.6.5 起为**字符粒度**("一个字母一个字母地拖动")——
+    /// 终点直接取原始触点(`selection(from:to:)` 在最近的字符边界收口,不依赖已损坏的字符索引 API);
+    /// 锚点侧吸附到初始词的首/末字符:向后拖从词首开始,向左/向上拖以词尾为锚。
     private func selectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
         let page = dragState.page
         let anchorRect = dragState.anchorWord.bounds(for: page)
-
-        if let currentWord = page.selectionForWord(at: current) {
-            let currentRect = currentWord.bounds(for: page)
-            if SelectionGeometry.isValid(anchorRect), SelectionGeometry.isValid(currentRect) {
-                let leftPoint = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)
-                let rightPoint = CGPoint(x: currentRect.maxX - 0.6, y: currentRect.midY)
-                let (from, to) = SelectionGeometry.ordered(leftPoint, rightPoint)
-                if let selection = page.selection(from: from, to: to),
-                   SelectionGeometry.isSane(selection, maxPages: 2, maxChars: 6_000),
-                   let text = selection.string, !text.isEmpty {
-                    return selection
-                }
-            }
+        guard SelectionGeometry.isValid(anchorRect) else {
+            return page.selection(from: dragState.anchorPoint, to: current)
+        }
+        let wordStart = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)
+        let wordEnd = CGPoint(x: anchorRect.maxX - 0.6, y: anchorRect.midY)
+        // 当前点在锚点词之前(同行左侧或上方)→ 以"词尾"为锚向前拖;否则从"词首"向后拖
+        let sameLine = abs(current.y - wordStart.y) < 6
+        let beforeWord = sameLine ? (current.x < wordStart.x) : (current.y > wordStart.y + 6)
+        let from = beforeWord ? current : wordStart
+        let to = beforeWord ? wordEnd : current
+        if let selection = page.selection(from: from, to: to),
+           SelectionGeometry.isSane(selection, maxPages: 2, maxChars: 6_000),
+           let text = selection.string, !text.isEmpty {
+            return selection
         }
         return page.selection(from: dragState.anchorPoint, to: current)
     }

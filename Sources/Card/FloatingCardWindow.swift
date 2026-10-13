@@ -33,7 +33,13 @@ struct FloatingCardWindow: View {
     private let defaultSize = CGSize(width: 320, height: 430)
 
     private var isCompact: Bool { size.height < compactThreshold }
-    private var cornerRadius: CGFloat { min(30, size.height / 2) }
+    /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
+    private var cornerRadius: CGFloat {
+        let capsule = size.height / 2
+        guard size.height > 120 else { return capsule }
+        let t = min(max((size.height - 120) / 40, 0), 1)
+        return capsule * (1 - t) + 30 * t
+    }
 
     var body: some View {
         Group {
@@ -43,6 +49,7 @@ struct FloatingCardWindow: View {
                 fullBody
             }
         }
+        .animation(.easeInOut(duration: 0.22), value: isCompact)
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -158,15 +165,17 @@ struct FloatingCardWindow: View {
     // MARK: - 迷你/展开切换(双击胶囊)
 
     private func toggleCompact() {
-        if isCompact {
-            size = clampedSize(sizeBeforeCompact ?? defaultSize)
-            sizeBeforeCompact = nil
-        } else {
-            sizeBeforeCompact = size
-            size = clampedSize(CGSize(width: size.width, height: minSize.height))
-        }
-        if let p = position {
-            position = clampedPosition(p)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            if isCompact {
+                size = clampedSize(sizeBeforeCompact ?? defaultSize)
+                sizeBeforeCompact = nil
+            } else {
+                sizeBeforeCompact = size
+                size = clampedSize(CGSize(width: size.width, height: minSize.height))
+            }
+            if let p = position {
+                position = clampedPosition(p)
+            }
         }
         persist()
     }
