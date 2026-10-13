@@ -17,3 +17,7 @@ Resources/ecdict.sqlite.gz
 # —— Python ——
 __pycache__/
 *.pyc
+tools/.blobcache.json
+tools/*.py.new
+tmp_v69/
+*.ipa
