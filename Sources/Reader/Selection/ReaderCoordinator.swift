@@ -693,11 +693,11 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.6.1:两端各一个蓝色圆点(去短柄)——起点圆点在首行上方、终点圆点在末行下方
+        // v0.6.7:蓝点+小柄——柄直达蓝选区边缘(SelectionHandleView 把柄端对齐到摆点 ±22)
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 12))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 12))
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 22))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 22))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
@@ -711,8 +711,8 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.2 用户要求;
-    /// 圆点中心 = startView.y - 12,直径 14 → 顶部 = startView.y - 19)。
+    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.7 起:
+    /// 圆点中心 = startView.y - 28,直径 14 → 顶部 = startView.y - 35)。
     private func menuSourcePoint() -> CGPoint {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
             return lastTouchViewPoint
@@ -720,12 +720,12 @@ final class ReaderCoordinator: NSObject {
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let bounds = pdfView.bounds
         let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(startView.y - 19, bounds.minY + 44), bounds.maxY - 16)
+        let y = min(max(startView.y - 35, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
     }
 
-    /// 菜单定位矩形(视图坐标,v0.6.3):整个选区 + 向上扩 24pt(含起点圆点区域)。
-    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点),不再像裸锚点那样盖住文字。
+    /// 菜单定位矩形(视图坐标,v0.6.7):整个选区 + 向上扩 36pt(含起点圆点与柄的新位置)。
+    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点顶部),不再像裸锚点那样盖住文字。
     private func menuTargetRect() -> CGRect? {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
             return nil
@@ -736,8 +736,8 @@ final class ReaderCoordinator: NSObject {
         }
         guard !union.isNull else { return nil }
         var result = union.insetBy(dx: -4, dy: 0)
-        result.origin.y -= 24
-        result.size.height += 24
+        result.origin.y -= 36
+        result.size.height += 36
         return result
     }
 
