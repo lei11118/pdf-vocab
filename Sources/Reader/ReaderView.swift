@@ -17,6 +17,8 @@ struct ReaderView: View {
     @State private var cardContent: ReaderCardContent?
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
+    @State private var showSettings = false
+    @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(doc: DocumentRecord, store: DocumentStore) {
@@ -52,6 +54,17 @@ struct ReaderView: View {
                 }
                 .accessibilityLabel("跳转页码")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("设置")
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
         .sheet(isPresented: $showPageJump) {
             PageJumpSheet(
@@ -74,6 +87,12 @@ struct ReaderView: View {
         }
     }
 
+    /// v0.6.9:选词后自动发音(设置项,默认关;美音)
+    private func autoSpeak(_ term: String) {
+        guard autoSpeakOnSelect else { return }
+        SpeechService.shared.speak(term, language: SpeechService.usVoice)
+    }
+
     private func reader(for url: URL) -> some View {
         pdfArea
             .overlay {
@@ -83,7 +102,10 @@ struct ReaderView: View {
                             content: content,
                             bounds: geo.size,
                             onClose: { cardContent = nil },
-                            onSelectWord: { word in cardContent = .word(word) }
+                            onSelectWord: { word in
+                                cardContent = .word(word)
+                                autoSpeak(word)
+                            }
                         )
                     }
                 }
@@ -110,6 +132,7 @@ struct ReaderView: View {
                         }
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
                             cardContent = .word(info.primaryTerm)
+                            autoSpeak(info.primaryTerm)
                         } else {
                             cardContent = .sentence(info.text, info.wordCount)
                         }

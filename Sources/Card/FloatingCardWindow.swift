@@ -8,7 +8,8 @@ import Foundation
 /// - **点空白清选区时随选区一起消失**(v0.6.4 用户要求);点 × 关闭;
 /// - 形状:连续圆角 min(30, 高/2)——迷你时即标准胶囊;
 /// - 拖动/缩放都用**全局坐标**(局部坐标会随窗口移动产生反馈抖动);
-/// - 独立成视图:拖动/缩放只重绘窗口自身,不再牵动整页 PDF。
+/// - 独立成视图:拖动/缩放只重绘窗口自身,不再牵动整页 PDF;
+/// - v0.6.9:触摸判定严格等于窗口**形状**本身(胶囊圆角/窗口圆角之外不拦截触摸)。
 struct FloatingCardWindow: View {
     let content: ReaderCardContent
     let bounds: CGSize
@@ -70,7 +71,7 @@ struct FloatingCardWindow: View {
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeActive)
                 .allowsHitTesting(false)
         }
-        .overlay(alignment: .bottomTrailing) { resizeHitArea }
+        .overlay { resizeHitArea }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: currentPosition.x, y: currentPosition.y)
@@ -118,7 +119,8 @@ struct FloatingCardWindow: View {
     private var compactBody: some View {
         CompactCardView(content: content)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
+            // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .gesture(moveGesture)
             .onTapGesture(count: 2) { toggleCompact() }
     }
@@ -145,11 +147,11 @@ struct FloatingCardWindow: View {
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
-    /// 命中区(v0.6.7):右下角透明正方形;视觉由沿边缘的白色弧条 `CornerGripArc` 提供。
+    /// 命中区(v0.6.9):**全窗大小**的透明层,`contentShape` = 窗口形状 ∩ 右下角区 ——
+    /// 触摸判定每时每刻与窗口形状一致,形状之外不拦截(视觉仍由白色弧条 `CornerGripArc` 提供)。
     private var resizeHitArea: some View {
         Color.clear
-            .frame(width: gripSide, height: gripSide)
-            .contentShape(Rectangle())
+            .contentShape(CornerHitShape(cornerRadius: cornerRadius, size: gripSide))
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
@@ -258,5 +260,21 @@ private struct CornerGripArc: Shape {
             }
         }
         return path
+    }
+}
+
+/// v0.6.9:右下角「窗口形状 ∩ 右下角方形区」的命中形状 ——
+/// 让缩放手柄的可触区严格等于窗口自身形状(圆角之外不拦截触摸)。
+private struct CornerHitShape: Shape {
+    var cornerRadius: CGFloat
+    var size: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let card = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        let zone = CGPath(
+            rect: CGRect(x: rect.maxX - size, y: rect.maxY - size, width: size, height: size),
+            transform: nil
+        )
+        return Path(card.intersection(zone))
     }
 }
