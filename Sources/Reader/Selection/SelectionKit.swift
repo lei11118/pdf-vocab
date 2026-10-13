@@ -1,18 +1,22 @@
 import UIKit
 import PDFKit
 
-// MARK: - 拖动柄(两端各一个蓝色圆点;v0.6.1 用户要求)
+// MARK: - 拖动柄(蓝点 + 小柄直达选区边缘;v0.6.7 用户要求)
 
-/// 选区拖柄:单个实心蓝色圆点(去掉了短柄——用户要求"改为两个点")。
-/// 起点圆点位于选区首行**上方**、终点圆点位于末行**下方**(位置由 ReaderCoordinator 摆放)。
+/// 选区拖柄:实心蓝圆点 + 指向选区的小柄——柄从圆点延伸、**直达蓝选区的边缘**
+/// (起点柄:圆点在上、柄朝下贴到首行上缘;终点柄:圆点在下方、柄朝上贴到末行下缘)。
 final class SelectionHandleView: UIView {
     let isStart: Bool
     private let dot = UIView()
+    private let stem = UIView()
 
     init(isStart: Bool) {
         self.isStart = isStart
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
         backgroundColor = .clear
+        stem.backgroundColor = .systemBlue
+        stem.layer.cornerRadius = 1.25
+        addSubview(stem)
         dot.backgroundColor = .systemBlue
         dot.layer.cornerRadius = 7
         dot.layer.shadowColor = UIColor.black.cgColor
@@ -29,7 +33,18 @@ final class SelectionHandleView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let d: CGFloat = 14
-        dot.frame = CGRect(x: (bounds.width - d) / 2, y: (bounds.height - d) / 2, width: d, height: d)
+        if isStart {
+            // 起点柄:圆点在视图上部;柄从圆点底部延伸至视图**底边**
+            // (视图按中心摆放于 选区上缘-22,故底边 = 蓝选区上缘)
+            dot.frame = CGRect(x: (bounds.width - d) / 2, y: 9, width: d, height: d)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY - 2, width: 2.5,
+                                height: bounds.height - dot.frame.maxY + 2)
+        } else {
+            // 终点柄:圆点在视图下部;柄从视图**顶边**延伸至圆点顶部(顶边 = 蓝选区下缘)
+            dot.frame = CGRect(x: (bounds.width - d) / 2, y: bounds.height - 9 - d, width: d, height: d)
+            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: 0, width: 2.5,
+                                height: dot.frame.minY + 2)
+        }
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {

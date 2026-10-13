@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 /// 悬浮词卡窗口(v0.6.1 引入;v0.6.2 缩放;v0.6.4 胶囊形态 + 迷你模式;用户要求"像 iPad 原生窗口"):
 /// - 按住顶部拖条**自由拖动**;右下角手柄**自由改变大小**;
@@ -46,14 +47,15 @@ struct FloatingCardWindow: View {
     }
 
     var body: some View {
-        Group {
-            if effectiveCompact {
-                compactBody
-            } else {
-                fullBody
-            }
+        ZStack {
+            fullBody
+                .opacity(effectiveCompact ? 0 : 1)
+                .allowsHitTesting(!effectiveCompact)
+            compactBody
+                .opacity(effectiveCompact ? 1 : 0)
+                .allowsHitTesting(effectiveCompact)
         }
-        .animation(.easeInOut(duration: 0.22), value: effectiveCompact)
+        .animation(.easeInOut(duration: 0.25), value: effectiveCompact)
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -61,7 +63,18 @@ struct FloatingCardWindow: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         )
-        .overlay(alignment: .bottomTrailing) { resizeGrip }
+        .overlay {
+            // v0.6.7:白色缩放手柄 = 窗口右下边缘的一段弧(半径随圆角连续变化,始终贴合)
+            CornerGripArc(cornerRadius: cornerRadius)
+                .stroke(
+                    Color.white.opacity(resizeActive ? 1.0 : 0.9),
+                    style: StrokeStyle(lineWidth: resizeActive ? 4.5 : 3.5, lineCap: .round)
+                )
+                .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeActive)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomTrailing) { resizeHitArea }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: currentPosition.x, y: currentPosition.y)
@@ -136,46 +149,38 @@ struct FloatingCardWindow: View {
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
-    /// v0.6.6:白色小条缩放手柄(45° 贴角,替代箭头符号);按下放大变亮,spring 动画。
-    private var resizeGrip: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Capsule()
-                .fill(Color.white.opacity(resizeBase == nil ? 0.85 : 1.0))
-                .frame(width: 22, height: 4.5)
-                .rotationEffect(.degrees(-45))
-                .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.5)
-                .scaleEffect(resizeBase == nil ? 1.0 : 1.12)
-                .padding(.trailing, 5)
-                .padding(.bottom, 5)
-        }
-        .frame(width: gripSide, height: gripSide)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { value in
-                    if resizeBase == nil {
-                        resizeBase = size
-                        resizeStart = value.location
-                        heldCompact = isCompact
+    /// 命中区(v0.6.7):右下角透明正方形;视觉由沿边缘的白色弧条 `CornerGripArc` 提供。
+    private var resizeHitArea: some View {
+        Color.clear
+            .frame(width: gripSide, height: gripSide)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        if resizeBase == nil {
+                            resizeBase = size
+                            resizeStart = value.location
+                            heldCompact = isCompact
+                        }
+                        guard let base = resizeBase, let start = resizeStart else { return }
+                        size = clampedSize(CGSize(
+                            width: base.width + value.location.x - start.x,
+                            height: base.height + value.location.y - start.y
+                        ))
+                        if let p = position {
+                            position = clampedPosition(p)
+                        }
                     }
-                    guard let base = resizeBase, let start = resizeStart else { return }
-                    size = clampedSize(CGSize(
-                        width: base.width + value.location.x - start.x,
-                        height: base.height + value.location.y - start.y
-                    ))
-                    if let p = position {
-                        position = clampedPosition(p)
+                    .onEnded { _ in
+                        resizeBase = nil
+                        resizeStart = nil
+                        heldCompact = nil
+                        persist()
                     }
-                }
-                .onEnded { _ in
-                    resizeBase = nil
-                    resizeStart = nil
-                    heldCompact = nil
-                    persist()
-                }
-        )
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeBase == nil)
+            )
     }
+
+    private var resizeActive: Bool { resizeBase != nil }
 
     private var gripSide: CGFloat { effectiveCompact ? 26 : 34 }
 
@@ -229,5 +234,35 @@ struct FloatingCardWindow: View {
         storedY = Double(currentPosition.y)
         storedW = Double(size.width)
         storedH = Double(size.height)
+    }
+}
+
+/// 窗口右下角的白色缩放手柄弧条(v0.6.7):**造型即窗口边缘的一段**——
+/// 沿右下圆角画一段弧,半径随窗口圆角连续变化(胶囊态半圆、矩形态圆角),始终贴合边缘。
+private struct CornerGripArc: Shape {
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let steps = 24
+        let startDeg = 14.0
+        let endDeg = 76.0
+        let r = max(cornerRadius - 2, 2)
+        guard rect.width > cornerRadius + 6, rect.height > cornerRadius + 6 else { return path }
+        let center = CGPoint(x: rect.maxX - cornerRadius, y: rect.maxY - cornerRadius)
+        for i in 0...steps {
+            let deg = startDeg + (endDeg - startDeg) * Double(i) / Double(steps)
+            let a = deg * .pi / 180
+            let point = CGPoint(
+                x: center.x + r * CGFloat(cos(a)),
+                y: center.y + r * CGFloat(sin(a))
+            )
+            if i == 0 {
+                path.move(to: point)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        return path
     }
 }
