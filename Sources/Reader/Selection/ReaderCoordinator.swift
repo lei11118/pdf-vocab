@@ -45,6 +45,8 @@ final class ReaderCoordinator: NSObject {
     private weak var doubleTapRef: UITapGestureRecognizer?
     private weak var tripleTapRef: UITapGestureRecognizer?
     private var suppressLogged = false
+    /// 原生选区清除重入保护(v0.6.6:防 clearSelection 触发通知再杀形成死循环)
+    private var killingNativeSelection = false
 
     // MARK: - 拖动状态
 
@@ -206,14 +208,18 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func selectionDidChange() {
-        guard let pdfView else { return }
+        guard let pdfView, !killingNativeSelection else { return }
         let text = pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !text.isEmpty {
-            // 内置手势漏网(被重建/再长按):立刻清掉原生选区 + 再压制(v0.6.5)
+            // 内置手势漏网(被重建/再长按):立刻清掉原生选区 + 再压制(v0.6.5;v0.6.6 加重入保护)
             DiagLog.log("native sel detected(len=\(text.count)); kill + re-suppress")
+            killingNativeSelection = true
             suppressNativeSelection(in: pdfView)
             pdfView.currentSelection = nil
             pdfView.clearSelection()
+            DispatchQueue.main.async { [weak self] in
+                self?.killingNativeSelection = false
+            }
         }
     }
 
@@ -306,13 +312,11 @@ final class ReaderCoordinator: NSObject {
             for gr in v.gestureRecognizers ?? [] {
                 if gr === fingerPressRef || gr === pencilPressRef || gr === tapRef
                     || gr === doubleTapRef || gr === tripleTapRef { continue }
-                let name = String(describing: type(of: gr))
                 let isLongPress = gr is UILongPressGestureRecognizer
                 let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
-                // v0.6.5:连同私有的"选择/放大镜/文本交互"手势一并压制(系统不同构建类名不同,按名称兜底)
-                let looksSelection = name.contains("Selection") || name.contains("Loupe")
-                    || name.contains("Caret") || name.contains("TextInteraction")
-                if (isLongPress || isMultiTap || looksSelection), gr.isEnabled {
+                // v0.6.6:回退"按类名压制私有手势"(v0.6.5 的做法在文字层 PDF 上误伤 PDFKit 文本链路,
+                // 导致"不能选词");泄漏改由 selectionDidChange 的即时清除兜底。
+                if (isLongPress || isMultiTap), gr.isEnabled {
                     gr.isEnabled = false
                     disabled += 1
                 }
@@ -575,11 +579,8 @@ final class ReaderCoordinator: NSObject {
         guard let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         guard SelectionGeometry.isSane(selection, maxPages: 1, maxChars: 6_000) else {
+            // v0.6.6:坏帧只记录、**不清空现有选区**(拖动中偶发解析异常时保留上一个好状态)
             DiagLog.log("applySelection rejected(\(src)): pages=\(selection.pages.count) len=\(text.count)")
-            appliedKey = nil
-            appliedCharCount = 0
-            clearTempHighlight()
-            onSelectionInfo(nil)
             return
         }
         let pageIndex = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) } ?? -1
@@ -692,11 +693,12 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.6.1:两端各一个蓝色圆点(去短柄)——起点圆点在首行上方、终点圆点在末行下方
+        // v0.6.9:蓝点+小柄——柄端**紧贴蓝选区边缘并压入约 2pt**(摆点 ±21,
+        // 按实时换算的选区边缘自适应:任何缩放/行高下都严丝合缝、无缝隙)
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 12))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 12))
+        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 21))
+        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 21))
     }
 
     private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
@@ -710,8 +712,8 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.2 用户要求;
-    /// 圆点中心 = startView.y - 12,直径 14 → 顶部 = startView.y - 19)。
+    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.9 起:
+    /// 圆点中心 = startView.y - 27,直径 14 → 顶部 = startView.y - 34)。
     private func menuSourcePoint() -> CGPoint {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
             return lastTouchViewPoint
@@ -719,12 +721,12 @@ final class ReaderCoordinator: NSObject {
         let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
         let bounds = pdfView.bounds
         let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(startView.y - 19, bounds.minY + 44), bounds.maxY - 16)
+        let y = min(max(startView.y - 34, bounds.minY + 44), bounds.maxY - 16)
         return CGPoint(x: x, y: y)
     }
 
-    /// 菜单定位矩形(视图坐标,v0.6.3):整个选区 + 向上扩 24pt(含起点圆点区域)。
-    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点),不再像裸锚点那样盖住文字。
+    /// 菜单定位矩形(视图坐标,v0.6.9):整个选区 + 向上扩 36pt(含起点圆点与柄的新位置)。
+    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点顶部),不再像裸锚点那样盖住文字。
     private func menuTargetRect() -> CGRect? {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
             return nil
@@ -735,8 +737,8 @@ final class ReaderCoordinator: NSObject {
         }
         guard !union.isNull else { return nil }
         var result = union.insetBy(dx: -4, dy: 0)
-        result.origin.y -= 24
-        result.size.height += 24
+        result.origin.y -= 36
+        result.size.height += 36
         return result
     }
 
@@ -847,28 +849,42 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - 拖选计算(纯点坐标 + 词粒度)
 
-    /// 拖动扩选:v0.6.5 起为**字符粒度**("一个字母一个字母地拖动")——
-    /// 终点直接取原始触点(`selection(from:to:)` 在最近的字符边界收口,不依赖已损坏的字符索引 API);
-    /// 锚点侧吸附到初始词的首/末字符:向后拖从词首开始,向左/向上拖以词尾为锚。
+    /// 拖动扩选:v0.6.6 起 **字符粒度优先、词粒度兜底**(用户要求"一个字母一个字母地拖动")——
+    /// ① 先试字符粒度:终点直接取原始触点(`selection(from:to:)` 在最近的字符边界收口);
+    /// ② 若解析异常(损坏文档上 point-pair 可能返回非法选区)→ 用词边界点重试;
+    /// ③ 全部失败返回 nil(保持上一个好选区,不清空)。
     private func selectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
         let page = dragState.page
         let anchorRect = dragState.anchorWord.bounds(for: page)
-        guard SelectionGeometry.isValid(anchorRect) else {
-            return page.selection(from: dragState.anchorPoint, to: current)
-        }
+        guard SelectionGeometry.isValid(anchorRect) else { return nil }
         let wordStart = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)
         let wordEnd = CGPoint(x: anchorRect.maxX - 0.6, y: anchorRect.midY)
         // 当前点在锚点词之前(同行左侧或上方)→ 以"词尾"为锚向前拖;否则从"词首"向后拖
-        let sameLine = abs(current.y - wordStart.y) < 6
-        let beforeWord = sameLine ? (current.x < wordStart.x) : (current.y > wordStart.y + 6)
-        let from = beforeWord ? current : wordStart
-        let to = beforeWord ? wordEnd : current
-        if let selection = page.selection(from: from, to: to),
-           SelectionGeometry.isSane(selection, maxPages: 2, maxChars: 6_000),
-           let text = selection.string, !text.isEmpty {
-            return selection
+        let sameLine = abs(current.y - wordStart.y) < 12
+        let beforeWord = sameLine ? (current.x < wordStart.x) : (current.y > wordStart.y + 12)
+        let charFrom = beforeWord ? current : wordStart
+        let charTo = beforeWord ? wordEnd : current
+        // ① 字符粒度
+        if let sel = page.selection(from: charFrom, to: charTo),
+           SelectionGeometry.isSane(sel, maxPages: 1, maxChars: 6_000),
+           let text = sel.string, !text.isEmpty {
+            return sel
         }
-        return page.selection(from: dragState.anchorPoint, to: current)
+        // ② 词粒度兜底
+        if let currentWord = page.selectionForWord(at: current) {
+            let currentRect = currentWord.bounds(for: page)
+            if SelectionGeometry.isValid(currentRect) {
+                let leftPoint = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)
+                let rightPoint = CGPoint(x: currentRect.maxX - 0.6, y: currentRect.midY)
+                let (from, to) = SelectionGeometry.ordered(leftPoint, rightPoint)
+                if let sel = page.selection(from: from, to: to),
+                   SelectionGeometry.isSane(sel, maxPages: 1, maxChars: 6_000),
+                   let text = sel.string, !text.isEmpty {
+                    return sel
+                }
+            }
+        }
+        return nil
     }
 
     // MARK: - 冻结滚动 + 贴边自动滚动

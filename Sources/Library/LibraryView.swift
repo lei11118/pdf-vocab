@@ -11,6 +11,7 @@ struct LibraryView: View {
     @State private var errorMessage: String?
     @State private var pendingDelete: DocumentRecord?
     @State private var showDiagnostics = false
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
@@ -23,6 +24,13 @@ struct LibraryView: View {
             }
             .navigationTitle("跃文")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         showDiagnostics = true
@@ -55,6 +63,9 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $showDiagnostics) {
                 DiagnosticsView()
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
             }
             .overlay {
                 if let importingLabel {
