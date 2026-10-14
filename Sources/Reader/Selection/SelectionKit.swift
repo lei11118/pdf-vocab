@@ -1,10 +1,30 @@
 import UIKit
 import PDFKit
 
-// MARK: - 拖动柄(蓝点 + 小柄直达选区边缘;v0.6.7 用户要求)
+// MARK: - 拖柄几何常量(唯一出处;绘制 / 摆放 / 菜单避让都读这里)
 
-/// 选区拖柄:实心蓝圆点 + 指向选区的小柄——柄从圆点延伸、**直达蓝选区的边缘**
-/// (起点柄:圆点在上、柄朝下贴到首行上缘;终点柄:圆点在下方、柄朝上贴到末行下缘)。
+/// 拖柄几何(v0.6.10:对齐原生)。所有与拖柄相关的数字集中于此,避免"绘制一套、避让又一套"。
+enum HandleMetrics {
+    /// 圆点直径
+    static let dotDiameter: CGFloat = 14
+    /// 竖线宽度
+    static let lineWidth: CGFloat = 2.5
+    /// 竖线端头与圆点的交叠量(消除接缝,让圆点"长在"线圈上)
+    static let dotLineOverlap: CGFloat = 2
+    /// 圆点伸出选区(行矩形)外的距离 = 直径 − 交叠(菜单避让据此计算包络)
+    static var dotProtrusion: CGFloat { dotDiameter - dotLineOverlap }
+    /// 拖柄视图宽度(= 圆点直径,竖线居中)
+    static var handleWidth: CGFloat { dotDiameter }
+    /// 最小拖动热区(短边不小于它,以"圆点 + 竖线"整体为中心)
+    static let hitMinimum: CGFloat = 44
+}
+
+// MARK: - 拖动柄(原生同款:竖线 = 行高,圆点紧贴竖线外端;v0.6.10)
+
+/// 选区拖柄:**一根与首/末行选区等高的竖线**沿选区边缘,圆点紧贴竖线外端——
+/// 起点柄:竖线沿首行**左**边缘,圆点在竖线**上端**(位于选区外、上方);
+/// 终点柄:竖线沿末行**右**边缘,圆点在竖线**下端**(位于选区外、下方)。
+/// 视图尺寸由外部按行高设置:高 = 行高 + dotProtrusion,宽 = handleWidth;两端共用同一几何函数。
 final class SelectionHandleView: UIView {
     let isStart: Bool
     private let dot = UIView()
@@ -12,13 +32,13 @@ final class SelectionHandleView: UIView {
 
     init(isStart: Bool) {
         self.isStart = isStart
-        super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
+        super.init(frame: CGRect(x: 0, y: 0, width: HandleMetrics.handleWidth, height: 44))
         backgroundColor = .clear
         stem.backgroundColor = .systemBlue
-        stem.layer.cornerRadius = 1.25
+        stem.layer.cornerRadius = HandleMetrics.lineWidth / 2
         addSubview(stem)
         dot.backgroundColor = .systemBlue
-        dot.layer.cornerRadius = 7
+        dot.layer.cornerRadius = HandleMetrics.dotDiameter / 2
         dot.layer.shadowColor = UIColor.black.cgColor
         dot.layer.shadowOpacity = 0.15
         dot.layer.shadowRadius = 2
@@ -30,25 +50,38 @@ final class SelectionHandleView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let d: CGFloat = 14
-        if isStart {
-            // 起点柄:圆点在视图上部;柄从圆点底部延伸至视图**底边**
-            // (视图按中心摆放于 选区上缘-22,故底边 = 蓝选区上缘)
-            dot.frame = CGRect(x: (bounds.width - d) / 2, y: 9, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: dot.frame.maxY - 2, width: 2.5,
-                                height: bounds.height - dot.frame.maxY + 2)
-        } else {
-            // 终点柄:圆点在视图下部;柄从视图**顶边**延伸至圆点顶部(顶边 = 蓝选区下缘)
-            dot.frame = CGRect(x: (bounds.width - d) / 2, y: bounds.height - 9 - d, width: d, height: d)
-            stem.frame = CGRect(x: bounds.width / 2 - 1.25, y: 0, width: 2.5,
-                                height: dot.frame.minY + 2)
-        }
+    /// 竖线(局部坐标;两端共用同一函数,左右对称)——起点在局部 y=dotProtrusion 处(圆点下方),终点在 y=0 处(圆点上方)。
+    private func lineFrame(lineHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: (bounds.width - HandleMetrics.lineWidth) / 2,
+            y: isStart ? HandleMetrics.dotProtrusion : 0,
+            width: HandleMetrics.lineWidth,
+            height: lineHeight
+        )
     }
 
+    /// 圆点(局部坐标;紧贴竖线外端,与竖线交叠 dotLineOverlap 消除接缝)。
+    private func dotFrame(lineHeight: CGFloat) -> CGRect {
+        let d = HandleMetrics.dotDiameter
+        let y = isStart
+            ? 0                                                       // 上端:圆点在竖线之上(选区外)
+            : lineHeight + HandleMetrics.dotProtrusion - d            // 下端:圆点在竖线之下(选区外)
+        return CGRect(x: (bounds.width - d) / 2, y: y, width: d, height: d)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // 视图高 = 行高 + 圆点伸出距离;竖线 = 行高
+        let lineHeight = max(bounds.height - HandleMetrics.dotProtrusion, 1)
+        stem.frame = lineFrame(lineHeight: lineHeight)
+        dot.frame = dotFrame(lineHeight: lineHeight)
+    }
+
+    /// 拖动热区 ≥ hitMinimum × hitMinimum,以"圆点 + 竖线"整体(即视图 bounds)为中心。
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: -14, dy: -14).contains(point)
+        let dx = max(0, (HandleMetrics.hitMinimum - bounds.width) / 2)
+        let dy = max(0, (HandleMetrics.hitMinimum - bounds.height) / 2)
+        return bounds.insetBy(dx: -dx, dy: -dy).contains(point)
     }
 }
 

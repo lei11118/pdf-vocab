@@ -96,6 +96,13 @@ final class ReaderCoordinator: NSObject {
 
     private static let maxHighlightLines = 150
 
+    // MARK: - 编辑菜单避让(v0.6.10)
+
+    /// 菜单与拖柄圆点之间的最小间距(包络扩边与锚点偏移共用)
+    private let menuHandleGap: CGFloat = 8
+    /// 编辑菜单高度估计(用于"上方放得下"判断;系统菜单竖排高度 ≈ 56–64pt)
+    private let menuHeightEstimate: CGFloat = 64
+
     init(
         onPageChanged: @escaping (Int) -> Void,
         onSelectionInfo: @escaping (SelectionInfo?) -> Void
@@ -297,7 +304,7 @@ final class ReaderCoordinator: NSObject {
         }
         menu.install(on: view)
         menu.targetRectProvider = { [weak self] _ in
-            self?.menuTargetRect()
+            self?.menuEnvelopeRect()
         }
 
         suppressNativeSelection(in: view)
@@ -400,7 +407,7 @@ final class ReaderCoordinator: NSObject {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, let d = self.drag, d.kind == .word, !d.didMove,
                       !self.selectionText.isEmpty, !self.menu.isPresented else { return }
-                self.menu.present(at: self.menuSourcePoint())
+                self.presentMenu()
                 DiagLog.log("menu presented (hold)")
             }
             holdMenuWork = work
@@ -442,7 +449,7 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("press.end(\(kind)) moved=\(wasDrag?.didMove ?? false) ended=\(isEnded)")
             refreshHandles()
             if isEnded, wasDrag != nil, !selectionText.isEmpty, !menu.isPresented {
-                menu.present(at: menuSourcePoint())
+                presentMenu()
             }
 
         default:
@@ -504,7 +511,7 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("handle.drag end")
             refreshHandles()
             if gesture.state == .ended, !selectionText.isEmpty, !menu.isPresented {
-                menu.present(at: menuSourcePoint())
+                presentMenu()
             }
 
         default:
@@ -534,7 +541,8 @@ final class ReaderCoordinator: NSObject {
             let onSelection = rects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
             if onSelection {
                 // 点选区:只切换菜单,**永不关闭选区**
-                menu.toggle(at: menuSourcePoint())
+                let anchor = menuAnchor()
+                menu.toggle(at: anchor.point, arrowDirection: anchor.arrow)
                 DiagLog.log(menu.isPresented ? "tap: show menu (selection kept)" : "tap: dismiss menu (selection kept)")
                 return
             }
@@ -556,7 +564,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
         applySelection(word, src: "doubleTap")
         refreshHandles()
-        menu.present(at: menuSourcePoint())
+        presentMenu()
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
@@ -570,7 +578,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("tripleTap: line=「\(SelectionGeometry.logSnippet(line.string ?? ""))」")
         applySelection(line, src: "tripleTap")
         refreshHandles()
-        menu.present(at: menuSourcePoint())
+        presentMenu()
     }
 
     // MARK: - 选区应用 / 高亮
@@ -693,18 +701,26 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.6.9:蓝点+小柄——柄端**紧贴蓝选区边缘并压入约 2pt**(摆点 ±21,
-        // 按实时换算的选区边缘自适应:任何缩放/行高下都严丝合缝、无缝隙)
-        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
-        let endView = pdfView.convert(CGPoint(x: lastLine.maxX, y: lastLine.minY), from: page)
-        place(startHandle, at: CGPoint(x: startView.x, y: startView.y - 21))
-        place(endHandle, at: CGPoint(x: endView.x, y: endView.y + 21))
+        // v0.6.10(对齐原生):竖线 = 该行选区高度、沿选区左/右边缘;圆点紧贴竖线外端。
+        // 几何全部取自 HandleMetrics——编辑菜单避让(menuEnvelopeRect)读的是同一组常量。
+        let firstView = pdfView.convert(firstLine, from: page)
+        let lastView = pdfView.convert(lastLine, from: page)
+        let width = HandleMetrics.handleWidth
+        let startHeight = firstView.height + HandleMetrics.dotProtrusion
+        let endHeight = lastView.height + HandleMetrics.dotProtrusion
+        place(startHandle,
+              center: CGPoint(x: firstView.minX, y: firstView.minY - HandleMetrics.dotProtrusion + startHeight / 2),
+              size: CGSize(width: width, height: startHeight))
+        place(endHandle,
+              center: CGPoint(x: lastView.maxX, y: lastView.minY + endHeight / 2),
+              size: CGSize(width: width, height: endHeight))
     }
 
-    private func place(_ handle: SelectionHandleView?, at center: CGPoint) {
+    private func place(_ handle: SelectionHandleView?, center: CGPoint, size: CGSize) {
         guard let handle else { return }
+        handle.frame = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                              width: size.width, height: size.height)
         handle.isHidden = false
-        handle.center = center
     }
 
     private func hideHandles() {
@@ -712,22 +728,17 @@ final class ReaderCoordinator: NSObject {
         endHandle?.isHidden = true
     }
 
-    /// 编辑菜单锚点:菜单**下边**对准第一个小柄(起点圆点)顶部(v0.6.9 起:
-    /// 圆点中心 = startView.y - 27,直径 14 → 顶部 = startView.y - 34)。
-    private func menuSourcePoint() -> CGPoint {
-        guard let pdfView, let (page, lineRects) = orderedSelectionRects(), let firstLine = lineRects.first else {
-            return lastTouchViewPoint
-        }
-        let startView = pdfView.convert(CGPoint(x: firstLine.minX, y: firstLine.maxY), from: page)
-        let bounds = pdfView.bounds
-        let x = min(max(startView.x, bounds.minX + 44), bounds.maxX - 44)
-        let y = min(max(startView.y - 34, bounds.minY + 44), bounds.maxY - 16)
-        return CGPoint(x: x, y: y)
+    // MARK: - 编辑菜单定位(v0.6.10:拖柄包络 + 方向决策)
+
+    /// 菜单锚点与方向(方向供 preferredArrowDirection 提示;nil = 系统自动)。
+    private struct MenuAnchor {
+        var point: CGPoint
+        var arrow: UIEditMenuArrowDirection?
     }
 
-    /// 菜单定位矩形(视图坐标,v0.6.9):整个选区 + 向上扩 36pt(含起点圆点与柄的新位置)。
-    /// 系统据此把编辑栏放在矩形**上方**(底部贴近起点圆点顶部),不再像裸锚点那样盖住文字。
-    private func menuTargetRect() -> CGRect? {
+    /// 拖柄包络矩形(视图坐标):选区并集,上下各扩「圆点伸出距离 + menuHandleGap」——
+    /// 系统据此摆放编辑栏,无论菜单出现在选区**上方还是下方**,都与两端圆点保持间距、绝不遮挡。
+    private func menuEnvelopeRect() -> CGRect? {
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(), !lineRects.isEmpty else {
             return nil
         }
@@ -736,10 +747,83 @@ final class ReaderCoordinator: NSObject {
             union = union.union(pdfView.convert(rect, from: page))
         }
         guard !union.isNull else { return nil }
+        let clearance = HandleMetrics.dotProtrusion + menuHandleGap
         var result = union.insetBy(dx: -4, dy: 0)
-        result.origin.y -= 36
-        result.size.height += 36
+        result.origin.y -= clearance
+        result.size.height += clearance * 2
         return result
+    }
+
+    /// 菜单锚点 + 方向决策(v0.6.10):
+    /// ① 上方放得下(起点圆点上沿 − menuHeightEstimate − menuHandleGap ≥ 可见区顶部,含 safeArea)
+    ///    → 锚在起点圆点上方(保留 v0.6.1"默认出现在起点圆点上方"的行为,箭头朝下);
+    /// ② 否则下方放得下 → 锚在终点圆点下沿 + menuHandleGap(箭头朝上);
+    /// ③ 上下都放不下(选区撑满屏幕)→ 取选区可见部分中部;
+    /// ④ 起点/终点柄有一个滚出屏幕时,按可见的那一端取锚点。水平居中于锚点、屏内钳制。
+    private func menuAnchor() -> MenuAnchor {
+        guard let pdfView, let (page, lineRects) = orderedSelectionRects(),
+              let firstLine = lineRects.first, let lastLine = lineRects.last else {
+            return MenuAnchor(point: lastTouchViewPoint, arrow: nil)
+        }
+        var union: CGRect = .null
+        for rect in lineRects {
+            union = union.union(pdfView.convert(rect, from: page))
+        }
+        let firstView = pdfView.convert(firstLine, from: page)
+        let lastView = pdfView.convert(lastLine, from: page)
+        let bounds = pdfView.bounds
+        let safeTop = bounds.minY + max(pdfView.safeAreaInsets.top, 0)
+        let safeBottom = bounds.maxY - max(pdfView.safeAreaInsets.bottom, 0)
+        let dotTop = union.minY - HandleMetrics.dotProtrusion      // 起点圆点上沿(视图坐标)
+        let dotBottom = union.maxY + HandleMetrics.dotProtrusion   // 终点圆点下沿(视图坐标)
+        let startVisible = dotTop >= safeTop + 4
+        let endVisible = dotBottom <= safeBottom - 4
+        let needed = menuHeightEstimate + menuHandleGap
+
+        var direction: String
+        var arrow: UIEditMenuArrowDirection?
+        var anchorX: CGFloat
+        var anchorY: CGFloat
+        if startVisible, dotTop - safeTop >= needed {
+            anchorY = dotTop - menuHandleGap
+            anchorX = firstView.minX
+            direction = "上"
+            arrow = .down
+        } else if endVisible, safeBottom - dotBottom >= needed {
+            anchorY = dotBottom + menuHandleGap
+            anchorX = lastView.maxX
+            direction = "下"
+            arrow = .up
+        } else if startVisible {
+            anchorY = max(dotTop - menuHandleGap, safeTop + 8)
+            anchorX = firstView.minX
+            direction = "上(挤)"
+            arrow = .down
+        } else if endVisible {
+            anchorY = min(dotBottom + menuHandleGap, safeBottom - 8)
+            anchorX = lastView.maxX
+            direction = "下(挤)"
+            arrow = .up
+        } else {
+            // 上下都放不下:选区可见部分中部(仍避开可见的拖柄——包络矩形继续兜底)
+            let viewport = CGRect(x: bounds.minX, y: safeTop, width: bounds.width, height: safeBottom - safeTop)
+            let visible = union.intersection(viewport)
+            anchorY = visible.isNull ? viewport.midY : visible.midY
+            anchorX = visible.isNull ? bounds.midX : visible.midX
+            direction = "中"
+            arrow = nil
+        }
+        let x = min(max(anchorX, bounds.minX + 44), bounds.maxX - 44)
+        let y = min(max(anchorY, safeTop + 8), safeBottom - 8)
+        let envString = menuEnvelopeRect().map { NSStringFromCGRect($0) } ?? "-"
+        DiagLog.log("menu: sel=\(NSStringFromCGRect(union)) env=\(envString) dir=\(direction) anchor=(\(Int(x)),\(Int(y)))")
+        return MenuAnchor(point: CGPoint(x: x, y: y), arrow: arrow)
+    }
+
+    /// 弹出菜单(锚点 + 方向一次算好)。
+    private func presentMenu() {
+        let anchor = menuAnchor()
+        menu.present(at: anchor.point, arrowDirection: anchor.arrow)
     }
 
     // MARK: - 滚动观察(拖柄跟随 + 阅读位置节流回调)
@@ -756,6 +840,7 @@ final class ReaderCoordinator: NSObject {
         scrollObservers.append(sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             guard let self else { return }
             self.refreshHandles()
+            self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
             if sv.isDragging || sv.isDecelerating {
                 self.hasUserInteracted = true
             }
@@ -763,10 +848,12 @@ final class ReaderCoordinator: NSObject {
         })
         scrollObservers.append(sv.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
+            self?.menu.updatePosition(animated: false)  // v0.6.10:缩放后菜单随选区同步
             self?.fireReadingTick()
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
+            self?.menu.updatePosition(animated: false)  // v0.6.10:旋转/布局变化后菜单随选区同步
         })
     }
 
