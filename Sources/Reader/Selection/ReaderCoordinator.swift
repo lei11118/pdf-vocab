@@ -815,8 +815,8 @@ final class ReaderCoordinator: NSObject {
         }
         let x = min(max(anchorX, bounds.minX + 44), bounds.maxX - 44)
         let y = min(max(anchorY, safeTop + 8), safeBottom - 8)
-        let envString = menuEnvelopeRect().map { NSStringFromCGRect($0) } ?? "-"
-        DiagLog.log("menu: sel=\(NSStringFromCGRect(union)) env=\(envString) dir=\(direction) anchor=(\(Int(x)),\(Int(y)))")
+        let envString = menuEnvelopeRect().map { NSCoder.string(for: $0) } ?? "-"
+        DiagLog.log("menu: sel=\(NSCoder.string(for: union)) env=\(envString) dir=\(direction) anchor=(\(Int(x)),\(Int(y)))")
         return MenuAnchor(point: CGPoint(x: x, y: y), arrow: arrow)
     }
 
