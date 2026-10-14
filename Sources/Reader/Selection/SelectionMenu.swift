@@ -23,20 +23,33 @@ final class SelectionMenuController: NSObject {
         self.interaction = interaction
     }
 
-    func present(at point: CGPoint) {
+    /// 弹出菜单。arrowDirection 为方向提示(v0.6.10):菜单在锚点**上方**时箭头朝下(.down)、
+    /// 下方时朝上(.up);nil = 不设置(等价系统默认 .automatic)。
+    func present(at point: CGPoint, arrowDirection: UIEditMenuArrowDirection? = nil) {
         guard let interaction else { return }
-        interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: point)
+        if let arrowDirection {
+            configuration.preferredArrowDirection = arrowDirection
+        }
+        interaction.presentEditMenu(with: configuration)
     }
 
     /// 点选区:已弹出则收起、未弹出则呼出(选区不动)。
-    func toggle(at point: CGPoint) {
-        if isPresented { dismiss() } else { present(at: point) }
+    func toggle(at point: CGPoint, arrowDirection: UIEditMenuArrowDirection? = nil) {
+        if isPresented { dismiss() } else { present(at: point, arrowDirection: arrowDirection) }
     }
 
     func dismiss() {
         guard isPresented else { return }
         interaction?.dismissMenu()
         isPresented = false
+    }
+
+    /// 菜单已显示时,内容/布局变化(滚动、缩放、旋转)后同步位置——
+    /// 系统会重新调用 `editMenuInteraction(_:targetRectFor:)`,把菜单贴回新的包络矩形(v0.6.10)。
+    func updatePosition(animated: Bool) {
+        guard isPresented else { return }
+        interaction?.updateVisibleMenuPosition(animated: animated)
     }
 
     // MARK: - 菜单动作实现
