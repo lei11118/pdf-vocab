@@ -396,6 +396,13 @@ final class ReaderCoordinator: NSObject {
                 return
             }
 
+            // v0.8.1:触点落在拖柄热区内(≥44×44,以"圆点+竖线"整体为中心)→ 让位给拖柄拖动;
+            // 避免与"按住选区本体拖动"互相打架(两种拖动各管各的)。
+            if handleHitTest(viewPoint) {
+                DiagLog.log("press.began(\(kind)): on handle → yield")
+                return
+            }
+
             // ① 长按落在已有选区内 → 选区本体拖动微调(以远端为锚,与原生"按住选区拖动"一致)
             if let (page, lineRects) = orderedSelectionRects(),
                page === hit.page,
@@ -920,18 +927,21 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.8.0:拖柄**固定尺寸**(高 32pt = 圆点 14 + 竖线 20)——与页面缩放无关,
-        // 放大缩小柄本身不变,只跟随选区位置。
+        // v0.8.1(用户指定):竖线 = 首/末行**选区高**(随缩放自适应,多行选区各取首/末行);
+        // 圆点定尺寸、紧贴竖线外端、位于选区外;两端共用同一几何,线宽/圆点/交叠全取自 HandleMetrics。
         let firstView = pdfView.convert(firstLine, from: page)
         let lastView = pdfView.convert(lastLine, from: page)
         let w = HandleMetrics.handleWidth
-        let h = HandleMetrics.handleHeight
+        let startH = HandleMetrics.handleHeight(forLineHeight: firstView.height)
+        let endH = HandleMetrics.handleHeight(forLineHeight: lastView.height)
+        // 起点柄:线沿首行左边缘[顶..底],圆点在上端、选区外(框顶 = minY − dotProtrusion)
         place(startHandle,
-              center: CGPoint(x: firstView.minX, y: firstView.minY - HandleMetrics.dotProtrusion + h / 2),
-              size: CGSize(width: w, height: h))
+              center: CGPoint(x: firstView.minX, y: firstView.minY - HandleMetrics.dotProtrusion + startH / 2),
+              size: CGSize(width: w, height: startH))
+        // 终点柄:线沿末行右边缘[顶..底],圆点在下端、选区外(框底 = maxY + dotProtrusion)
         place(endHandle,
-              center: CGPoint(x: lastView.maxX, y: lastView.maxY - HandleMetrics.lineLength + h / 2),
-              size: CGSize(width: w, height: h))
+              center: CGPoint(x: lastView.maxX, y: lastView.minY + endH / 2),
+              size: CGSize(width: w, height: endH))
     }
 
     private func place(_ handle: SelectionHandleView?, center: CGPoint, size: CGSize) {
@@ -939,6 +949,18 @@ final class ReaderCoordinator: NSObject {
         handle.frame = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
                               width: size.width, height: size.height)
         handle.isHidden = false
+    }
+
+    /// 触点(pdfView 视图坐标)是否落在任一端拖柄的热区内(v0.8.1;
+    /// 热区由 SelectionHandleView.point(inside:) 扩到 ≥44×44、以"圆点+竖线"整体为中心)。
+    private func handleHitTest(_ viewPoint: CGPoint) -> Bool {
+        guard let pdfView else { return false }
+        for handle in [startHandle, endHandle] {
+            guard let handle, !handle.isHidden else { continue }
+            let p = handle.convert(viewPoint, from: pdfView)
+            if handle.point(inside: p, with: nil) { return true }
+        }
+        return false
     }
 
     private func hideHandles() {

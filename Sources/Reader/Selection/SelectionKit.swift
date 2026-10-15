@@ -9,15 +9,18 @@ enum HandleMetrics {
     static let dotDiameter: CGFloat = 14
     /// 竖线宽度(v0.6.11:2.5 → 4,加粗;小柄本身即选区边缘)
     static let lineWidth: CGFloat = 4
-    /// 竖线长度(v0.8.0:固定值,与页面缩放无关——放大缩小拖柄都不变大变小)
-    static let lineLength: CGFloat = 20
+    // 竖线长度(v0.8.1):不再固定——等于"该行选区高度",随页面缩放自适应;
+    // 多行选区取首行/末行各自的行高,见 ReaderCoordinator.refreshHandles。
     /// 竖线端头与圆点的交叠量(消除接缝,让圆点"长在"线圈上)
     static let dotLineOverlap: CGFloat = 2
     /// 圆点伸出选区(行矩形)外的距离 = 直径 − 交叠(菜单避让据此计算包络)
     static var dotProtrusion: CGFloat { dotDiameter - dotLineOverlap }
-    /// 拖柄视图宽/高(高 = 圆点 + 竖线,固定 32pt)
+    /// 拖柄视图宽(= 圆点直径;拖动热区另按 hitMinimum 扩到 ≥44×44)
     static var handleWidth: CGFloat { dotDiameter }
-    static var handleHeight: CGFloat { dotProtrusion + lineLength }
+    /// 拖柄视图高(v0.8.1:随行高自适应 = 该行选区高 + 圆点伸出距离;首/末行各自取行高)
+    static func handleHeight(forLineHeight lineHeight: CGFloat) -> CGFloat {
+        max(lineHeight, 1) + dotProtrusion
+    }
     /// 蓝选区相对行矩形的扩边(v0.8.0:整体加大——水平 ±1.5、垂直 ±2)
     static let selectionPadX: CGFloat = 1.5
     static let selectionPadY: CGFloat = 2
@@ -38,7 +41,9 @@ final class SelectionHandleView: UIView {
 
     init(isStart: Bool) {
         self.isStart = isStart
-        super.init(frame: CGRect(x: 0, y: 0, width: HandleMetrics.handleWidth, height: HandleMetrics.handleHeight))
+        // 占位尺寸;实际尺寸由 refreshHandles 按行高自适应设置(v0.8.1)
+        super.init(frame: CGRect(x: 0, y: 0, width: HandleMetrics.handleWidth,
+                                 height: HandleMetrics.handleHeight(forLineHeight: 20)))
         backgroundColor = .clear
         stem.backgroundColor = .systemBlue
         stem.layer.cornerRadius = HandleMetrics.lineWidth / 2
