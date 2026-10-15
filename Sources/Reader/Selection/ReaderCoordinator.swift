@@ -337,9 +337,10 @@ final class ReaderCoordinator: NSObject {
         view.pageOverlayViewProvider = provider
 
         // Pencil Pro 挤压(iPadOS 17.5+):默认切换标记/选词模式(动作映射设置项留 M4-B 后续)
+        // UIPencilInteraction 是 UIInteraction(不是手势识别器)→ 用 addInteraction 安装
         let squeeze = UIPencilInteraction()
         squeeze.delegate = self
-        view.addGestureRecognizer(squeeze)
+        view.addInteraction(squeeze)
         squeezeRef = squeeze
 
         // 编辑菜单(系统组件)

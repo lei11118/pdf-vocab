@@ -68,7 +68,7 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
 final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private let pageIndex: Int
     private let docSha: String
-    private weak var inkStore: PencilInkStore?
+    private let inkStore: PencilInkStore?
     let canvas = PKCanvasView()
     weak var toolPicker: PKToolPicker?
 
