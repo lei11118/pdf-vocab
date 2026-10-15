@@ -36,6 +36,38 @@ final class AppDatabase: @unchecked Sendable {
                 t.add(column: "zoomAuto", .boolean).notNull().defaults(to: true)
             }
         }
+        migrator.registerMigration("v3.vocab") { db in
+            // 生词本词条(键 = 归一化词元,went→go;surface = 最近选中的原形)
+            try db.create(table: "vocab_word") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("lemma", .text).notNull().unique()
+                t.column("surface", .text).notNull()
+                t.column("status", .text).notNull().defaults(to: "new")   // new / mastered
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            // 语境(同一词在不同位置/文档出现;重复位置不重复记)
+            try db.create(table: "vocab_occurrence") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("wordId", .integer).notNull().references("vocab_word", onDelete: .cascade)
+                t.column("docSha", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("context", .text).notNull().defaults(to: "")
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["wordId", "docSha", "page", "context"])
+            }
+            // 永久加亮(按 PDF 哈希关联;rects = 页坐标矩形 JSON 数组)
+            try db.create(table: "vocab_highlight") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("wordId", .integer).notNull().references("vocab_word", onDelete: .cascade)
+                t.column("docSha", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("rects", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(index: "idx_vocab_highlight_doc", on: "vocab_highlight", columns: ["docSha", "page"])
+            try db.create(index: "idx_vocab_occurrence_word", on: "vocab_occurrence", columns: ["wordId"])
+        }
         return migrator
     }
 }
