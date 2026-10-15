@@ -24,6 +24,16 @@ enum HandleMetrics {
     /// 蓝选区相对行矩形的扩边(v0.8.0:整体加大——水平 ±1.5、垂直 ±2)
     static let selectionPadX: CGFloat = 1.5
     static let selectionPadY: CGFloat = 2
+    /// v0.8.3:行矩形 → **显示矩形**(±扩边)——全仓库唯一的扩边口径。
+    /// 高亮注解 bounds、拖柄摆放(竖线中线骑跨高亮边缘)、生词本存储 rects 全部以此为源;
+    /// 要改扩边,只改上面两个常量,调用点禁止再写魔法数字。
+    static func displayRect(_ lineRect: CGRect) -> CGRect {
+        lineRect.insetBy(dx: -selectionPadX, dy: -selectionPadY)
+    }
+    /// v0.8.3:显示矩形 → 行矩形(逆运算)——需要贴合**原始文字边缘**的场合(如拖柄拖动时的对侧锚点)
+    static func lineRect(fromDisplay r: CGRect) -> CGRect {
+        r.insetBy(dx: selectionPadX, dy: selectionPadY)
+    }
     /// 最小拖动热区(短边不小于它,以"圆点 + 竖线"整体为中心)
     static let hitMinimum: CGFloat = 44
 }

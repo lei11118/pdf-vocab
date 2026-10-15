@@ -98,6 +98,12 @@
 - **语境 = 整句原句**:`SentenceExtractor`(纯点坐标 API `selectionForLine(at:)`,规避 iOS 18 字符索引回归)——以选区首/末行为锚,向下补齐选区覆盖再扩到句末标点、向上并入未收句的行(遇段落大间隙即断段),行末连字符去连字拼接;失败(无文本层)回退选中文本;`collectWord` 与"自动追加语境"两条写入路径统一走 `sentenceContextOrSelection`;
 - 生词本:**点「N 处语境」**查看该词全部原句(新→旧,带出处),每条可**一键跳转**(橙色临时高亮);**多选批量移动分组 / 批量删除**(编辑模式 + 底部操作条;行内按钮在编辑模式下自动让位)。
 
+### v0.8.3(拖柄/高亮几何单一事实源)
+
+- 根因:高亮渲染用扩边矩形(`insetBy −padX/−padY`),而 `rects` 写回与拖柄摆放用未扩边矩形——两份口径,竖线中线落在原始边缘上,与高亮边缘恒差 selectionPadX(页面pt,随缩放放大→真机放大后≈3–4.5 屏幕pt);
+- 修复:`HandleMetrics.displayRect(_:)` 成为**唯一扩边口径**——updateHighlight 注解 bounds 与 `rects` 写回同源,refreshHandles 竖线中线 = 显示矩形边缘(Δ=0 构造性成立);生词本存储 rects 同为显示矩形,渲染/跳转直接使用(不再二次扩边);拖柄拖动对侧锚点经 `lineRect(fromDisplay:)` 逆运算保持"贴原始文字边缘"行为;
+- 常驻自检:每次选区变化后诊断日志记一行 `handles: Δstart/Δend pt`(柄中线 vs 高亮边缘),真机核对 ≤0.5pt。
+
 ## 1. 为什么不用 PDFKit 内置选择机制
 
 - iOS 18 起 PDFKit 已知回归:
