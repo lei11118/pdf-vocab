@@ -6,16 +6,24 @@ enum ReaderCardContent: Equatable {
     case sentence(String, Int)
 }
 
-/// 词卡 ↔ 生词本桥(v0.7.0):闭包注入,词卡不直接依赖数据库。
+/// 词卡 ↔ 生词本桥(v0.7.0;v0.8.0 扩展颜色/分组):闭包注入,词卡不直接依赖数据库。
 struct CardVocabBridge {
-    /// 查询状态(键 = 归一化词元)
-    var query: (String) -> (status: VocabStore.Status?, occurrenceCount: Int)
+    /// 查询状态(键 = 归一化词元;颜色为 nil 表示无高亮)
+    var query: (String) -> (status: VocabStore.Status?, occurrenceCount: Int, colorName: String?)
     /// 加入生词本 / 重新收录(键 + 原形)
     var collect: (String, String) -> VocabStore.Status?
     /// 标记已掌握(取消加亮)
     var master: (String) -> VocabStore.Status?
     /// 已掌握 → 重新收录
     var reactivate: (String, String) -> VocabStore.Status?
+    /// 设置高亮颜色(键 + 颜色名)
+    var setColor: (String, String) -> Void
+    /// 取消高亮(保留词条与语境)
+    var removeHighlight: (String) -> Void
+    /// 分组(键 → 全部组 + 该词所在组)
+    var groupsInfo: (String) -> (all: [VocabStore.GroupSummary], member: Set<Int64>)
+    /// 切换分组归属(键 + 组 id + 是否加入)
+    var toggleGroup: (String, Int64, Bool) -> Void
 }
 
 /// 侧边词卡容器(单词卡 / 整句卡)
@@ -55,6 +63,9 @@ struct WordCardView: View {
     @State private var vocabKey = ""
     @State private var vocabStatus: VocabStore.Status?
     @State private var vocabCount = 0
+    @State private var vocabColor: String?
+    @State private var vocabGroups: [VocabStore.GroupSummary] = []
+    @State private var vocabMembers: Set<Int64> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -110,9 +121,10 @@ struct WordCardView: View {
         }
         vocabKey = key
         if let vocab {
-            let q = vocab.query(key)
-            vocabStatus = q.status
-            vocabCount = q.occurrenceCount
+            refreshVocabState(vocab)
+            let gi = vocab.groupsInfo(key)
+            vocabGroups = gi.all
+            vocabMembers = gi.member
         }
     }
 
@@ -128,7 +140,7 @@ struct WordCardView: View {
                     Button {
                         if let s = vocab.collect(vocabKey, term) {
                             vocabStatus = s
-                            vocabCount = vocab.query(vocabKey).occurrenceCount
+                            refreshVocabState(vocab)
                         }
                     } label: {
                         Label("加入生词本", systemImage: "plus.circle.fill")
@@ -143,6 +155,7 @@ struct WordCardView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
+                    groupMenu(vocab)
                     Button("已掌握") {
                         if let s = vocab.master(vocabKey) { vocabStatus = s }
                     }
@@ -158,14 +171,85 @@ struct WordCardView: View {
                     Button("重新收录") {
                         if let s = vocab.reactivate(vocabKey, term) {
                             vocabStatus = s
-                            vocabCount = vocab.query(vocabKey).occurrenceCount
+                            refreshVocabState(vocab)
                         }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
             }
+            if case .some(.new) = vocabStatus {
+                colorRow(vocab)
+            }
         }
+    }
+
+    /// 分组选择(v0.8.0;分组的新建/管理在生词本页)
+    @ViewBuilder
+    private func groupMenu(_ vocab: CardVocabBridge) -> some View {
+        Menu {
+            if vocabGroups.isEmpty {
+                Text("暂无分组(在生词本页新建)")
+            } else {
+                ForEach(vocabGroups) { g in
+                    Button {
+                        let member = !vocabMembers.contains(g.id)
+                        vocab.toggleGroup(vocabKey, g.id, member)
+                        if member {
+                            vocabMembers.insert(g.id)
+                        } else {
+                            vocabMembers.remove(g.id)
+                        }
+                    } label: {
+                        Label(g.name, systemImage: vocabMembers.contains(g.id) ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "folder")
+        }
+        .controlSize(.small)
+    }
+
+    /// 高亮颜色自选 + 取消高亮(v0.8.0)
+    @ViewBuilder
+    private func colorRow(_ vocab: CardVocabBridge) -> some View {
+        HStack(spacing: 10) {
+            Text("高亮")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ForEach(VocabStore.highlightColorNames, id: \.self) { name in
+                Button {
+                    vocab.setColor(vocabKey, name)
+                    vocabColor = name
+                } label: {
+                    Circle()
+                        .fill(Color(uiColor: VocabStore.highlightColor(named: name)))
+                        .frame(width: 22, height: 22)
+                        .overlay(
+                            Circle().strokeBorder(
+                                Color.primary.opacity(vocabColor == name ? 0.55 : 0.08),
+                                lineWidth: vocabColor == name ? 2 : 1
+                            )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+            Button("取消高亮") {
+                vocab.removeHighlight(vocabKey)
+                vocabColor = nil
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    private func refreshVocabState(_ vocab: CardVocabBridge) {
+        let q = vocab.query(vocabKey)
+        vocabStatus = q.status
+        vocabCount = q.occurrenceCount
+        vocabColor = q.colorName
     }
 
     @ViewBuilder
@@ -373,6 +457,7 @@ struct WrapLayout: Layout {
 /// 窗口缩到最小时显示的横向基本信息:单词、发音按钮、翻译(首行)。
 struct CompactCardView: View {
     let content: ReaderCardContent
+    let onClose: () -> Void
 
     @State private var translation: String?
 
@@ -423,6 +508,13 @@ struct CompactCardView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
         }
         .padding(.leading, 16)
         .padding(.trailing, 26)

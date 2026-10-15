@@ -57,9 +57,12 @@ struct FloatingCardWindow: View {
         .frame(width: size.width, height: size.height)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        // v0.8.0:整窗触摸判定 = 窗口形状——形状之外一律不拦截(交给下层 PDF),杜绝"摸到窗口外的空气也能拖动"
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
+                .allowsHitTesting(false)
         )
         .overlay {
             // v0.6.7:白色缩放手柄 = 窗口右下边缘的一段弧(半径随圆角连续变化,始终贴合)
@@ -118,7 +121,7 @@ struct FloatingCardWindow: View {
     // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
 
     private var compactBody: some View {
-        CompactCardView(content: content)
+        CompactCardView(content: content, onClose: onClose)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -179,7 +182,7 @@ struct FloatingCardWindow: View {
 
     private var resizeActive: Bool { resizeBase != nil }
 
-    private let gripSide: CGFloat = 32
+    private var gripSide: CGFloat { isCompact ? 22 : 32 }
 
     // MARK: - 迷你/展开切换(双击胶囊)
 

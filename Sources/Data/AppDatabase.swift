@@ -68,6 +68,24 @@ final class AppDatabase: @unchecked Sendable {
             try db.create(index: "idx_vocab_highlight_doc", on: "vocab_highlight", columns: ["docSha", "page"])
             try db.create(index: "idx_vocab_occurrence_word", on: "vocab_occurrence", columns: ["wordId"])
         }
+        migrator.registerMigration("v4.highlightColorAndGroups") { db in
+            // 高亮颜色(v0.8.0;默认蓝)
+            try db.alter(table: "vocab_highlight") { t in
+                t.add(column: "color", .text).notNull().defaults(to: "blue")
+            }
+            // 分组(v0.8.0,M3-B)
+            try db.create(table: "vocab_group") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull().unique()
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(table: "vocab_word_group") { t in
+                t.column("wordId", .integer).notNull().references("vocab_word", onDelete: .cascade)
+                t.column("groupId", .integer).notNull().references("vocab_group", onDelete: .cascade)
+                t.column("addedAt", .datetime).notNull()
+                t.primaryKey(["wordId", "groupId"])
+            }
+        }
         return migrator
     }
 }

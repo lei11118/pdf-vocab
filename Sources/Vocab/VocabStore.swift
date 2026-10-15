@@ -24,6 +24,11 @@ struct VocabStore: Sendable {
         let status: Status
         let occurrenceCount: Int
         let updatedAt: Date
+        // 出处(v0.8.0:最近一次语境所在文档/页;若该处有高亮,带出矩形供"一键抵达"临时高亮)
+        let sourceDocSha: String?
+        let sourceDocTitle: String?
+        let sourcePage: Int?
+        let sourceRectsJSON: String?
     }
 
     struct HighlightRow {
@@ -31,6 +36,13 @@ struct VocabStore: Sendable {
         let term: String        // 词条原形(surface)
         let page: Int
         let rects: [CGRect]
+        let color: String       // v0.8.0:高亮颜色名
+    }
+
+    struct GroupSummary: Identifiable {
+        let id: Int64
+        let name: String
+        let count: Int
     }
 
     // MARK: - 归一化与矩形编解码
@@ -94,7 +106,7 @@ struct VocabStore: Sendable {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT h.wordId AS wordId, h.page AS page, h.rects AS rects, w.surface AS term
+                    SELECT h.wordId AS wordId, h.page AS page, h.rects AS rects, h.color AS color, w.surface AS term
                     FROM vocab_highlight h
                     JOIN vocab_word w ON w.id = h.wordId
                     WHERE h.docSha = ? AND w.status != 'mastered'
@@ -106,25 +118,58 @@ struct VocabStore: Sendable {
                 let wordId: Int64 = row["wordId"]
                 let page: Int = row["page"]
                 let rectsJSON: String = row["rects"]
+                let color: String = row["color"]
                 let term: String = row["term"]
-                return HighlightRow(wordId: wordId, term: term, page: page, rects: Self.rectsFromJSON(rectsJSON))
+                return HighlightRow(wordId: wordId, term: term, page: page, rects: Self.rectsFromJSON(rectsJSON), color: color)
             }
         }) ?? []
     }
 
-    /// 生词本列表(按最近更新倒序,含语境数)。
-    func listWords() -> [WordSummary] {
-        (try? db.dbQueue.read { db -> [WordSummary] in
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT w.id AS id, w.lemma AS lemma, w.surface AS surface, w.status AS status,
-                           w.updatedAt AS updatedAt,
-                           (SELECT COUNT(*) FROM vocab_occurrence o WHERE o.wordId = w.id) AS cnt
-                    FROM vocab_word w
-                    ORDER BY w.updatedAt DESC
-                    """
-            )
+    /// 生词本列表(v0.8.0:支持按文档 / 分组 / 搜索筛选;带出处)。
+    func listWords(docSha: String? = nil, groupId: Int64? = nil, search: String? = nil) -> [WordSummary] {
+        var sql = """
+            SELECT w.id AS id, w.lemma AS lemma, w.surface AS surface, w.status AS status,
+                   w.updatedAt AS updatedAt,
+                   (SELECT COUNT(*) FROM vocab_occurrence o0 WHERE o0.wordId = w.id
+                    \(docSha != nil ? "AND o0.docSha = ?" : "")) AS cnt,
+                   o.docSha AS srcDoc, o.page AS srcPage, d.title AS srcTitle,
+                   (SELECT h.rects FROM vocab_highlight h
+                    WHERE h.wordId = w.id AND h.docSha = o.docSha AND h.page = o.page
+                    ORDER BY h.createdAt DESC LIMIT 1) AS srcRects
+            FROM vocab_word w
+            LEFT JOIN vocab_occurrence o ON o.id = (
+                SELECT id FROM vocab_occurrence WHERE wordId = w.id
+                \(docSha != nil ? "AND docSha = ?" : "")
+                ORDER BY createdAt DESC LIMIT 1)
+            LEFT JOIN document d ON d.sha256 = o.docSha
+            WHERE 1 = 1
+            """
+        if docSha != nil {
+            sql += "\n    AND EXISTS (SELECT 1 FROM vocab_occurrence ox WHERE ox.wordId = w.id AND ox.docSha = ?)"
+        }
+        if groupId != nil {
+            sql += "\n    AND EXISTS (SELECT 1 FROM vocab_word_group wx WHERE wx.wordId = w.id AND wx.groupId = ?)"
+        }
+        if search != nil {
+            sql += "\n    AND (w.surface LIKE ? OR w.lemma LIKE ?)"
+        }
+        sql += "\n    ORDER BY w.updatedAt DESC"
+
+        var args: [DatabaseValueConvertible?] = []
+        if let docSha {
+            args.append(docSha)   // cnt 子查询
+            args.append(docSha)   // 最新语境子查询
+            args.append(docSha)   // WHERE EXISTS
+        }
+        if let groupId { args.append(groupId) }
+        if let search {
+            let like = "%\(search)%"
+            args.append(like)
+            args.append(like)
+        }
+
+        return (try? db.dbQueue.read { db -> [WordSummary] in
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
             return rows.map { row in
                 let id: Int64 = row["id"]
                 let lemma: String = row["lemma"]
@@ -132,13 +177,21 @@ struct VocabStore: Sendable {
                 let statusRaw: String = row["status"]
                 let cnt: Int = row["cnt"]
                 let updatedAt: Date = row["updatedAt"]
+                let srcDoc: String? = row["srcDoc"]
+                let srcPage: Int? = row["srcPage"]
+                let srcTitle: String? = row["srcTitle"]
+                let srcRects: String? = row["srcRects"]
                 return WordSummary(
                     id: id,
                     lemma: lemma,
                     surface: surface,
                     status: Status(rawValue: statusRaw) ?? .new,
                     occurrenceCount: cnt,
-                    updatedAt: updatedAt
+                    updatedAt: updatedAt,
+                    sourceDocSha: srcDoc,
+                    sourceDocTitle: srcTitle,
+                    sourcePage: srcPage,
+                    sourceRectsJSON: srcRects
                 )
             }
         }) ?? []
@@ -210,4 +263,139 @@ struct VocabStore: Sendable {
             try db.execute(sql: "DELETE FROM vocab_highlight WHERE wordId = ?", arguments: [wordId])
         }
     }
+
+    // MARK: - 颜色 / 分组 / 删除(v0.8.0)
+
+    static let highlightColorNames = ["blue", "orange", "green", "pink"]
+
+    static func highlightColor(named name: String) -> UIColor {
+        switch name {
+        case "orange": return .systemOrange
+        case "green": return .systemGreen
+        case "pink": return .systemPink
+        default: return .systemBlue
+        }
+    }
+
+    /// 当前高亮颜色(取该词最新一条高亮;无高亮返回 nil)。
+    func highlightColorName(forLemma lemma: String) -> String? {
+        (try? db.dbQueue.read { db in
+            try String.fetchOne(
+                db,
+                sql: """
+                    SELECT h.color FROM vocab_highlight h
+                    WHERE h.wordId = (SELECT id FROM vocab_word WHERE lemma = ?)
+                    ORDER BY h.createdAt DESC LIMIT 1
+                    """,
+                arguments: [lemma]
+            )
+        }) ?? nil
+    }
+
+    func setHighlightColor(forLemma lemma: String, colorName: String) {
+        try? db.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE vocab_highlight SET color = ? WHERE wordId = (SELECT id FROM vocab_word WHERE lemma = ?)",
+                arguments: [colorName, lemma]
+            )
+        }
+    }
+
+    /// 删除某个生词(连同语境/高亮/分组归属一起清掉)。
+    func deleteWord(id: Int64) {
+        try? db.dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM vocab_highlight WHERE wordId = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vocab_occurrence WHERE wordId = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vocab_word_group WHERE wordId = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vocab_word WHERE id = ?", arguments: [id])
+        }
+    }
+
+    // MARK: - 分组(v0.8.0,M3-B)
+
+    func groups() -> [GroupSummary] {
+        (try? db.dbQueue.read { db -> [GroupSummary] in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT g.id AS id, g.name AS name,
+                           (SELECT COUNT(*) FROM vocab_word_group wg WHERE wg.groupId = g.id) AS cnt
+                    FROM vocab_group g
+                    ORDER BY g.name COLLATE NOCASE
+                    """
+            )
+            return rows.map { row in
+                let id: Int64 = row["id"]
+                let name: String = row["name"]
+                let cnt: Int = row["cnt"]
+                return GroupSummary(id: id, name: name, count: cnt)
+            }
+        }) ?? []
+    }
+
+    /// 新建分组(同名已存在时直接返回其 id)。
+    @discardableResult
+    func createGroup(name: String) -> Int64? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return try? db.dbQueue.write { db in
+            if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM vocab_group WHERE name = ?", arguments: [trimmed]) {
+                return existing
+            }
+            try db.execute(sql: "INSERT INTO vocab_group (name, createdAt) VALUES (?, ?)", arguments: [trimmed, Date()])
+            return db.lastInsertedRowID
+        }
+    }
+
+    func renameGroup(id: Int64, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? db.dbQueue.write { db in
+            try db.execute(sql: "UPDATE vocab_group SET name = ? WHERE id = ?", arguments: [trimmed, id])
+        }
+    }
+
+    func deleteGroup(id: Int64) {
+        try? db.dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM vocab_word_group WHERE groupId = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vocab_group WHERE id = ?", arguments: [id])
+        }
+    }
+
+    func setMembership(wordId: Int64, groupId: Int64, member: Bool) {
+        try? db.dbQueue.write { db in
+            if member {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO vocab_word_group (wordId, groupId, addedAt) VALUES (?, ?, ?)",
+                    arguments: [wordId, groupId, Date()]
+                )
+            } else {
+                try db.execute(
+                    sql: "DELETE FROM vocab_word_group WHERE wordId = ? AND groupId = ?",
+                    arguments: [wordId, groupId]
+                )
+            }
+        }
+    }
+
+    func groupIds(forLemma lemma: String) -> Set<Int64> {
+        let ids = (try? db.dbQueue.read { db -> [Int64] in
+            try Int64.fetchAll(
+                db,
+                sql: "SELECT groupId FROM vocab_word_group WHERE wordId = (SELECT id FROM vocab_word WHERE lemma = ?)",
+                arguments: [lemma]
+            )
+        }) ?? []
+        return Set(ids)
+    }
+}
+
+/// 生词出处跳转目标(v0.8.0):生词本"一键抵达"的载荷。
+struct VocabJumpTarget: Hashable {
+    var docSha: String
+    var docTitle: String
+    var page: Int
+    var term: String
+    /// 该处高亮的矩形 JSON(可 nil:只跳页不画临时高亮)
+    var rectsJSON: String?
 }

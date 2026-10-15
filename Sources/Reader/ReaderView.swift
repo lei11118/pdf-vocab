@@ -19,13 +19,18 @@ struct ReaderView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
     @State private var showVocab = false
+    @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @Environment(\.scenePhase) private var scenePhase
+    /// 生词本"一键抵达"目标(v0.8.0;来自主页生词本=预览模式,会话内不记忆阅读位置)
+    let jumpTarget: VocabJumpTarget?
 
-    init(doc: DocumentRecord, store: DocumentStore) {
+    init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
         self.store = store
-        _currentPage = State(initialValue: doc.lastPage)
+        self.jumpTarget = jumpTarget
+        _currentPage = State(initialValue: jumpTarget?.page ?? doc.lastPage)
+        _suppressSave = State(initialValue: jumpTarget != nil)
     }
 
     var body: some View {
@@ -76,7 +81,10 @@ struct ReaderView: View {
             SettingsView()
         }
         .sheet(isPresented: $showVocab) {
-            VocabListView(store: VocabStore(db: store.db))
+            VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
+                showVocab = false
+                readerHandle.coordinator?.jumpToVocab(target: target)
+            })
         }
         .sheet(isPresented: $showPageJump) {
             PageJumpSheet(
@@ -105,12 +113,14 @@ struct ReaderView: View {
         SpeechService.shared.speak(term, language: SpeechService.usVoice)
     }
 
-    /// v0.7.0:词卡 ↔ 生词本桥(查询/加入/已掌握/重新收录;加亮用当前选区,走协调器)
+    /// v0.7.0:词卡 ↔ 生词本桥(v0.8.0 扩展颜色/分组;加亮用当前选区,走协调器)
     private var cardVocab: CardVocabBridge {
         let vs = VocabStore(db: store.db)
         return CardVocabBridge(
             query: { key in
-                (status: vs.status(forLemma: key), occurrenceCount: vs.occurrenceCount(forLemma: key))
+                (status: vs.status(forLemma: key),
+                 occurrenceCount: vs.occurrenceCount(forLemma: key),
+                 colorName: vs.highlightColorName(forLemma: key))
             },
             collect: { key, surface in
                 readerHandle.coordinator?.collectWord(key: key, surface: surface)
@@ -120,6 +130,19 @@ struct ReaderView: View {
             },
             reactivate: { key, surface in
                 readerHandle.coordinator?.collectWord(key: key, surface: surface)
+            },
+            setColor: { key, name in
+                readerHandle.coordinator?.setHighlightColor(key: key, colorName: name)
+            },
+            removeHighlight: { key in
+                readerHandle.coordinator?.removeWordHighlights(key: key)
+            },
+            groupsInfo: { key in
+                (all: vs.groups(), member: vs.groupIds(forLemma: key))
+            },
+            toggleGroup: { key, groupId, member in
+                guard let wordId = vs.entryId(forLemma: key) else { return }
+                vs.setMembership(wordId: wordId, groupId: groupId, member: member)
             }
         )
     }
@@ -154,6 +177,8 @@ struct ReaderView: View {
                     handle: readerHandle,
                     docSha: doc.sha256,
                     vocabStore: VocabStore(db: store.db),
+                    jumpTarget: jumpTarget,
+                    onVocabJumpPerformed: { suppressSave = true },
                     onVocabWordTap: { term in
                         cardContent = .word(term)
                     },
@@ -230,6 +255,8 @@ struct ReaderView: View {
     }
 
     private func saveProgressNow() {
+        // v0.8.0:生词本"一键抵达"预览会话不记忆阅读位置(返回主页进度不被打乱)
+        guard !suppressSave else { return }
         guard let state = readerHandle.coordinator?.captureReadingState() else { return }
         try? store.saveReadingState(state, for: doc.sha256)
     }
