@@ -21,3 +21,5 @@ tools/.blobcache.json
 tools/*.py.new
 tmp_v69/
 *.ipa
+build_log.tmp
+dist/
