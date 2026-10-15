@@ -20,6 +20,10 @@ struct VocabListView: View {
     @State private var newGroupName = ""
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var contextWord: VocabStore.WordSummary?
+    @State private var isSelecting = false
+    @State private var selectedIds: Set<Int64> = []
+    @State private var showBatchDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -40,6 +44,12 @@ struct VocabListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     filterMenu
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(isSelecting ? "取消" : "选择") {
+                        isSelecting.toggle()
+                        if !isSelecting { selectedIds.removeAll() }
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
@@ -66,6 +76,17 @@ struct VocabListView: View {
                 Button("取消", role: .cancel) {}
             }
             .overlay(alignment: .bottom) { previewBar }
+            .sheet(item: $contextWord) { word in
+                contextSheet(word)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if isSelecting {
+                    batchBar
+                }
+            }
+            .confirmationDialog("删除选中的 \(selectedIds.count) 个生词?", isPresented: $showBatchDeleteConfirm, titleVisibility: .visible) {
+                Button("删除", role: .destructive) { batchDelete() }
+            }
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: previewWord)
             .task { reload() }
             .onChange(of: searchText) { _, _ in reload() }
@@ -76,9 +97,10 @@ struct VocabListView: View {
     // MARK: - 子视图
 
     private var wordList: some View {
-        List {
+        List(selection: $selectedIds) {
             ForEach(words) { word in
                 row(word)
+                    .tag(word.id)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
                             store.deleteWord(id: word.id)
@@ -90,6 +112,7 @@ struct VocabListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
     }
 
     private func row(_ word: VocabStore.WordSummary) -> some View {
@@ -103,6 +126,7 @@ struct VocabListView: View {
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
+                .allowsHitTesting(!isSelecting)
                 if word.status == .mastered {
                     Text("已掌握")
                         .font(.caption2)
@@ -112,9 +136,20 @@ struct VocabListView: View {
                         .background(Color(.secondarySystemBackground), in: Capsule())
                 }
                 Spacer()
-                Text("\(word.occurrenceCount) 处语境")
-                    .font(.caption)
+                Button {
+                    contextWord = word
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("\(word.occurrenceCount) 处语境")
+                            .font(.caption)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
                     .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(word.occurrenceCount == 0)
+                .allowsHitTesting(!isSelecting)
             }
             if let title = word.sourceDocTitle, let page = word.sourcePage, let sha = word.sourceDocSha {
                 Button {
@@ -131,6 +166,7 @@ struct VocabListView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
+                .allowsHitTesting(!isSelecting)
             }
         }
         .padding(.vertical, 2)
@@ -190,6 +226,100 @@ struct VocabListView: View {
                 .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
                 .padding(.bottom, 18)
         }
+    }
+
+    /// 某词的全部语境(v0.8.2):原句 + 出处(可一键跳转)。
+    private func contextSheet(_ word: VocabStore.WordSummary) -> some View {
+        let rows = store.occurrences(forLemma: word.lemma)
+        return NavigationStack {
+            List {
+                if rows.isEmpty {
+                    Text("暂无语境记录")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(rows) { occ in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(occ.context.isEmpty ? "(无原句)" : occ.context)
+                            .font(.callout)
+                        Button {
+                            onJump?(VocabJumpTarget(
+                                docSha: occ.docSha,
+                                docTitle: occ.docTitle,
+                                page: occ.page,
+                                term: word.surface,
+                                rectsJSON: occ.rectsJSON
+                            ))
+                            contextWord = nil
+                        } label: {
+                            Label("\(occ.docTitle) · 第 \(occ.page + 1) 页", systemImage: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("「\(word.surface)」的语境(\(rows.count))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { contextWord = nil }
+                }
+            }
+        }
+    }
+
+    /// 批量操作条(v0.8.2:多选 → 移动分组 / 删除)。
+    private var batchBar: some View {
+        HStack(spacing: 14) {
+            Text("已选 \(selectedIds.count) 项")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Menu {
+                if groups.isEmpty {
+                    Text("暂无分组(先点左上角筛选菜单新建)")
+                } else {
+                    ForEach(groups) { g in
+                        Button(g.name) { batchMove(to: g.id) }
+                    }
+                }
+            } label: {
+                Label("移动到分组", systemImage: "folder")
+                    .font(.subheadline)
+            }
+            .disabled(selectedIds.isEmpty)
+            Button(role: .destructive) {
+                showBatchDeleteConfirm = true
+            } label: {
+                Label("删除", systemImage: "trash")
+                    .font(.subheadline)
+            }
+            .disabled(selectedIds.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func batchMove(to groupId: Int64) {
+        for id in selectedIds {
+            store.setMembership(wordId: id, groupId: groupId, member: true)
+        }
+        selectedIds.removeAll()
+        isSelecting = false
+        reload()
+    }
+
+    private func batchDelete() {
+        for id in selectedIds {
+            store.deleteWord(id: id)
+        }
+        selectedIds.removeAll()
+        isSelecting = false
+        reload()
     }
 
     private func reload() {
