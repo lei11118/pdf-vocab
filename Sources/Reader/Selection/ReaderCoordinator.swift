@@ -51,6 +51,8 @@ final class ReaderCoordinator: NSObject {
     private var jumpClearWork: DispatchWorkItem?
     private var appliedKey: String?
     private var appliedCharCount = 0
+    /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
+    private var lastHandleCheckKey: String?
     private var selectionText = ""
 
     // MARK: - 手势
@@ -507,9 +509,10 @@ final class ReaderCoordinator: NSObject {
             menu.dismiss()
             guard let (page, lineRects) = orderedSelectionRects(),
                   let firstLine = lineRects.first, let lastLine = lineRects.last else { return }
+            // v0.8.3:lineRects 为显示矩形;锚点仍取"原始文字边缘"内侧 0.6pt(与扩边前行为一致)
             let fixedPoint = isStart
-                ? CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
-                : CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
+                ? CGPoint(x: HandleMetrics.lineRect(fromDisplay: lastLine).maxX - 0.6, y: lastLine.midY)
+                : CGPoint(x: HandleMetrics.lineRect(fromDisplay: firstLine).minX + 0.6, y: firstLine.midY)
             guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
             drag = DragState(kind: isStart ? .handleStart : .handleEnd,
                              page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint, didMove: true)
@@ -679,9 +682,9 @@ final class ReaderCoordinator: NSObject {
             }
         }
         for (key, entry) in desired where annotations[key] == nil {
-            // v0.8.0:选区整体加大(水平 ±1.5、垂直 ±2)
+            // v0.8.3:选区显示矩形(±扩边)——与拖柄摆放共用同一来源(HandleMetrics.displayRect)
             let annotation = PDFAnnotation(
-                bounds: entry.rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
+                bounds: HandleMetrics.displayRect(entry.rect),
                 forType: .highlight,
                 withProperties: nil
             )
@@ -689,7 +692,8 @@ final class ReaderCoordinator: NSObject {
             entry.page.addAnnotation(annotation)
             annotations[key] = (entry.page, annotation)
         }
-        rects = desired.values.map { ($0.page, $0.rect) }
+        // v0.8.3:写回**显示矩形**——拖柄(竖线中线=高亮边缘)与生词本存储都读这一份
+        rects = desired.values.map { ($0.page, HandleMetrics.displayRect($0.rect)) }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         DiagLog.log(String(format: "hl: lines=%d ms=%.0f rej=%d", desired.count, ms, rejected))
@@ -766,8 +770,9 @@ final class ReaderCoordinator: NSObject {
             guard let page = doc.page(at: row.page) else { continue }
             for rect in row.rects where SelectionGeometry.isValid(rect) {
                 let key = "\(ObjectIdentifier(page).hashValue)_\(annotationKey(page, rect))"
+                // v0.8.3:存储的 rects 即"显示矩形"(收录时经 HandleMetrics.displayRect);直接使用,不再二次扩边
                 let annotation = PDFAnnotation(
-                    bounds: rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
+                    bounds: rect,
                     forType: .highlight,
                     withProperties: nil
                 )
@@ -788,6 +793,7 @@ final class ReaderCoordinator: NSObject {
         let selectionIsTerm = selectionText
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == surface.lowercased()
+        // v0.8.3:rects 现为"显示矩形"(含扩边)——直接作为生词本高亮存储,与拖柄对齐同一口径
         let useRects: [CGRect] = selectionIsTerm ? rects.map { $0.rect } : []
         let page = rects.first.flatMap { pdfView?.document?.index(for: $0.page) } ?? currentPageIndex()
         let context = sentenceContextOrSelection(surface: surface)   // v0.8.2:整句原句语境
@@ -863,8 +869,9 @@ final class ReaderCoordinator: NSObject {
         var added = 0
         if let json = target.rectsJSON {
             for rect in VocabStore.rectsFromJSON(json) where SelectionGeometry.isValid(rect) {
+                // v0.8.3:存储的 rects 即"显示矩形",直接使用(不再二次扩边)
                 let annotation = PDFAnnotation(
-                    bounds: rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
+                    bounds: rect,
                     forType: .highlight,
                     withProperties: nil
                 )
@@ -955,6 +962,13 @@ final class ReaderCoordinator: NSObject {
         place(endHandle,
               center: CGPoint(x: lastView.maxX, y: lastView.minY + endH / 2),
               size: CGSize(width: w, height: endH))
+        // v0.8.3:对齐自检——柄竖线中线 vs 高亮边缘(两者同源自 HandleMetrics.displayRect,Δ 应恒 ≈ 0)
+        if drag == nil, appliedKey != lastHandleCheckKey {
+            lastHandleCheckKey = appliedKey
+            let ds = abs((startHandle?.frame.midX ?? 0) - firstView.minX)
+            let de = abs((endHandle?.frame.midX ?? 0) - lastView.maxX)
+            DiagLog.log(String(format: "handles: Δstart=%.2f Δend=%.2f pt(目标 ≤0.5)", ds, de))
+        }
     }
 
     private func place(_ handle: SelectionHandleView?, center: CGPoint, size: CGSize) {
