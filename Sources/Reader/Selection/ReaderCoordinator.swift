@@ -43,6 +43,12 @@ final class ReaderCoordinator: NSObject {
     // v0.7.0:永久加亮(生词本)层——与临时选区层分开管理
     private var permAnnotations: [String: (page: PDFPage, annotation: PDFAnnotation)] = [:]
     private var permHitRects: [(page: PDFPage, rect: CGRect, term: String)] = []
+
+    // v0.8.0:生词本跳转(v0.8.0)——橙色临时高亮,短暂显示后自动消失
+    var pendingVocabJump: VocabJumpTarget?
+    var onVocabJumpPerformed: (() -> Void)?
+    private var jumpAnnotations: [(page: PDFPage, annotation: PDFAnnotation)] = []
+    private var jumpClearWork: DispatchWorkItem?
     private var appliedKey: String?
     private var appliedCharCount = 0
     private var selectionText = ""
@@ -161,7 +167,14 @@ final class ReaderCoordinator: NSObject {
                 self.suppressNativeSelection(in: view)
             }
         }
-        if let state = pendingRestore {
+        if let jump = pendingVocabJump {
+            // v0.8.0:生词本跳转(橙色临时高亮)——优先于阅读位置恢复(预览不覆盖进度)
+            pendingVocabJump = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, let doc = self.pdfView?.document else { return }
+                self.performVocabJump(jump, doc: doc)
+            }
+        } else if let state = pendingRestore {
             pendingRestore = nil
             applyReadingState(state)
         }
@@ -176,6 +189,7 @@ final class ReaderCoordinator: NSObject {
         stopAutoscroll()
         loupe.end()
         menu.dismiss()
+        clearJumpHighlight()
         freezeScrolling(false)
         clearTempHighlight()
         removeObservers()
@@ -658,11 +672,9 @@ final class ReaderCoordinator: NSObject {
             }
         }
         for (key, entry) in desired where annotations[key] == nil {
-            // v0.6.11:蓝选区水平方向收进「线宽/2 − 1」,让加粗后的小柄内缘与选区边缘平滑衔接
-            // (小柄成为选区边缘;垂直方向维持原有 1pt 扩边)
-            let edgeInset = max(HandleMetrics.lineWidth / 2 - 1, 0)
+            // v0.8.0:选区整体加大(水平 ±1.5、垂直 ±2)
             let annotation = PDFAnnotation(
-                bounds: entry.rect.insetBy(dx: edgeInset, dy: -1),
+                bounds: entry.rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
                 forType: .highlight,
                 withProperties: nil
             )
@@ -691,6 +703,7 @@ final class ReaderCoordinator: NSObject {
         stopAutoscroll()
         loupe.end()
         menu.dismiss()
+        clearJumpHighlight()
         freezeScrolling(false)
         pdfView?.currentSelection = nil
         pdfView?.clearSelection()
@@ -717,6 +730,7 @@ final class ReaderCoordinator: NSObject {
         stopAutoscroll()
         loupe.end()
         menu.dismiss()
+        clearJumpHighlight()
         appliedKey = nil
         appliedCharCount = 0
         selectionText = ""
@@ -745,13 +759,12 @@ final class ReaderCoordinator: NSObject {
             guard let page = doc.page(at: row.page) else { continue }
             for rect in row.rects where SelectionGeometry.isValid(rect) {
                 let key = "\(ObjectIdentifier(page).hashValue)_\(annotationKey(page, rect))"
-                let edgeInset = max(HandleMetrics.lineWidth / 2 - 1, 0)
                 let annotation = PDFAnnotation(
-                    bounds: rect.insetBy(dx: edgeInset, dy: -1),
+                    bounds: rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
                     forType: .highlight,
                     withProperties: nil
                 )
-                annotation.color = UIColor.systemBlue.withAlphaComponent(0.35)
+                annotation.color = VocabStore.highlightColor(named: row.color).withAlphaComponent(0.35)
                 page.addAnnotation(annotation)
                 permAnnotations[key] = (page, annotation)
                 permHitRects.append((page, rect, row.term))
@@ -796,6 +809,67 @@ final class ReaderCoordinator: NSObject {
         reloadPermanentHighlights()
         DiagLog.log("vocab: mastered 「\(key)」")
         return .mastered
+    }
+
+    /// 设置某词高亮颜色(v0.8.0)。
+    func setHighlightColor(key: String, colorName: String) {
+        guard let vocabStore else { return }
+        vocabStore.setHighlightColor(forLemma: key, colorName: colorName)
+        reloadPermanentHighlights()
+        DiagLog.log("vocab: color 「\(key)」→\(colorName)")
+    }
+
+    /// 取消某词的全部高亮(保留词条与语境,v0.8.0)。
+    func removeWordHighlights(key: String) {
+        guard let vocabStore, let wordId = vocabStore.entryId(forLemma: key) else { return }
+        vocabStore.removeHighlights(wordId: wordId)
+        reloadPermanentHighlights()
+        DiagLog.log("vocab: highlights removed 「\(key)」")
+    }
+
+    /// 生词本 → 出处跳转:跳页 + 橙色临时高亮(约 2.5s 自动消失;点空白/清选区也会清掉)。
+    func jumpToVocab(target: VocabJumpTarget) {
+        guard let pdfView, let doc = pdfView.document else { return }
+        performVocabJump(target, doc: doc)
+    }
+
+    private func performVocabJump(_ target: VocabJumpTarget, doc: PDFDocument) {
+        guard let pdfView else { return }
+        clearJumpHighlight()
+        let idx = min(max(target.page, 0), max(doc.pageCount - 1, 0))
+        guard let page = doc.page(at: idx) else { return }
+        pdfView.go(to: page)
+        lastGoodPage = (idx, CFAbsoluteTimeGetCurrent())
+        jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 0.6
+        var added = 0
+        if let json = target.rectsJSON {
+            for rect in VocabStore.rectsFromJSON(json) where SelectionGeometry.isValid(rect) {
+                let annotation = PDFAnnotation(
+                    bounds: rect.insetBy(dx: -HandleMetrics.selectionPadX, dy: -HandleMetrics.selectionPadY),
+                    forType: .highlight,
+                    withProperties: nil
+                )
+                annotation.color = UIColor.systemOrange.withAlphaComponent(0.4)
+                page.addAnnotation(annotation)
+                jumpAnnotations.append((page, annotation))
+                added += 1
+            }
+        }
+        DiagLog.log("vocab jump: page->\(idx) 「\(target.term)」 rects=\(added)")
+        let work = DispatchWorkItem { [weak self] in self?.clearJumpHighlight() }
+        jumpClearWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        onVocabJumpPerformed?()
+    }
+
+    private func clearJumpHighlight() {
+        jumpClearWork?.cancel()
+        jumpClearWork = nil
+        guard !jumpAnnotations.isEmpty else { return }
+        for (page, annotation) in jumpAnnotations {
+            page.removeAnnotation(annotation)
+        }
+        jumpAnnotations.removeAll()
     }
 
     /// 选词后的生词本联动(后台):已收录 → 追加新语境(不重复建卡);
@@ -846,19 +920,16 @@ final class ReaderCoordinator: NSObject {
             hideHandles()
             return
         }
-        // v0.6.10(对齐原生):竖线 = 该行选区高度、沿选区左/右边缘;圆点紧贴竖线外端。
-        // 几何全部取自 HandleMetrics——编辑菜单避让(menuEnvelopeRect)读的是同一组常量。
-        let firstView = pdfView.convert(firstLine, from: page)
-        let lastView = pdfView.convert(lastLine, from: page)
-        let width = HandleMetrics.handleWidth
-        let startHeight = firstView.height + HandleMetrics.dotProtrusion
-        let endHeight = lastView.height + HandleMetrics.dotProtrusion
+        // v0.8.0:拖柄**固定尺寸**(高 32pt = 圆点 14 + 竖线 20)——与页面缩放无关,
+        // 放大缩小柄本身不变,只跟随选区位置。
+        let w = HandleMetrics.handleWidth
+        let h = HandleMetrics.handleHeight
         place(startHandle,
-              center: CGPoint(x: firstView.minX, y: firstView.minY - HandleMetrics.dotProtrusion + startHeight / 2),
-              size: CGSize(width: width, height: startHeight))
+              center: CGPoint(x: firstView.minX, y: firstView.minY - HandleMetrics.dotProtrusion + h / 2),
+              size: CGSize(width: w, height: h))
         place(endHandle,
-              center: CGPoint(x: lastView.maxX, y: lastView.minY + endHeight / 2),
-              size: CGSize(width: width, height: endHeight))
+              center: CGPoint(x: lastView.maxX, y: lastView.maxY - HandleMetrics.lineLength + h / 2),
+              size: CGSize(width: w, height: h))
     }
 
     private func place(_ handle: SelectionHandleView?, center: CGPoint, size: CGSize) {

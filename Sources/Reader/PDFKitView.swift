@@ -20,6 +20,8 @@ struct PDFKitView: UIViewRepresentable {
     let handle: ReaderHandle
     var docSha: String = ""
     var vocabStore: VocabStore? = nil
+    var jumpTarget: VocabJumpTarget? = nil
+    var onVocabJumpPerformed: () -> Void = {}
     var onVocabWordTap: (String) -> Void = { _ in }
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
@@ -35,6 +37,8 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.pendingRestore = restore
         coordinator.docSha = docSha
         coordinator.vocabStore = vocabStore
+        coordinator.pendingVocabJump = jumpTarget
+        coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         coordinator.onVocabWordTap = onVocabWordTap
         return coordinator
     }
@@ -67,6 +71,7 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onReadingTick = onReadingTick
         context.coordinator.onTeardown = onTeardown
         context.coordinator.vocabStore = vocabStore
+        context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         context.coordinator.onVocabWordTap = onVocabWordTap
     }
 

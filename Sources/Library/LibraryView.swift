@@ -12,6 +12,8 @@ struct LibraryView: View {
     @State private var pendingDelete: DocumentRecord?
     @State private var showDiagnostics = false
     @State private var showSettings = false
+    @State private var showVocab = false
+    @State private var readerJump: VocabJumpTarget?
 
     var body: some View {
         NavigationStack {
@@ -40,6 +42,13 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        showVocab = true
+                    } label: {
+                        Label("生词本", systemImage: "text.book.closed")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         showImporter = true
                     } label: {
                         Label("导入 PDF", systemImage: "plus")
@@ -48,6 +57,17 @@ struct LibraryView: View {
             }
             .navigationDestination(for: DocumentRecord.self) { doc in
                 ReaderView(doc: doc, store: store)
+            }
+            .navigationDestination(item: $readerJump) { target in
+                if let rec = try? store.document(sha256: target.docSha) {
+                    ReaderView(doc: rec, store: store, jumpTarget: target)
+                } else {
+                    ContentUnavailableView(
+                        "文档缺失",
+                        systemImage: "doc.questionmark",
+                        description: Text("该生词出处的 PDF 已被删除。")
+                    )
+                }
             }
             .sheet(isPresented: $showImporter) {
                 PDFDocumentPicker(
@@ -66,6 +86,15 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showVocab) {
+                VocabListView(store: VocabStore(db: store.db), onJump: { target in
+                    showVocab = false
+                    // 等生词本面板收起后再推入阅读页(避免转场打架)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        readerJump = target
+                    }
+                })
             }
             .overlay {
                 if let importingLabel {
