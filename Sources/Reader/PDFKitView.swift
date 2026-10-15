@@ -18,6 +18,9 @@ struct PDFKitView: UIViewRepresentable {
     let url: URL
     var restore: ReadingState?
     let handle: ReaderHandle
+    var docSha: String = ""
+    var vocabStore: VocabStore? = nil
+    var onVocabWordTap: (String) -> Void = { _ in }
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
     var onReadingTick: () -> Void = {}
@@ -30,6 +33,9 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.onReadingTick = onReadingTick
         coordinator.onTeardown = onTeardown
         coordinator.pendingRestore = restore
+        coordinator.docSha = docSha
+        coordinator.vocabStore = vocabStore
+        coordinator.onVocabWordTap = onVocabWordTap
         return coordinator
     }
 
@@ -60,6 +66,8 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onTranslate = onTranslate
         context.coordinator.onReadingTick = onReadingTick
         context.coordinator.onTeardown = onTeardown
+        context.coordinator.vocabStore = vocabStore
+        context.coordinator.onVocabWordTap = onVocabWordTap
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {

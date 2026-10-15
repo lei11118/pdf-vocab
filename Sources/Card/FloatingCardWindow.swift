@@ -15,6 +15,7 @@ struct FloatingCardWindow: View {
     let bounds: CGSize
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
+    var vocab: CardVocabBridge? = nil
 
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
@@ -98,7 +99,7 @@ struct FloatingCardWindow: View {
         VStack(spacing: 0) {
             dragStrip
             Divider()
-            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord)
+            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord, vocab: vocab)
         }
     }
 

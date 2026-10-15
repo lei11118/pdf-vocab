@@ -7,8 +7,8 @@ import PDFKit
 enum HandleMetrics {
     /// 圆点直径
     static let dotDiameter: CGFloat = 14
-    /// 竖线宽度
-    static let lineWidth: CGFloat = 2.5
+    /// 竖线宽度(v0.6.11:2.5 → 4,加粗;小柄本身即选区边缘)
+    static let lineWidth: CGFloat = 4
     /// 竖线端头与圆点的交叠量(消除接缝,让圆点"长在"线圈上)
     static let dotLineOverlap: CGFloat = 2
     /// 圆点伸出选区(行矩形)外的距离 = 直径 − 交叠(菜单避让据此计算包络)

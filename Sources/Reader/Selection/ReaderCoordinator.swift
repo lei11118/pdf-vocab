@@ -24,6 +24,12 @@ final class ReaderCoordinator: NSObject {
     var onReadingTick: (() -> Void)?
     /// 文档标识(sha 前缀,仅用于日志)
     var docLabel = ""
+    /// 文档内容哈希(v0.7.0:生词本按它关联;由 PDFKitView 注入)
+    var docSha = ""
+    /// 生词本数据层(v0.7.0;由 PDFKitView 注入)
+    var vocabStore: VocabStore?
+    /// 点中「永久加亮的词」时回调(宿主打开/切换词卡,v0.7.0)
+    var onVocabWordTap: ((String) -> Void)?
     /// 待恢复的阅读位置(由 PDFKitView 在加载文档前注入)
     var pendingRestore: ReadingState?
     /// 视图拆卸前的兜底回调(保存阅读位置等)
@@ -33,6 +39,10 @@ final class ReaderCoordinator: NSObject {
 
     private var annotations: [String: (page: PDFPage, annotation: PDFAnnotation)] = [:]
     private var rects: [(page: PDFPage, rect: CGRect)] = []
+
+    // v0.7.0:永久加亮(生词本)层——与临时选区层分开管理
+    private var permAnnotations: [String: (page: PDFPage, annotation: PDFAnnotation)] = [:]
+    private var permHitRects: [(page: PDFPage, rect: CGRect, term: String)] = []
     private var appliedKey: String?
     private var appliedCharCount = 0
     private var selectionText = ""
@@ -155,6 +165,7 @@ final class ReaderCoordinator: NSObject {
             pendingRestore = nil
             applyReadingState(state)
         }
+        reloadPermanentHighlights()
     }
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
@@ -182,6 +193,7 @@ final class ReaderCoordinator: NSObject {
         freezeScrolling(false)
         suppressNativeSelection(in: pdfView)
         observeScrolling()
+        reloadPermanentHighlights()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, let view = self.pdfView else { return }
             self.suppressNativeSelection(in: view)
@@ -537,6 +549,13 @@ final class ReaderCoordinator: NSObject {
 
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
+            // v0.7.0:命中「永久加亮的词」→ 打开/切换词卡(优先于菜单切换)
+            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.insetBy(dx: -6, dy: -6).contains(pagePoint) }) {
+                DiagLog.log("tap: vocab word 「\(hit.term)」 → card")
+                clearTempOnly()
+                onVocabWordTap?(hit.term)
+                return
+            }
             // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
             let onSelection = rects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
             if onSelection {
@@ -600,11 +619,16 @@ final class ReaderCoordinator: NSObject {
         updateHighlight(for: selection)
         refreshHandles()
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
+        let wordCount = WordPicker.countWords(in: text)
+        let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
         onSelectionInfo(SelectionInfo(
             text: display,
-            wordCount: WordPicker.countWords(in: text),
-            primaryTerm: WordPicker.firstLexicalWord(in: text) ?? ""
+            wordCount: wordCount,
+            primaryTerm: primaryTerm
         ))
+        if wordCount <= 1, !primaryTerm.isEmpty {
+            vocabDidSelectWord(term: primaryTerm, context: text)
+        }
         resuppressSoon()
     }
 
@@ -634,8 +658,11 @@ final class ReaderCoordinator: NSObject {
             }
         }
         for (key, entry) in desired where annotations[key] == nil {
+            // v0.6.11:蓝选区水平方向收进「线宽/2 − 1」,让加粗后的小柄内缘与选区边缘平滑衔接
+            // (小柄成为选区边缘;垂直方向维持原有 1pt 扩边)
+            let edgeInset = max(HandleMetrics.lineWidth / 2 - 1, 0)
             let annotation = PDFAnnotation(
-                bounds: entry.rect.insetBy(dx: -1, dy: -1),
+                bounds: entry.rect.insetBy(dx: edgeInset, dy: -1),
                 forType: .highlight,
                 withProperties: nil
             )
@@ -679,6 +706,124 @@ final class ReaderCoordinator: NSObject {
     /// 关闭整条选中链(供侧边词卡关闭按钮等外部调用)。
     func dismissSelection() {
         clearSelection()
+    }
+
+    // MARK: - 生词本联动(v0.7.0,M3-A)
+
+    /// 只清"临时选区"相关状态(高亮/拖柄/菜单);不回调 onSelectionInfo(nil)、不动词卡。
+    private func clearTempOnly() {
+        holdMenuWork?.cancel()
+        holdMenuWork = nil
+        stopAutoscroll()
+        loupe.end()
+        menu.dismiss()
+        appliedKey = nil
+        appliedCharCount = 0
+        selectionText = ""
+        clearTempHighlight()
+        refreshHandles()
+        resuppressSoon()
+    }
+
+    private func currentPageIndex() -> Int {
+        guard let pdfView, let page = pdfView.currentPage else { return 0 }
+        return pdfView.document?.index(for: page) ?? 0
+    }
+
+    /// 重新渲染本文件的永久加亮:按 docSha 从生词本取所有行矩形(页坐标),逐条加回注解;
+    /// 同时重建点击命中表(点已加亮的词 → 开/切词卡)。
+    func reloadPermanentHighlights() {
+        guard let pdfView, let vocabStore, let doc = pdfView.document, !docSha.isEmpty else { return }
+        for (_, entry) in permAnnotations {
+            entry.page.removeAnnotation(entry.annotation)
+        }
+        permAnnotations.removeAll()
+        permHitRects.removeAll()
+        let rows = vocabStore.highlights(docSha: docSha)
+        var rectCount = 0
+        for row in rows {
+            guard let page = doc.page(at: row.page) else { continue }
+            for rect in row.rects where SelectionGeometry.isValid(rect) {
+                let key = "\(ObjectIdentifier(page).hashValue)_\(annotationKey(page, rect))"
+                let edgeInset = max(HandleMetrics.lineWidth / 2 - 1, 0)
+                let annotation = PDFAnnotation(
+                    bounds: rect.insetBy(dx: edgeInset, dy: -1),
+                    forType: .highlight,
+                    withProperties: nil
+                )
+                annotation.color = UIColor.systemBlue.withAlphaComponent(0.35)
+                page.addAnnotation(annotation)
+                permAnnotations[key] = (page, annotation)
+                permHitRects.append((page, rect, row.term))
+                rectCount += 1
+            }
+        }
+        DiagLog.log("vocab: perm highlights \(rectCount) rects / \(rows.count) words")
+    }
+
+    /// 加入生词本 / 重新收录(词卡按钮):建卡 + 记录语境 + 用当前选区矩形永久加亮;返回新状态。
+    /// 仅当"当前选区就是这个词"时把选区矩形作为加亮位置,否则只建卡(如从整句卡词块点进来的)。
+    func collectWord(key: String, surface: String) -> VocabStore.Status? {
+        guard let vocabStore, !docSha.isEmpty else { return nil }
+        let selectionIsTerm = selectionText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == surface.lowercased()
+        let useRects: [CGRect] = selectionIsTerm ? rects.map { $0.rect } : []
+        let page = rects.first.flatMap { pdfView?.document?.index(for: $0.page) } ?? currentPageIndex()
+        let context = selectionIsTerm && !selectionText.isEmpty ? selectionText : surface
+        let wordId = vocabStore.collectWord(
+            lemma: key,
+            surface: surface,
+            docSha: docSha,
+            page: page,
+            context: context,
+            rectsJSON: VocabStore.rectsToJSON(useRects)
+        )
+        guard wordId != nil else {
+            DiagLog.log("vocab: collect FAILED 「\(surface)」")
+            return nil
+        }
+        reloadPermanentHighlights()
+        DiagLog.log("vocab: collect 「\(surface)」(\(key)) rects=\(useRects.count) page=\(page)")
+        return .new
+    }
+
+    /// 标记已掌握:取消加亮(status 保留为 mastered,供 P1 批量过滤/排除)。
+    func masterWord(key: String) -> VocabStore.Status? {
+        guard let vocabStore, let wordId = vocabStore.entryId(forLemma: key) else { return nil }
+        vocabStore.setStatus(wordId: wordId, status: .mastered)
+        vocabStore.removeHighlights(wordId: wordId)
+        reloadPermanentHighlights()
+        DiagLog.log("vocab: mastered 「\(key)」")
+        return .mastered
+    }
+
+    /// 选词后的生词本联动(后台):已收录 → 追加新语境(不重复建卡);
+    /// 开启「选中即自动收录」→ 自动建卡 + 永久加亮(已掌握的词不自动复活)。
+    private func vocabDidSelectWord(term: String, context: String) {
+        guard let vocabStore, !docSha.isEmpty else { return }
+        let autoCollect = UserDefaults.standard.bool(forKey: "autoCollectOnSelect")
+        let page = rects.first.flatMap { pdfView?.document?.index(for: $0.page) } ?? currentPageIndex()
+        let docSha = docSha
+        let rectsJSON = VocabStore.rectsToJSON(rects.map { $0.rect })
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let key = VocabStore.normalizedKey(term)
+            if let wordId = vocabStore.entryId(forLemma: key) {
+                vocabStore.addOccurrence(wordId: wordId, docSha: docSha, page: page, context: context)
+            } else if autoCollect {
+                vocabStore.collectWord(
+                    lemma: key,
+                    surface: term,
+                    docSha: docSha,
+                    page: page,
+                    context: context,
+                    rectsJSON: rectsJSON
+                )
+                DispatchQueue.main.async {
+                    self?.reloadPermanentHighlights()
+                }
+            }
+        }
     }
 
     // MARK: - 拖柄显示(拖动中也实时跟随)

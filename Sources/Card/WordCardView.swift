@@ -6,17 +6,30 @@ enum ReaderCardContent: Equatable {
     case sentence(String, Int)
 }
 
+/// 词卡 ↔ 生词本桥(v0.7.0):闭包注入,词卡不直接依赖数据库。
+struct CardVocabBridge {
+    /// 查询状态(键 = 归一化词元)
+    var query: (String) -> (status: VocabStore.Status?, occurrenceCount: Int)
+    /// 加入生词本 / 重新收录(键 + 原形)
+    var collect: (String, String) -> VocabStore.Status?
+    /// 标记已掌握(取消加亮)
+    var master: (String) -> VocabStore.Status?
+    /// 已掌握 → 重新收录
+    var reactivate: (String, String) -> VocabStore.Status?
+}
+
 /// 侧边词卡容器(单词卡 / 整句卡)
 struct WordCardPanel: View {
     let content: ReaderCardContent
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
+    var vocab: CardVocabBridge? = nil
 
     var body: some View {
         Group {
             switch content {
             case .word(let term):
-                WordCardView(term: term, onClose: onClose)
+                WordCardView(term: term, onClose: onClose, vocab: vocab)
             case .sentence(let text, let count):
                 SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord)
             }
@@ -29,6 +42,7 @@ struct WordCardPanel: View {
 struct WordCardView: View {
     let term: String
     let onClose: () -> Void
+    var vocab: CardVocabBridge? = nil
 
     private enum LoadState: Equatable {
         case loading
@@ -38,6 +52,9 @@ struct WordCardView: View {
     }
 
     @State private var state: LoadState = .loading
+    @State private var vocabKey = ""
+    @State private var vocabStatus: VocabStore.Status?
+    @State private var vocabCount = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -67,6 +84,10 @@ struct WordCardView: View {
                     .padding(.top, 12)
             }
 
+            if let vocab, state != .loading, state != .missing {
+                vocabBar(vocab)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(16)
@@ -79,10 +100,71 @@ struct WordCardView: View {
         let outcome = await Task.detached(priority: .userInitiated) {
             DictionaryService.lookup(term)
         }.value
+        var key = term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch outcome {
-        case .found(let entry): state = .found(entry)
+        case .found(let entry):
+            state = .found(entry)
+            if !entry.word.isEmpty { key = entry.word.lowercased() }
         case .notFound: state = .notFound
         case .dictionaryMissing: state = .missing
+        }
+        vocabKey = key
+        if let vocab {
+            let q = vocab.query(key)
+            vocabStatus = q.status
+            vocabCount = q.occurrenceCount
+        }
+    }
+
+    // MARK: - 生词本(v0.7.0)
+
+    @ViewBuilder
+    private func vocabBar(_ vocab: CardVocabBridge) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            HStack(spacing: 10) {
+                switch vocabStatus {
+                case .none:
+                    Button {
+                        if let s = vocab.collect(vocabKey, term) {
+                            vocabStatus = s
+                            vocabCount = vocab.query(vocabKey).occurrenceCount
+                        }
+                    } label: {
+                        Label("加入生词本", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Spacer(minLength: 0)
+                case .some(.new):
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(Color.accentColor)
+                    Text("已收录 · \(vocabCount) 处语境")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("已掌握") {
+                        if let s = vocab.master(vocabKey) { vocabStatus = s }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                case .some(.mastered):
+                    Image(systemName: "checkmark.circle")
+                        .foregroundStyle(.secondary)
+                    Text("已掌握")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("重新收录") {
+                        if let s = vocab.reactivate(vocabKey, term) {
+                            vocabStatus = s
+                            vocabCount = vocab.query(vocabKey).occurrenceCount
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
         }
     }
 

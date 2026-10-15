@@ -18,6 +18,7 @@ struct ReaderView: View {
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
+    @State private var showVocab = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -62,9 +63,20 @@ struct ReaderView: View {
                 }
                 .accessibilityLabel("设置")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showVocab = true
+                } label: {
+                    Image(systemName: "text.book.closed")
+                }
+                .accessibilityLabel("生词本")
+            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showVocab) {
+            VocabListView(store: VocabStore(db: store.db))
         }
         .sheet(isPresented: $showPageJump) {
             PageJumpSheet(
@@ -93,6 +105,25 @@ struct ReaderView: View {
         SpeechService.shared.speak(term, language: SpeechService.usVoice)
     }
 
+    /// v0.7.0:词卡 ↔ 生词本桥(查询/加入/已掌握/重新收录;加亮用当前选区,走协调器)
+    private var cardVocab: CardVocabBridge {
+        let vs = VocabStore(db: store.db)
+        return CardVocabBridge(
+            query: { key in
+                (status: vs.status(forLemma: key), occurrenceCount: vs.occurrenceCount(forLemma: key))
+            },
+            collect: { key, surface in
+                readerHandle.coordinator?.collectWord(key: key, surface: surface)
+            },
+            master: { key in
+                readerHandle.coordinator?.masterWord(key: key)
+            },
+            reactivate: { key, surface in
+                readerHandle.coordinator?.collectWord(key: key, surface: surface)
+            }
+        )
+    }
+
     private func reader(for url: URL) -> some View {
         pdfArea
             .overlay {
@@ -105,7 +136,8 @@ struct ReaderView: View {
                             onSelectWord: { word in
                                 cardContent = .word(word)
                                 autoSpeak(word)
-                            }
+                            },
+                            vocab: cardVocab
                         )
                     }
                 }
@@ -120,6 +152,11 @@ struct ReaderView: View {
                     url: resolvedURL,
                     restore: doc.readingState,
                     handle: readerHandle,
+                    docSha: doc.sha256,
+                    vocabStore: VocabStore(db: store.db),
+                    onVocabWordTap: { term in
+                        cardContent = .word(term)
+                    },
                     onPageChanged: { page in
                         currentPage = page
                         scheduleSave()
