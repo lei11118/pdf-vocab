@@ -648,7 +648,7 @@ final class ReaderCoordinator: NSObject {
             primaryTerm: primaryTerm
         ))
         if wordCount <= 1, !primaryTerm.isEmpty {
-            vocabDidSelectWord(term: primaryTerm, context: text)
+            vocabDidSelectWord(term: primaryTerm)
         }
         resuppressSoon()
     }
@@ -790,7 +790,7 @@ final class ReaderCoordinator: NSObject {
             .lowercased() == surface.lowercased()
         let useRects: [CGRect] = selectionIsTerm ? rects.map { $0.rect } : []
         let page = rects.first.flatMap { pdfView?.document?.index(for: $0.page) } ?? currentPageIndex()
-        let context = selectionIsTerm && !selectionText.isEmpty ? selectionText : surface
+        let context = sentenceContextOrSelection(surface: surface)   // v0.8.2:整句原句语境
         let wordId = vocabStore.collectWord(
             lemma: key,
             surface: surface,
@@ -806,6 +806,18 @@ final class ReaderCoordinator: NSObject {
         reloadPermanentHighlights()
         DiagLog.log("vocab: collect 「\(surface)」(\(key)) rects=\(useRects.count) page=\(page)")
         return .new
+    }
+
+    /// v0.8.2:原句提取(整句语境;无文本层/失败时回退选中文本,再回退词面)。
+    private func sentenceContextOrSelection(surface: String) -> String {
+        if let (page, lineRects) = orderedSelectionRects(),
+           let first = lineRects.first, let last = lineRects.last,
+           let sentence = SentenceExtractor.sentenceContext(firstLine: first, lastLine: last, on: page) {
+            DiagLog.log("context: sentence len=\(sentence.count)")
+            return sentence
+        }
+        let fallback = selectionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback.isEmpty ? surface : fallback
     }
 
     /// 标记已掌握:取消加亮(status 保留为 mastered,供 P1 批量过滤/排除)。
@@ -881,10 +893,11 @@ final class ReaderCoordinator: NSObject {
 
     /// 选词后的生词本联动(后台):已收录 → 追加新语境(不重复建卡);
     /// 开启「选中即自动收录」→ 自动建卡 + 永久加亮(已掌握的词不自动复活)。
-    private func vocabDidSelectWord(term: String, context: String) {
+    private func vocabDidSelectWord(term: String) {
         guard let vocabStore, !docSha.isEmpty else { return }
         let autoCollect = UserDefaults.standard.bool(forKey: "autoCollectOnSelect")
         let page = rects.first.flatMap { pdfView?.document?.index(for: $0.page) } ?? currentPageIndex()
+        let context = sentenceContextOrSelection(surface: term)   // v0.8.2:整句语境
         let docSha = docSha
         let rectsJSON = VocabStore.rectsToJSON(rects.map { $0.rect })
         DispatchQueue.global(qos: .utility).async { [weak self] in

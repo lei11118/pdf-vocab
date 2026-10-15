@@ -45,6 +45,15 @@ struct VocabStore: Sendable {
         let count: Int
     }
 
+    struct OccurrenceRow: Identifiable {
+        let id: Int64
+        let docSha: String
+        let docTitle: String
+        let page: Int
+        let context: String
+        let rectsJSON: String?   // 该处若有高亮,带出矩形供跳转临时高亮
+    }
+
     // MARK: - 归一化与矩形编解码
 
     /// 归一化词条键:优先词典解析结果(went→go、running→run),否则小写原词。
@@ -192,6 +201,38 @@ struct VocabStore: Sendable {
                     sourceDocTitle: srcTitle,
                     sourcePage: srcPage,
                     sourceRectsJSON: srcRects
+                )
+            }
+        }) ?? []
+    }
+
+    /// 某词的全部语境(v0.8.2;新→旧;带出处文档标题与可选高亮矩形)。
+    func occurrences(forLemma lemma: String) -> [OccurrenceRow] {
+        (try? db.dbQueue.read { db -> [OccurrenceRow] in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT o.id AS id, o.docSha AS docSha, o.page AS page, o.context AS context,
+                           COALESCE(d.title, '未知文档') AS docTitle,
+                           (SELECT h.rects FROM vocab_highlight h
+                            WHERE h.wordId = o.wordId AND h.docSha = o.docSha AND h.page = o.page
+                            ORDER BY h.createdAt DESC LIMIT 1) AS rects
+                    FROM vocab_occurrence o
+                    JOIN vocab_word w ON w.id = o.wordId
+                    LEFT JOIN document d ON d.sha256 = o.docSha
+                    WHERE w.lemma = ?
+                    ORDER BY o.createdAt DESC
+                    """,
+                arguments: [lemma]
+            )
+            return rows.map { row in
+                OccurrenceRow(
+                    id: row["id"],
+                    docSha: row["docSha"],
+                    docTitle: row["docTitle"],
+                    page: row["page"],
+                    context: row["context"],
+                    rectsJSON: row["rects"]
                 )
             }
         }) ?? []
