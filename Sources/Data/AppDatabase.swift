@@ -86,6 +86,16 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["wordId", "groupId"])
             }
         }
+        migrator.registerMigration("v5.pencilInk") { db in
+            // Pencil 手写标记(v0.9.0,M4):按 (docSha, page) 存 PKDrawing 数据;不改动原 PDF
+            try db.create(table: "pencil_ink") { t in
+                t.column("docSha", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("data", .blob).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.primaryKey(["docSha", "page"])
+            }
+        }
         return migrator
     }
 }

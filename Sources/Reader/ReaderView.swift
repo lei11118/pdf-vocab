@@ -21,6 +21,8 @@ struct ReaderView: View {
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
+    /// v0.9.0(M4):标记 / 选词模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
+    @AppStorage("readerMarkMode") private var markMode = false
     @Environment(\.scenePhase) private var scenePhase
     /// 生词本"一键抵达"目标(v0.8.0;来自主页生词本=预览模式,会话内不记忆阅读位置)
     let jumpTarget: VocabJumpTarget?
@@ -75,6 +77,15 @@ struct ReaderView: View {
                     Image(systemName: "text.book.closed")
                 }
                 .accessibilityLabel("生词本")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    markMode.toggle()
+                } label: {
+                    Image(systemName: markMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                        .foregroundStyle(markMode ? Color.accentColor : Color.primary)
+                }
+                .accessibilityLabel(markMode ? "切换到选词模式" : "切换到标记模式")
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -177,8 +188,13 @@ struct ReaderView: View {
                     handle: readerHandle,
                     docSha: doc.sha256,
                     vocabStore: VocabStore(db: store.db),
+                    inkStore: PencilInkStore(db: store.db),
+                    markMode: markMode,
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
+                    onPencilSqueeze: {
+                        markMode.toggle()
+                    },
                     onVocabWordTap: { term in
                         cardContent = .word(term)
                     },

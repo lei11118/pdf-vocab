@@ -49,6 +49,13 @@ final class ReaderCoordinator: NSObject {
     var onVocabJumpPerformed: (() -> Void)?
     private var jumpAnnotations: [(page: PDFPage, annotation: PDFAnnotation)] = []
     private var jumpClearWork: DispatchWorkItem?
+
+    // v0.9.0(M4):Pencil 标记层(按页 PKCanvasView 叠加)+ Pencil Pro 挤压交互
+    var inkStore: PencilInkStore?
+    var onPencilSqueeze: (() -> Void)?
+    var markMode = false
+    private var overlayProvider: PencilOverlayProvider?
+    private var squeezeRef: UIPencilInteraction?
     private var appliedKey: String?
     private var appliedCharCount = 0
     /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
@@ -186,6 +193,7 @@ final class ReaderCoordinator: NSObject {
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
     func prepareForTeardown() {
         onTeardown?()
+        overlayProvider?.flushAll()   // v0.9.0:收尾把未落盘的手写存库
         holdMenuWork?.cancel()
         holdMenuWork = nil
         stopAutoscroll()
@@ -323,6 +331,17 @@ final class ReaderCoordinator: NSObject {
             handle.addGestureRecognizer(pan)
         }
 
+        // v0.9.0(M4):Pencil 标记层(PDFPageOverlayViewProvider 按页叠 PKCanvasView;不改动原 PDF)
+        let provider = PencilOverlayProvider(pdfView: view, docSha: docSha, inkStore: inkStore, markMode: markMode)
+        overlayProvider = provider
+        view.pageOverlayViewProvider = provider
+
+        // Pencil Pro 挤压(iPadOS 17.5+):默认切换标记/选词模式(动作映射设置项留 M4-B 后续)
+        let squeeze = UIPencilInteraction()
+        squeeze.delegate = self
+        view.addGestureRecognizer(squeeze)
+        squeezeRef = squeeze
+
         // 编辑菜单(系统组件)
         menu.onTranslate = { [weak self] text in
             self?.onTranslate?(text)
@@ -344,6 +363,8 @@ final class ReaderCoordinator: NSObject {
         guard let view else { return }
         var disabled = 0
         func walk(_ v: UIView) {
+            // v0.9.0:不动标记画布子树(其内部识别器属于 PencilKit 绘制体系)
+            if v is InkOverlayView { return }
             for gr in v.gestureRecognizers ?? [] {
                 if gr === fingerPressRef || gr === pencilPressRef || gr === tapRef
                     || gr === doubleTapRef || gr === tripleTapRef { continue }
@@ -850,6 +871,26 @@ final class ReaderCoordinator: NSObject {
         vocabStore.removeHighlights(wordId: wordId)
         reloadPermanentHighlights()
         DiagLog.log("vocab: highlights removed 「\(key)」")
+    }
+
+    /// v0.9.0(M4):标记 / 选词模式切换——标记模式下 Pencil 交给画布(Pencil 专属选区手势让位),
+    /// 手指的滚动/缩放/长按选词两种模式都保留;切到标记模式时清掉当前选区。
+    func setMarkMode(_ on: Bool) {
+        guard markMode != on else { return }
+        markMode = on
+        overlayProvider?.setMarkMode(on)
+        pencilPressRef?.isEnabled = !on
+        let types: [NSNumber] = on
+            ? [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            : [NSNumber(value: UITouch.TouchType.direct.rawValue),
+               NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        tapRef?.allowedTouchTypes = types
+        doubleTapRef?.allowedTouchTypes = types
+        tripleTapRef?.allowedTouchTypes = types
+        if on, !selectionText.isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.clearSelection() }
+        }
+        DiagLog.log("pencil: markMode=\(on)")
     }
 
     /// 生词本 → 出处跳转:跳页 + 橙色临时高亮(约 2.5s 自动消失;点空白/清选区也会清掉)。
@@ -1361,5 +1402,17 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         true
+    }
+}
+
+extension ReaderCoordinator: UIPencilInteractionDelegate {
+    /// Pencil Pro 挤压(iPadOS 17.5+):默认映射 = 切换标记/选词模式(v0.9.0;动作映射设置项留 M4-B)。
+    func pencilInteraction(
+        _ interaction: UIPencilInteraction,
+        didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
+    ) {
+        guard squeeze.phase == .began else { return }
+        DiagLog.log("pencil: squeeze → toggle mark mode")
+        onPencilSqueeze?()
     }
 }
