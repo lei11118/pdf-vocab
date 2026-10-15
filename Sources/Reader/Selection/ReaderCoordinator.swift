@@ -922,6 +922,8 @@ final class ReaderCoordinator: NSObject {
         }
         // v0.8.0:拖柄**固定尺寸**(高 32pt = 圆点 14 + 竖线 20)——与页面缩放无关,
         // 放大缩小柄本身不变,只跟随选区位置。
+        let firstView = pdfView.convert(firstLine, from: page)
+        let lastView = pdfView.convert(lastLine, from: page)
         let w = HandleMetrics.handleWidth
         let h = HandleMetrics.handleHeight
         place(startHandle,
