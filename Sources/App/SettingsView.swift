@@ -5,6 +5,8 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage("autoCollectOnSelect") private var autoCollectOnSelect = false
+    @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
+    @AppStorage("pencilHaptics") private var pencilHaptics = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -22,7 +24,15 @@ struct SettingsView: View {
                 } header: {
                     Text("生词本")
                 } footer: {
-                    Text("开启后:选中的单词立即加入生词本并在页面上永久加亮,无需再点「加入生词本」;已掌握的词不会被自动收录。")
+                    Text("开启后:选中的单词立即加入生词本并在页面上永久加亮,无需再点「加入生词本」。")
+                }
+                Section {
+                    Toggle("Pencil 悬停预览", isOn: $pencilHoverPreview)
+                    Toggle("触觉反馈", isOn: $pencilHaptics)
+                } header: {
+                    Text("Pencil")
+                } footer: {
+                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。")
                 }
             }
             .navigationTitle("设置")

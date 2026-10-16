@@ -21,6 +21,13 @@ struct PDFKitView: UIViewRepresentable {
     var docSha: String = ""
     var vocabStore: VocabStore? = nil
     var inkStore: PencilInkStore? = nil
+    /// v0.11.0(M6):OCR 数据层(扫描版取词)
+    var ocrStore: OCRStore? = nil
+    /// v0.11.0(M4-B):悬停预览 / 触觉(设置页开关)
+    var hoverPreviewEnabled: Bool = false
+    var hapticsEnabled: Bool = false
+    var onHoverUpdate: ((String, String, CGPoint) -> Void)? = nil
+    var onHoverEnd: (() -> Void)? = nil
     var markMode: Bool = false
     var jumpTarget: VocabJumpTarget? = nil
     var onVocabJumpPerformed: () -> Void = {}
@@ -40,6 +47,11 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.docSha = docSha
         coordinator.vocabStore = vocabStore
         coordinator.inkStore = inkStore
+        coordinator.ocrStore = ocrStore
+        coordinator.hoverPreviewEnabled = hoverPreviewEnabled
+        coordinator.hapticsEnabled = hapticsEnabled
+        coordinator.onHoverUpdate = onHoverUpdate
+        coordinator.onHoverEnd = onHoverEnd
         coordinator.markMode = markMode
         coordinator.pendingVocabJump = jumpTarget
         coordinator.onVocabJumpPerformed = onVocabJumpPerformed
@@ -75,6 +87,11 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onReadingTick = onReadingTick
         context.coordinator.onTeardown = onTeardown
         context.coordinator.vocabStore = vocabStore
+        context.coordinator.ocrStore = ocrStore
+        context.coordinator.hoverPreviewEnabled = hoverPreviewEnabled
+        context.coordinator.hapticsEnabled = hapticsEnabled
+        context.coordinator.onHoverUpdate = onHoverUpdate
+        context.coordinator.onHoverEnd = onHoverEnd
         context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         context.coordinator.setMarkMode(markMode)
         context.coordinator.onVocabWordTap = onVocabWordTap
