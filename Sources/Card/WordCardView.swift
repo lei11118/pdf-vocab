@@ -6,24 +6,11 @@ enum ReaderCardContent: Equatable {
     case sentence(String, Int)
 }
 
-/// 词卡 ↔ 生词本桥(v0.7.0;v0.8.0 扩展颜色/分组):闭包注入,词卡不直接依赖数据库。
+/// 词卡 ↔ 生词本桥(v0.7.0;v0.10.0 精简——「加入生词本 / 高亮 / 已掌握」交互全部移出词卡,
+/// 统一到编辑栏(Task 2.1)与生词本页;此处只读查询收录状态)。
 struct CardVocabBridge {
-    /// 查询状态(键 = 归一化词元;颜色为 nil 表示无高亮)
-    var query: (String) -> (status: VocabStore.Status?, occurrenceCount: Int, colorName: String?)
-    /// 加入生词本 / 重新收录(键 + 原形)
-    var collect: (String, String) -> VocabStore.Status?
-    /// 标记已掌握(取消加亮)
-    var master: (String) -> VocabStore.Status?
-    /// 已掌握 → 重新收录
-    var reactivate: (String, String) -> VocabStore.Status?
-    /// 设置高亮颜色(键 + 颜色名)
-    var setColor: (String, String) -> Void
-    /// 取消高亮(保留词条与语境)
-    var removeHighlight: (String) -> Void
-    /// 分组(键 → 全部组 + 该词所在组)
-    var groupsInfo: (String) -> (all: [VocabStore.GroupSummary], member: Set<Int64>)
-    /// 切换分组归属(键 + 组 id + 是否加入)
-    var toggleGroup: (String, Int64, Bool) -> Void
+    /// 查询收录状态(键 = 归一化词元)
+    var query: (String) -> (collected: Bool, occurrenceCount: Int)
 }
 
 /// 侧边词卡容器(单词卡 / 整句卡)
@@ -61,11 +48,8 @@ struct WordCardView: View {
 
     @State private var state: LoadState = .loading
     @State private var vocabKey = ""
-    @State private var vocabStatus: VocabStore.Status?
+    @State private var vocabCollected = false
     @State private var vocabCount = 0
-    @State private var vocabColor: String?
-    @State private var vocabGroups: [VocabStore.GroupSummary] = []
-    @State private var vocabMembers: Set<Int64> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -121,135 +105,36 @@ struct WordCardView: View {
         }
         vocabKey = key
         if let vocab {
-            refreshVocabState(vocab)
-            let gi = vocab.groupsInfo(key)
-            vocabGroups = gi.all
-            vocabMembers = gi.member
+            let q = vocab.query(key)
+            vocabCollected = q.collected
+            vocabCount = q.occurrenceCount
         }
     }
 
     // MARK: - 生词本(v0.7.0)
 
+    /// v0.10.0(Task 2.1):词卡只读展示收录状态;「加入生词本 / 高亮 / 分组」在文本编辑栏与生词本页操作。
     @ViewBuilder
     private func vocabBar(_ vocab: CardVocabBridge) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Divider()
-            HStack(spacing: 10) {
-                switch vocabStatus {
-                case .none:
-                    Button {
-                        if let s = vocab.collect(vocabKey, term) {
-                            vocabStatus = s
-                            refreshVocabState(vocab)
-                        }
-                    } label: {
-                        Label("加入生词本", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    Spacer(minLength: 0)
-                case .some(.new):
+            HStack(spacing: 8) {
+                if vocabCollected {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(Color.accentColor)
                     Text("已收录 · \(vocabCount) 处语境")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    groupMenu(vocab)
-                    Button("已掌握") {
-                        if let s = vocab.master(vocabKey) { vocabStatus = s }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                case .some(.mastered):
-                    Image(systemName: "checkmark.circle")
+                } else {
+                    Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
-                    Text("已掌握")
+                    Text("未收录 · 选中后点编辑栏「加入生词本」")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Button("重新收录") {
-                        if let s = vocab.reactivate(vocabKey, term) {
-                            vocabStatus = s
-                            refreshVocabState(vocab)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
-            }
-            if case .some(.new) = vocabStatus {
-                colorRow(vocab)
+                Spacer(minLength: 0)
             }
         }
-    }
-
-    /// 分组选择(v0.8.0;分组的新建/管理在生词本页)
-    @ViewBuilder
-    private func groupMenu(_ vocab: CardVocabBridge) -> some View {
-        Menu {
-            if vocabGroups.isEmpty {
-                Text("暂无分组(在生词本页新建)")
-            } else {
-                ForEach(vocabGroups) { g in
-                    Button {
-                        let member = !vocabMembers.contains(g.id)
-                        vocab.toggleGroup(vocabKey, g.id, member)
-                        if member {
-                            vocabMembers.insert(g.id)
-                        } else {
-                            vocabMembers.remove(g.id)
-                        }
-                    } label: {
-                        Label(g.name, systemImage: vocabMembers.contains(g.id) ? "checkmark.circle.fill" : "circle")
-                    }
-                }
-            }
-        } label: {
-            Image(systemName: "folder")
-        }
-        .controlSize(.small)
-    }
-
-    /// 高亮颜色自选 + 取消高亮(v0.8.0)
-    @ViewBuilder
-    private func colorRow(_ vocab: CardVocabBridge) -> some View {
-        HStack(spacing: 10) {
-            Text("高亮")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            ForEach(VocabStore.highlightColorNames, id: \.self) { name in
-                Button {
-                    vocab.setColor(vocabKey, name)
-                    vocabColor = name
-                } label: {
-                    Circle()
-                        .fill(Color(uiColor: VocabStore.highlightColor(named: name)))
-                        .frame(width: 22, height: 22)
-                        .overlay(
-                            Circle().strokeBorder(
-                                Color.primary.opacity(vocabColor == name ? 0.55 : 0.08),
-                                lineWidth: vocabColor == name ? 2 : 1
-                            )
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
-            Button("取消高亮") {
-                vocab.removeHighlight(vocabKey)
-                vocabColor = nil
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-    }
-
-    private func refreshVocabState(_ vocab: CardVocabBridge) {
-        let q = vocab.query(vocabKey)
-        vocabStatus = q.status
-        vocabCount = q.occurrenceCount
-        vocabColor = q.colorName
     }
 
     @ViewBuilder
@@ -517,7 +402,8 @@ struct CompactCardView: View {
             .accessibilityLabel("关闭")
         }
         .padding(.leading, 16)
-        .padding(.trailing, 26)
+        // v0.10.0:右侧给缩放手柄 44pt 热区腾位置(× 不与热区重叠)
+        .padding(.trailing, 52)
         .task(id: displayText) { await loadTranslation() }
     }
 

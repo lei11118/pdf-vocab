@@ -124,36 +124,13 @@ struct ReaderView: View {
         SpeechService.shared.speak(term, language: SpeechService.usVoice)
     }
 
-    /// v0.7.0:词卡 ↔ 生词本桥(v0.8.0 扩展颜色/分组;加亮用当前选区,走协调器)
+    /// v0.7.0:词卡 ↔ 生词本桥(v0.10.0 精简:只读;收录/高亮统一走编辑栏)
     private var cardVocab: CardVocabBridge {
         let vs = VocabStore(db: store.db)
         return CardVocabBridge(
             query: { key in
-                (status: vs.status(forLemma: key),
-                 occurrenceCount: vs.occurrenceCount(forLemma: key),
-                 colorName: vs.highlightColorName(forLemma: key))
-            },
-            collect: { key, surface in
-                readerHandle.coordinator?.collectWord(key: key, surface: surface)
-            },
-            master: { key in
-                readerHandle.coordinator?.masterWord(key: key)
-            },
-            reactivate: { key, surface in
-                readerHandle.coordinator?.collectWord(key: key, surface: surface)
-            },
-            setColor: { key, name in
-                readerHandle.coordinator?.setHighlightColor(key: key, colorName: name)
-            },
-            removeHighlight: { key in
-                readerHandle.coordinator?.removeWordHighlights(key: key)
-            },
-            groupsInfo: { key in
-                (all: vs.groups(), member: vs.groupIds(forLemma: key))
-            },
-            toggleGroup: { key, groupId, member in
-                guard let wordId = vs.entryId(forLemma: key) else { return }
-                vs.setMembership(wordId: wordId, groupId: groupId, member: member)
+                (collected: vs.entryId(forLemma: key) != nil,
+                 occurrenceCount: vs.occurrenceCount(forLemma: key))
             }
         )
     }
@@ -192,9 +169,6 @@ struct ReaderView: View {
                     markMode: markMode,
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
-                    onPencilSqueeze: {
-                        markMode.toggle()
-                    },
                     onVocabWordTap: { term in
                         cardContent = .word(term)
                     },

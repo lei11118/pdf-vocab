@@ -12,6 +12,12 @@ final class SelectionMenuController: NSObject {
     var targetRectProvider: ((CGPoint) -> CGRect?)?
     /// 「翻译」动作(宿主负责弹系统翻译面板)
     var onTranslate: ((String) -> Void)?
+    /// v0.10.0(Task 2.1):编辑栏「生词本」——加入 / 高亮色 / 取消高亮(宿主实现)
+    var onCollectWord: (() -> Void)?
+    var onHighlight: ((String) -> Void)?
+    var onRemoveHighlight: (() -> Void)?
+    /// 当前选词的收录状态(收录与否 + 现有高亮色),菜单构建时取一次
+    var vocabStateProvider: (() -> (collected: Bool, colorName: String?))?
 
     private(set) var isPresented = false
     private var interaction: UIEditMenuInteraction?
@@ -169,6 +175,41 @@ extension SelectionMenuController: UIEditMenuInteractionDelegate {
             self.presentShare(text: self.currentText(), sourcePoint: configuration.sourcePoint)
         }
 
-        return UIMenu(children: [copy, lookup, translate, webSearch, share])
+        // v0.10.0(Task 2.1):「生词本」子菜单——加入 / 高亮(4 色带勾选)/ 取消高亮
+        let state = vocabStateProvider?() ?? (collected: false, colorName: nil)
+        let collect = UIAction(
+            title: state.collected ? "已收录" : "加入生词本",
+            image: UIImage(systemName: state.collected ? "checkmark.circle" : "plus.circle")
+        ) { [weak self] _ in
+            guard !state.collected else { return }
+            self?.onCollectWord?()
+        }
+        if state.collected { collect.attributes.insert(.disabled) }
+
+        let colorNames: [(String, String)] = [("蓝", "blue"), ("橙", "orange"), ("绿", "green"), ("粉", "pink")]
+        let colorActions: [UIAction] = colorNames.map { pair in
+            let action = UIAction(title: pair.0) { [weak self] _ in
+                self?.onHighlight?(pair.1)
+            }
+            action.state = (state.colorName == pair.1) ? .on : .off
+            return action
+        }
+        let highlightMenu = UIMenu(
+            title: "高亮",
+            image: UIImage(systemName: "highlighter"),
+            children: colorActions
+        )
+        let removeHighlight = UIAction(title: "取消高亮", image: UIImage(systemName: "eraser")) { [weak self] _ in
+            self?.onRemoveHighlight?()
+        }
+        if state.colorName == nil { removeHighlight.attributes.insert(.disabled) }
+
+        let vocabMenu = UIMenu(
+            title: "生词本",
+            image: UIImage(systemName: "text.book.closed"),
+            children: [collect, highlightMenu, removeHighlight]
+        )
+
+        return UIMenu(children: [copy, lookup, translate, vocabMenu, webSearch, share])
     }
 }

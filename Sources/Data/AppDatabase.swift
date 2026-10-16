@@ -96,6 +96,12 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["docSha", "page"])
             }
         }
+        migrator.registerMigration("v6.vocabNote") { db in
+            // 生词备注(v0.10.0,Task 2.2)
+            try db.alter(table: "vocab_word") { t in
+                t.add(column: "note", .text).notNull().defaults(to: "")
+            }
+        }
         return migrator
     }
 }
