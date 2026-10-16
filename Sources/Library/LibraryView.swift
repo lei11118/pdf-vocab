@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// 文档库:导入 PDF、查看列表、进入阅读。
 /// 导入方式:文件选择器(UIKit 文档选择器,asCopy 模式,绕开 iOS 26 fileImporter 问题)。
@@ -85,7 +86,7 @@ struct LibraryView: View {
                 DiagnosticsView()
             }
             .sheet(isPresented: $showSettings) {
-                SettingsView()
+                SettingsView(db: store.db)
             }
             .sheet(isPresented: $showVocab) {
                 VocabListView(store: VocabStore(db: store.db), onJump: { target in
@@ -119,6 +120,10 @@ struct LibraryView: View {
                 Text("同时删除本地副本与阅读进度,且不可撤销。")
             }
             .task { reload() }
+            .onReceive(NotificationCenter.default.publisher(for: .yuewenDataDidRestore)) { _ in
+                // v0.12.0(M7):备份恢复完成后刷新文档列表
+                reload()
+            }
             .onAppear { reload() }
         }
     }

@@ -57,4 +57,40 @@ final class OCRStore: @unchecked Sendable {
         }) ?? nil
         return done == 1
     }
+
+    /// 扫描版搜索(v0.12.0,M7):LIKE 命中词框 → 按行聚合(该行全部词,供片段与跳转高亮)。
+    func searchLines(docSha: String, query: String, limit: Int = 100) -> [(page: Int, words: [OCRWord])] {
+        var out: [(page: Int, words: [OCRWord])] = []
+        try? db.dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT DISTINCT page, line FROM ocr_word
+                    WHERE docSha = ? AND text LIKE ?
+                    ORDER BY page, line LIMIT ?
+                    """,
+                arguments: [docSha, "%\(query)%", limit]
+            )
+            for row in rows {
+                let page: Int = row["page"]
+                let line: Int = row["line"]
+                let words = try Row.fetchAll(
+                    db,
+                    sql: "SELECT text, x, y, w, h FROM ocr_word WHERE docSha = ? AND page = ? AND line = ? ORDER BY idx",
+                    arguments: [docSha, page, line]
+                ).map { wordRow in
+                    OCRWord(
+                        text: wordRow["text"],
+                        x: wordRow["x"],
+                        y: wordRow["y"],
+                        w: wordRow["w"],
+                        h: wordRow["h"],
+                        line: line
+                    )
+                }
+                out.append((page: page, words: words))
+            }
+        }
+        return out
+    }
 }

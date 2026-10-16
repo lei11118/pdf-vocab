@@ -35,6 +35,14 @@ struct ReaderView: View {
     @State private var ocrRunning = false
     @State private var ocrDone = 0
     @State private var ocrTotal = 0
+    /// v0.12.0(M7):夜间模式 / 目录书签 / 全文搜索 / 词频分析 / 批注版导出
+    @AppStorage("readerNightMode") private var nightMode = false
+    @State private var showOutline = false
+    @State private var showSearch = false
+    @State private var showAnalyze = false
+    @State private var exportProgress: String?
+    @State private var exportFailed = false
+    @State private var shareFile: ShareFileItem?
     @Environment(\.scenePhase) private var scenePhase
     /// 生词本"一键抵达"目标(v0.8.0;来自主页生词本=预览模式,会话内不记忆阅读位置)
     let jumpTarget: VocabJumpTarget?
@@ -76,6 +84,40 @@ struct ReaderView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    showSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("全文搜索")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Toggle(isOn: $nightMode) {
+                        Label("夜间模式", systemImage: "moon.fill")
+                    }
+                    Button {
+                        showOutline = true
+                    } label: {
+                        Label("目录与书签", systemImage: "list.bullet.indent")
+                    }
+                    Button {
+                        showAnalyze = true
+                    } label: {
+                        Label("词频分析 · 批量收录", systemImage: "chart.bar.doc.horizontal")
+                    }
+                    Divider()
+                    Button {
+                        exportAnnotatedPDF()
+                    } label: {
+                        Label("导出批注版 PDF(高亮+手写)", systemImage: "square.and.arrow.up.on.square")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("更多")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
@@ -101,13 +143,58 @@ struct ReaderView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView()
+            SettingsView(db: store.db)
         }
         .sheet(isPresented: $showVocab) {
             VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                 showVocab = false
                 readerHandle.coordinator?.jumpToVocab(target: target)
             })
+        }
+        .sheet(isPresented: $showOutline) {
+            if let resolvedURL {
+                ReaderOutlineSheet(
+                    url: resolvedURL,
+                    docSha: doc.sha256,
+                    docTitle: doc.title,
+                    currentPage: currentPage,
+                    bookmarkStore: BookmarkStore(db: store.db),
+                    onJump: { page in
+                        readerHandle.coordinator?.go(toPage: page)
+                        currentPage = page
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showSearch) {
+            if let resolvedURL {
+                ReaderSearchSheet(
+                    url: resolvedURL,
+                    docSha: doc.sha256,
+                    docTitle: doc.title,
+                    ocrStore: OCRStore(db: store.db),
+                    onJump: { target in
+                        readerHandle.coordinator?.jumpToVocab(target: target)
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showAnalyze) {
+            if let resolvedURL {
+                VocabAnalyzeSheet(
+                    url: resolvedURL,
+                    docSha: doc.sha256,
+                    store: VocabStore(db: store.db)
+                )
+            }
+        }
+        .sheet(item: $shareFile) { item in
+            ActivityShareView(items: [item.url])
+        }
+        .alert("导出失败", isPresented: $exportFailed) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("生成批注版 PDF 时出错,请重试。")
         }
         .sheet(isPresented: $showPageJump) {
             PageJumpSheet(
@@ -149,6 +236,14 @@ struct ReaderView: View {
 
     private func reader(for url: URL) -> some View {
         pdfArea
+            .overlay {
+                // v0.12.0(M7):夜间模式(降低纸张亮度;不改动页面内容)
+                if nightMode {
+                    Color.black.opacity(0.52)
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: nightMode)
             .overlay {
                 GeometryReader { geo in
                     if let content = cardContent {
@@ -205,6 +300,30 @@ struct ReaderView: View {
         ocrRunning = false
         readerHandle.coordinator?.ocrDidFinish()
         DiagLog.log("ocr: done")
+    }
+
+    /// v0.12.0(M7):导出批注版 PDF(高亮 + 手写烧录;后台生成 → 分享面板)
+    private func exportAnnotatedPDF() {
+        guard let url = resolvedURL else { return }
+        let sha = doc.sha256
+        let db = store.db
+        exportProgress = "生成批注版 PDF…"
+        Task { @MainActor in
+            let result = await Task.detached(priority: .userInitiated) { () -> URL? in
+                try? AnnotatedPDFExporter.export(
+                    url: url,
+                    docSha: sha,
+                    vocab: VocabStore(db: db),
+                    ink: PencilInkStore(db: db)
+                )
+            }.value
+            exportProgress = nil
+            if let result {
+                shareFile = ShareFileItem(url: result)
+            } else {
+                exportFailed = true
+            }
+        }
     }
 
     private var pdfArea: some View {
@@ -305,16 +424,27 @@ struct ReaderView: View {
             }
         }
         .overlay(alignment: .top) {
-            // v0.11.0(M6):扫描版 OCR 进度
-            if ocrRunning {
-                Text("扫描版文字识别中… \(ocrDone)/\(ocrTotal)")
-                    .font(.caption2)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(.top, 8)
-                    .allowsHitTesting(false)
+            VStack(spacing: 6) {
+                // v0.11.0(M6):扫描版 OCR 进度
+                if ocrRunning {
+                    Text("扫描版文字识别中… \(ocrDone)/\(ocrTotal)")
+                        .font(.caption2)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.regularMaterial, in: Capsule())
+                        .allowsHitTesting(false)
+                }
+                // v0.12.0(M7):批注版导出进度
+                if let exportProgress {
+                    Text(exportProgress)
+                        .font(.caption2)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.regularMaterial, in: Capsule())
+                        .allowsHitTesting(false)
+                }
             }
+            .padding(.top, 8)
         }
         .task(id: doc.sha256) {
             let store = self.store

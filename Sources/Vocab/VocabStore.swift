@@ -304,6 +304,22 @@ struct VocabStore: Sendable {
         }
     }
 
+    /// 批量收录(v0.12.0,M7 词频分析):只建词卡,不携带语境/位置。
+    @discardableResult
+    func collectHeadword(lemma: String, surface: String) -> Int64? {
+        try? db.dbQueue.write { db in
+            if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM vocab_word WHERE lemma = ?", arguments: [lemma]) {
+                return existing
+            }
+            let now = Date()
+            try db.execute(
+                sql: "INSERT INTO vocab_word (lemma, surface, status, createdAt, updatedAt) VALUES (?, ?, 'new', ?, ?)",
+                arguments: [lemma, surface, now, now]
+            )
+            return db.lastInsertedRowID
+        }
+    }
+
     // MARK: - 颜色 / 分组 / 删除(v0.8.0)
 
     static let highlightColorNames = ["blue", "orange", "green", "pink"]
