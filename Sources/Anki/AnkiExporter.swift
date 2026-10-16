@@ -38,6 +38,17 @@ struct AnkiExportOptions {
     var includeScreenshot: Bool = false
 }
 
+/// v0.13.4:导出前自检错误(宁可不产包,也不产 Anki 会拒收的包)。
+enum AnkiExportError: LocalizedError {
+    case invalidCollectionJSON(String)
+    var errorDescription: String? {
+        switch self {
+        case .invalidCollectionJSON(let detail):
+            return "导出数据自检失败:\(detail)"
+        }
+    }
+}
+
 enum AnkiExporter {
 
     static let modelId: Int64 = 1_721_110_001
@@ -97,6 +108,9 @@ enum AnkiExporter {
         let decks = decksJSON(deckId: deckIdV, name: options.deckName, mod: nowMs)
         let conf = confJSON(deckId: deckIdV)
         let dconf = dconfJSON(mod: nowMs)
+        // v0.13.4:导出前自检——按 Anki 新后端「必填字段」口径校验(如 dconf 缺 id 会被整包拒收:
+        // 「decoding deck config: missing field `id`」)。宁可不产包,也不产会被 Anki 拒收的包。
+        try validateCollectionJSON(models: models, decks: decks, dconf: dconf)
         var nextId = nowMs * 100 + 1
         var position = 0
         try queue.write { db in
@@ -263,6 +277,34 @@ enum AnkiExporter {
         return str
     }
 
+    /// v0.13.4:按 Anki 后端的「必填字段」口径自检 col JSON(字段集以 genanki 0.13.1 输出为基准):
+    /// dconf 每条必须含 id/name;decks 每条必须含 id/name;models 每个必须含 id/tmpls/flds。
+    /// 任一缺失 → 抛错(避免产出「Anki 拒收」的包,如 missing field `id`)。
+    static func validateCollectionJSON(models: String, decks: String, dconf: String) throws {
+        func object(_ json: String) -> [String: Any]? {
+            (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+        }
+        guard let modelMap = object(models), let deckMap = object(decks), let configMap = object(dconf) else {
+            throw AnkiExportError.invalidCollectionJSON("col JSON 无法解析")
+        }
+        for (key, value) in configMap {
+            guard let item = value as? [String: Any], item["id"] != nil, item["name"] != nil else {
+                throw AnkiExportError.invalidCollectionJSON("牌组配置 \(key) 缺 id/name(Anki 报错口径:missing field `id`)")
+            }
+        }
+        for (key, value) in deckMap {
+            guard let item = value as? [String: Any], item["id"] != nil, item["name"] != nil else {
+                throw AnkiExportError.invalidCollectionJSON("牌组 \(key) 缺 id/name")
+            }
+        }
+        for (key, value) in modelMap {
+            guard let item = value as? [String: Any],
+                  item["id"] != nil, item["tmpls"] != nil, item["flds"] != nil else {
+                throw AnkiExportError.invalidCollectionJSON("模型 \(key) 缺 id/tmpls/flds")
+            }
+        }
+    }
+
     private static func field(_ name: String, _ ord: Int) -> [String: Any] {
         ["name": name, "ord": ord, "sticky": false, "rtl": false, "font": "Arial", "size": 20, "media": []]
     }
@@ -382,8 +424,10 @@ enum AnkiExporter {
 
     static func decksJSON(deckId: Int64, name: String, mod: Int64) -> String {
         func deck(_ id: Int64, _ deckName: String) -> [String: Any] {
+            // v0.13.4:补 *Today 数组(与 genanki 输出对齐;有默认值,补齐更稳)
             ["id": id, "name": deckName, "mod": mod, "usn": 0, "collapsed": false, "dyn": 0,
-             "desc": "", "browserCollapsed": false, "conf": 1, "extendNew": 10, "extendRev": 50]
+             "desc": "", "browserCollapsed": false, "conf": 1, "extendNew": 10, "extendRev": 50,
+             "lrnToday": [0, 0], "revToday": [0, 0], "newToday": [0, 0], "timeToday": [0, 0]]
         }
         return jsonString(["1": deck(1, "Default"), "\(deckId)": deck(deckId, name)])
     }
@@ -397,11 +441,14 @@ enum AnkiExporter {
     }
 
     static func dconfJSON(mod: Int64) -> String {
+        // ⚠️ v0.13.4 真机实测:Anki 新后端(AnkiMobile / 桌面 2.1.50+,Rust+serde)解码牌组配置时
+        // 把 id/name 视为**必填**——缺 id 会整包拒收:「decoding deck config: missing field `id`」。
+        // 字段口径以 genanki 0.13.1 输出为基准(已用其生成基准包逐键核对)。
         let config: [String: Any] = [
-            "name": "Default", "mod": mod, "usn": 0, "maxTaken": 60, "autoplay": true,
+            "id": 1, "name": "Default", "mod": mod, "usn": 0, "maxTaken": 60, "autoplay": true,
             "timer": 0, "replayq": true,
             "new": ["bury": true, "delays": [1, 10], "initialFactor": 2500,
-                    "ints": [1, 4, 7], "order": 1, "perDay": 20] as [String: Any],
+                    "ints": [1, 4, 7], "order": 1, "perDay": 20, "separate": true] as [String: Any],
             "rev": ["bury": true, "ease4": 1.3, "fuzz": 0.05, "ivlFct": 1,
                     "maxIvl": 36500, "minSpace": 1, "perDay": 200] as [String: Any],
             "lapse": ["delays": [10], "leechAction": 0, "leechFails": 8, "minInt": 1, "mult": 0] as [String: Any],
