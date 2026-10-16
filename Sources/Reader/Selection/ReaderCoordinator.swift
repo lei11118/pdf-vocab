@@ -78,6 +78,11 @@ final class ReaderCoordinator: NSObject {
     private var ocrSelectionActive = false
     private var ocrContextOverride: String?
 
+    /// v0.13.0(P0):已收录词自动加亮(设置开关;按页扫描一次/会话)
+    private var autoHighlightDonePages: Set<Int> = []
+    private var vocabLemmaCache: Set<String> = []
+    private var vocabLemmaCacheTime: CFAbsoluteTime = 0
+
     // MARK: - 手势
 
     private weak var fingerPressRef: UILongPressGestureRecognizer?
@@ -186,6 +191,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
         docScanned = OCRService.isScanned(document: document)
         ocrWordsCache.removeAll()
+        autoHighlightDonePages.removeAll()
         DiagLog.log("ocr: scanned=\(docScanned)")
         suppressNativeSelection(in: pdfView)
         observeScrolling()
@@ -207,6 +213,7 @@ final class ReaderCoordinator: NSObject {
             applyReadingState(state)
         }
         reloadPermanentHighlights()
+        autoHighlightCurrentPage()
     }
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
@@ -232,6 +239,7 @@ final class ReaderCoordinator: NSObject {
         jumpGuardUntil = 0
         docScanned = pdfView.document.map { OCRService.isScanned(document: $0) } ?? false
         ocrWordsCache.removeAll()
+        autoHighlightDonePages.removeAll()
         let index = pdfView.document.flatMap { doc in pdfView.currentPage.map { doc.index(for: $0) } } ?? 0
         lastGoodPage = (index, CFAbsoluteTimeGetCurrent())
         stopAutoscroll()
@@ -269,6 +277,7 @@ final class ReaderCoordinator: NSObject {
         refreshHandles()
         onPageChanged(index)
         fireReadingTick()
+        autoHighlightCurrentPage()
     }
 
     private func selectionDidChange() {
@@ -1245,6 +1254,12 @@ final class ReaderCoordinator: NSObject {
             let key = VocabStore.normalizedKey(term)
             if let wordId = vocabStore.entryId(forLemma: key) {
                 vocabStore.addOccurrence(wordId: wordId, docSha: docSha, page: page, context: context)
+                // v0.13.0:已收录词再次选中 → 在新位置补永久高亮(重复位置自动去重)
+                let colorName = vocabStore.highlightColorName(forLemma: key) ?? "blue"
+                vocabStore.addHighlight(wordId: wordId, docSha: docSha, page: page, rectsJSON: rectsJSON, colorName: colorName)
+                DispatchQueue.main.async {
+                    self?.reloadPermanentHighlights()
+                }
             } else if autoCollect {
                 vocabStore.collectWord(
                     lemma: key,
@@ -1258,6 +1273,68 @@ final class ReaderCoordinator: NSObject {
                     self?.reloadPermanentHighlights()
                 }
             }
+        }
+    }
+
+    // MARK: - 已收录词自动加亮(v0.13.0,P0;设置开关,按页扫描一次)
+
+    /// 扫描当前页文本,把命中的「已收录词」补成永久高亮(页坐标;每页每会话一次)。
+    func autoHighlightCurrentPage() {
+        guard UserDefaults.standard.bool(forKey: "autoHighlightCollected"),
+              let pdfView, let vocabStore, !docSha.isEmpty,
+              let page = pdfView.currentPage,
+              let pageIndex = pdfView.document?.index(for: page),
+              !autoHighlightDonePages.contains(pageIndex) else { return }
+        autoHighlightDonePages.insert(pageIndex)
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - vocabLemmaCacheTime > 5 {
+            vocabLemmaCache = vocabStore.allLemmas()
+            vocabLemmaCacheTime = now
+        }
+        guard !vocabLemmaCache.isEmpty else { return }
+        guard let text = page.string, !text.isEmpty else { return }
+        let ns = text as NSString
+        let regex = try? NSRegularExpression(pattern: "[A-Za-z][A-Za-z'’-]*")
+        let matches = regex?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? []
+        var hits: [(lemma: String, range: NSRange)] = []
+        var seen = Set<String>()
+        for match in matches {
+            let token = ns.substring(with: match.range).lowercased()
+            guard vocabLemmaCache.contains(token), !seen.contains(token) else { continue }
+            seen.insert(token)
+            hits.append((token, match.range))
+            if hits.count >= 40 { break }
+        }
+        guard !hits.isEmpty else { return }
+        let pageBounds = page.bounds(for: pdfView.displayBox)
+        var added = 0
+        for hit in hits {
+            guard let wordId = vocabStore.entryId(forLemma: hit.lemma),
+                  let selection = page.selection(for: hit.range) else { continue }
+            let rawRects = selection.selectionsByLine().prefix(4).map { $0.bounds(for: page) }
+            let rects = rawRects.filter {
+                SelectionGeometry.isValid($0) && $0.intersects(pageBounds.insetBy(dx: -24, dy: -24))
+            }
+            guard !rects.isEmpty else { continue }
+            // 圆整到 0.01pt,保证重复扫描时 JSON 完全一致(去重命中)
+            let rounded = rects.map { rect in
+                CGRect(
+                    x: (rect.minX * 100).rounded() / 100,
+                    y: (rect.minY * 100).rounded() / 100,
+                    width: (rect.width * 100).rounded() / 100,
+                    height: (rect.height * 100).rounded() / 100
+                )
+            }
+            let colorName = vocabStore.highlightColorName(forLemma: hit.lemma) ?? "blue"
+            vocabStore.addHighlight(
+                wordId: wordId, docSha: docSha, page: pageIndex,
+                rectsJSON: VocabStore.rectsToJSON(rounded), colorName: colorName
+            )
+            added += 1
+        }
+        if added > 0 {
+            reloadPermanentHighlights()
+            DiagLog.log("autohl: page \(pageIndex) +\(added) words")
         }
     }
 

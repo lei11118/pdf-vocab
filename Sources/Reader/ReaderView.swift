@@ -149,7 +149,7 @@ struct ReaderView: View {
             VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                 showVocab = false
                 readerHandle.coordinator?.jumpToVocab(target: target)
-            })
+            }, docStore: store)
         }
         .sheet(isPresented: $showOutline) {
             if let resolvedURL {
@@ -230,7 +230,9 @@ struct ReaderView: View {
             query: { key in
                 (collected: vs.entryId(forLemma: key) != nil,
                  occurrenceCount: vs.occurrenceCount(forLemma: key))
-            }
+            },
+            excludedSenses: { key in vs.excludedSenseIndices(forLemma: key) },
+            setSense: { key, idx, keep in vs.setSenseSelection(forLemma: key, idx: idx, keep: keep) }
         )
     }
 
@@ -255,7 +257,11 @@ struct ReaderView: View {
                                 cardContent = .word(word)
                                 autoSpeak(word)
                             },
-                            vocab: cardVocab
+                            vocab: cardVocab,
+                            onTranslate: { text in
+                                translateText = text
+                                showTranslate = true
+                            }
                         )
                     }
                     // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)

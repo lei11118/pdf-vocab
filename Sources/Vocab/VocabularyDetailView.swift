@@ -15,8 +15,21 @@ struct VocabularyDetailView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // 复用词卡内容(音标 / 美英发音 / 考试标签 / 中英释义)——vocab 传 nil,保持纯查词视图
-                WordCardPanel(content: .word(word.lemma), onClose: { dismiss() }, onSelectWord: { _ in }, vocab: nil)
+                // 复用词卡内容(音标 / 美英发音 / 考试标签 / 中英释义);v0.13.0:提供义项勾选桥
+                let vs = store
+                WordCardPanel(
+                    content: .word(word.lemma),
+                    onClose: { dismiss() },
+                    onSelectWord: { _ in },
+                    vocab: CardVocabBridge(
+                        query: { key in
+                            (collected: vs.entryId(forLemma: key) != nil,
+                             occurrenceCount: vs.occurrenceCount(forLemma: key))
+                        },
+                        excludedSenses: { key in vs.excludedSenseIndices(forLemma: key) },
+                        setSense: { key, idx, keep in vs.setSenseSelection(forLemma: key, idx: idx, keep: keep) }
+                    )
+                )
                 Divider()
                 VStack(alignment: .leading, spacing: 10) {
                     Text("备注")

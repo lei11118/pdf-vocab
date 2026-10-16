@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage("autoCollectOnSelect") private var autoCollectOnSelect = false
+    @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +20,9 @@ struct SettingsView: View {
     @State private var pendingRestoreURL: URL?
     @State private var showConfirmRestore = false
     @State private var restoreMessage: String?
+    @State private var showStarDictPicker = false
+    @State private var dictImporting = false
+    @State private var userDictName: String?
 
     var body: some View {
         NavigationStack {
@@ -32,6 +36,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)
+                    Toggle("已收录词自动加亮(打开页面时扫描)", isOn: $autoHighlightCollected)
                 } header: {
                     Text("生词本")
                 } footer: {
@@ -62,6 +67,26 @@ struct SettingsView: View {
                     Text("数据(仅存本机)")
                 } footer: {
                     Text("⚠️ 所有数据只保存在本机——删除 App 会全部丢失。请定期「导出全部数据」并通过「文件」App 保存到别处;重装或换机后可在同一入口恢复(会覆盖当前数据)。")
+                }
+                Section {
+                    Button {
+                        showStarDictPicker = true
+                    } label: {
+                        Label(dictImporting ? "正在导入词典…" : "导入 StarDict 词典", systemImage: "character.book.closed")
+                    }
+                    .disabled(dictImporting)
+                    if userDictName != nil {
+                        Button(role: .destructive) {
+                            removeUserDictionary()
+                        } label: {
+                            Label("移除用户词典", systemImage: "trash")
+                        }
+                        .disabled(dictImporting)
+                    }
+                } header: {
+                    Text("词典")
+                } footer: {
+                    Text(userDictName.map { "当前用户词典:\($0)(查词时优先命中)。" } ?? "支持 StarDict 三件套(.ifo/.idx/.dict 或 .dict.dz,可多选一起选),或打包成 .zip 直接选;导入后离线可用,查词优先命中用户词典。")
                 }
             }
             .navigationTitle("设置")
@@ -95,7 +120,45 @@ struct SettingsView: View {
             } message: {
                 Text(restoreMessage ?? "")
             }
+            .sheet(isPresented: $showStarDictPicker) {
+                StarDictPicker { urls in
+                    importStarDict(urls)
+                }
+            }
+            .onAppear {
+                userDictName = DictionaryStore.shared.userDictionaryName()
+            }
         }
+    }
+
+    // MARK: - StarDict 词典导入(v0.13.0)
+
+    private func importStarDict(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        dictImporting = true
+        Task { @MainActor in
+            let result: String? = await Task.detached(priority: .userInitiated) { () -> String? in
+                do {
+                    let imported = try StarDictImporter.importDictionary(pickedFiles: urls) { _ in }
+                    DictionaryStore.shared.reloadUserDictionary()
+                    return "已导入词典「\(imported.bookName)」,共 \(imported.entryCount) 条。"
+                } catch {
+                    return "词典导入失败:\(error.localizedDescription)"
+                }
+            }.value
+            dictImporting = false
+            userDictName = DictionaryStore.shared.userDictionaryName()
+            restoreMessage = result
+        }
+    }
+
+    private func removeUserDictionary() {
+        if let url = try? DictionaryStore.userDatabaseURL() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        DictionaryStore.shared.reloadUserDictionary()
+        userDictName = nil
+        restoreMessage = "已移除用户词典。"
     }
 
     // MARK: - 备份 / 恢复(v0.12.0,M7)

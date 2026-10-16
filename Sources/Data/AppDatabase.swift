@@ -161,6 +161,15 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["docSha", "page"])
             }
         }
+        migrator.registerMigration("v9.vocabSense") { db in
+            // 义项勾选(v0.13.0):只存「被排除」的义项
+            try db.create(table: "vocab_sense") { t in
+                t.column("wordId", .integer).notNull().references("vocab_word", onDelete: .cascade)
+                t.column("idx", .integer).notNull()
+                t.column("selected", .integer).notNull().defaults(to: 1)
+                t.primaryKey(["wordId", "idx"])
+            }
+        }
         return migrator
     }
 }

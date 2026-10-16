@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// 词条(ECDICT 精简库)
+/// 词条(内置 ECDICT 精简库 / 用户导入词典)
 struct DictEntry: Equatable {
     var word: String
     var phonetic: String?
@@ -15,32 +15,70 @@ struct DictEntry: Equatable {
     var frq: Int
 }
 
-/// 内置精简词库(ECDICT;CI 生成、只读打开)。
+/// 词典访问(v0.13.0):内置精简 ECDICT + **用户导入的 StarDict 词典**(userdict.sqlite,查词时优先命中)。
 final class DictionaryStore: @unchecked Sendable {
     static let shared = DictionaryStore()
 
-    private let dbQueue: DatabaseQueue?
+    private var builtinQueue: DatabaseQueue?
+    private var userQueue: DatabaseQueue?
 
-    var isAvailable: Bool { dbQueue != nil }
+    var isAvailable: Bool { builtinQueue != nil || userQueue != nil }
+    var hasUserDictionary: Bool { userQueue != nil }
 
     private init() {
-        guard let url = Bundle.main.url(forResource: "ecdict", withExtension: "sqlite") else {
-            dbQueue = nil
+        if let url = Bundle.main.url(forResource: "ecdict", withExtension: "sqlite") {
+            var config = Configuration()
+            config.readonly = true
+            builtinQueue = try? DatabaseQueue(path: url.path, configuration: config)
+            DiagLog.log("dict: 内置词库已加载 \(url.lastPathComponent)")
+        } else {
             DiagLog.log("dict: 内置词库缺失(此构建未包含)")
-            return
         }
-        var config = Configuration()
-        config.readonly = true
-        dbQueue = try? DatabaseQueue(path: url.path, configuration: config)
-        DiagLog.log("dict: 词库已加载 \(url.lastPathComponent)")
+        loadUserDictionary()
     }
 
-    /// 按词头直查。
+    // MARK: - 用户词典(v0.13.0,StarDict 导入)
+
+    static func userDatabaseURL() throws -> URL {
+        let fm = FileManager.default
+        let dir = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return dir.appendingPathComponent("userdict.sqlite")
+    }
+
+    private func loadUserDictionary() {
+        userQueue = nil
+        guard let url = try? Self.userDatabaseURL(),
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        var config = Configuration()
+        config.readonly = true
+        userQueue = try? DatabaseQueue(path: url.path, configuration: config)
+        DiagLog.log("dict: 用户词典已加载 \(userDictionaryName() ?? "?")")
+    }
+
+    /// 导入 / 移除后刷新。
+    func reloadUserDictionary() {
+        loadUserDictionary()
+    }
+
+    func userDictionaryName() -> String? {
+        guard let userQueue else { return nil }
+        return (try? userQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = 'bookname'")
+        }) ?? nil
+    }
+
+    // MARK: - 查询(用户词典优先)
+
     func entry(for word: String) -> DictEntry? {
-        guard let dbQueue else { return nil }
         let key = word.lowercased()
+        if let userQueue, let entry = queryEntry(in: userQueue, key: key) { return entry }
+        return queryEntry(in: builtinQueue, key: key)
+    }
+
+    private func queryEntry(in queue: DatabaseQueue?, key: String) -> DictEntry? {
+        guard let queue else { return nil }
         do {
-            return try dbQueue.read { db in
+            return try queue.read { db in
                 guard let row = try Row.fetchOne(db, sql: "SELECT * FROM dict WHERE word = ?", arguments: [key]) else {
                     return nil
                 }
@@ -52,17 +90,17 @@ final class DictionaryStore: @unchecked Sendable {
         }
     }
 
-    /// 词形 → 词头(went → go、running → run 等,来自 exchange 展开)。
+    /// 词形 → 词头(用户词典优先;用户词典通常无词形表,自动跳内置)。
     func headword(forForm form: String) -> String? {
-        guard let dbQueue else { return nil }
         let key = form.lowercased()
-        do {
-            return try dbQueue.read { db in
+        for queue in [userQueue, builtinQueue] {
+            guard let queue else { continue }
+            let head = (try? queue.read { db in
                 try String.fetchOne(db, sql: "SELECT word FROM form WHERE form = ?", arguments: [key])
-            }
-        } catch {
-            return nil
+            }) ?? nil
+            if let head { return head }
         }
+        return nil
     }
 
     private static func entry(from row: Row) -> DictEntry {
