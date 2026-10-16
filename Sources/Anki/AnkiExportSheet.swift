@@ -1,14 +1,23 @@
 import SwiftUI
 import UIKit
 
-/// M5(v0.11.0):「导出到 Anki」面板——.apkg(genanki 同款)主路径 + CSV/TSV 兜底;系统分享面板导出。
+/// M5(v0.11.0)/ v0.13.0 增强:「导出到 Anki」面板 —— 基础卡 + 反向卡 + 挖空卡 + 页面截图 + 字段勾选;CSV 兜底。
 struct AnkiExportSheet: View {
     let store: VocabStore
     let words: [VocabStore.WordSummary]
+    var docStore: DocumentStore? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var deckName = "跃文"
     @State private var includeAudio = true
+    @State private var includeReverse = false
+    @State private var includeCloze = false
+    @State private var includeScreenshot = false
+    @State private var showPhonetic = true
+    @State private var showDefinition = true
+    @State private var showContext = true
+    @State private var showSource = true
+    @State private var showNote = true
     @State private var running = false
     @State private var progressText = ""
     @State private var shareItem: ShareItem?
@@ -29,7 +38,27 @@ struct AnkiExportSheet: View {
                 } header: {
                     Text("Anki 导出")
                 } footer: {
-                    Text("把当前列表的 \(words.count) 个单词导出为 .apkg 词卡组。字段:单词 / 音标 / 中文释义 / 英文释义 / 例句 / 出处 / 备注 / 发音。重复导出同一单词,Anki 导入时更新而非重复。音频为系统 TTS 离线合成,每词约 1 秒。")
+                    Text("把当前列表的 \(words.count) 个单词导出为 .apkg 词卡组。重复导出同一单词,Anki 导入时更新而非重复。音频为系统 TTS 离线合成,每词约 1 秒。")
+                }
+                Section {
+                    Toggle("附加反向卡(释义 → 单词)", isOn: $includeReverse)
+                    Toggle("生成挖空卡(例句填空)", isOn: $includeCloze)
+                    Toggle("附带页面截图(原文高亮处)", isOn: $includeScreenshot)
+                } header: {
+                    Text("增强")
+                } footer: {
+                    Text("反向卡:看中文释义/例句回想单词;挖空卡:把例句中的目标词挖空成填空题(需该词已有例句;重复导出会保留已生成的挖空卡);页面截图:把该词在 PDF 中出现的原文截图片放入卡片背面(需收录时带出处)。")
+                }
+                Section {
+                    Toggle("音标", isOn: $showPhonetic)
+                    Toggle("英文释义", isOn: $showDefinition)
+                    Toggle("例句", isOn: $showContext)
+                    Toggle("出处", isOn: $showSource)
+                    Toggle("备注", isOn: $showNote)
+                } header: {
+                    Text("字段")
+                } footer: {
+                    Text("取消勾选的字段导出时留空;「单词」与「中文释义」总会导出(中文释义按词卡的义项勾选过滤)。")
                 }
                 Section {
                     Button {
@@ -85,36 +114,67 @@ struct AnkiExportSheet: View {
         savedDeckName = deckName
         let deck = deckName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "跃文" : deckName
         let includeAudioV = includeAudio
+        let includeReverseV = includeReverse
+        let includeClozeV = includeCloze
+        let includeScreenshotV = includeScreenshot
+        let showPhoneticV = showPhonetic
+        let showDefinitionV = showDefinition
+        let showContextV = showContext
+        let showSourceV = showSource
+        let showNoteV = showNote
         let list = words
         let db = store.db
+        let docStoreV = docStore
         progressText = "准备词条…"
         do {
             let url = try await Task.detached(priority: .userInitiated) { () async throws -> URL in
                 let vs = VocabStore(db: db)
                 var notes: [AnkiNoteData] = []
+                var pdfURLs: [String: URL?] = [:]
                 for (i, w) in list.enumerated() {
                     var phonetic = "", translation = "", definition = ""
                     if case .found(let entry) = DictionaryService.lookup(w.lemma) {
-                        phonetic = entry.phonetic ?? ""
-                        translation = Self.htmlize(entry.translation ?? "")
-                        definition = Self.htmlize(entry.definition ?? "")
+                        phonetic = showPhoneticV ? (entry.phonetic ?? "") : ""
+                        translation = Self.filteredTranslation(
+                            entry.translation ?? "",
+                            excluded: vs.excludedSenseIndices(forLemma: w.lemma)
+                        )
+                        definition = showDefinitionV ? Self.htmlize(entry.definition ?? "") : ""
                     }
                     let occ = vs.occurrences(forLemma: w.lemma).first
-                    let context = Self.htmlize(occ?.context ?? "")
-                    let source = occ.map { "\($0.docTitle) · 第 \($0.page + 1) 页" } ?? ""
-                    let note = Self.htmlize(vs.note(forLemma: w.lemma))
+                    let context = showContextV ? Self.htmlize(occ?.context ?? "") : ""
+                    let source = showSourceV ? (occ.map { "\($0.docTitle) · 第 \($0.page + 1) 页" } ?? "") : ""
+                    let note = showNoteV ? Self.htmlize(vs.note(forLemma: w.lemma)) : ""
                     let memberIds = vs.groupIds(forLemma: w.lemma)
                     let tagNames = vs.groups().filter { memberIds.contains($0.id) }.map { $0.name }
-                    var audioURL: URL?
+
+                    var media: [NoteMedia] = []
                     var audioName: String?
-                    if includeAudioV {
-                        if let au = await AnkiAudio.audioFile(forKey: w.lemma, term: w.surface) {
-                            audioURL = au
-                            audioName = au.lastPathComponent
-                        }
-                        let done = i + 1
-                        await MainActor.run {
-                            progressText = "生成音频 \(done)/\(list.count)…"
+                    if includeAudioV, let audioURL = await AnkiAudio.audioFile(forKey: w.lemma, term: w.surface) {
+                        audioName = audioURL.lastPathComponent
+                        media.append(NoteMedia(url: audioURL, name: audioURL.lastPathComponent))
+                    }
+                    var shotName: String?
+                    if includeScreenshotV, let docStoreV, let sha = w.sourceDocSha, let page = w.sourcePage {
+                        let pdfURL: URL? = {
+                            if let cached = pdfURLs[sha] { return cached }
+                            let resolved: URL? = {
+                                guard let rec = try? docStoreV.document(sha256: sha),
+                                      let u = try? docStoreV.pdfURL(for: rec) else { return nil }
+                                return u
+                            }()
+                            pdfURLs[sha] = resolved
+                            return resolved
+                        }()
+                        let rects = w.sourceRectsJSON.map { VocabStore.rectsFromJSON($0) } ?? []
+                        if let pdfURL, let png = AnkiExporter.pageScreenshot(pdfURL: pdfURL, pageIndex: page, rects: rects) {
+                            let name = "pv_shot_\(w.lemma).png"
+                            let tmp = FileManager.default.temporaryDirectory
+                                .appendingPathComponent("anki-shot-\(UUID().uuidString).png")
+                            if (try? png.write(to: tmp)) != nil {
+                                shotName = name
+                                media.append(NoteMedia(url: tmp, name: name))
+                            }
                         }
                     }
                     notes.append(AnkiNoteData(
@@ -127,14 +187,23 @@ struct AnkiExportSheet: View {
                         source: source,
                         note: note,
                         tags: tagNames,
-                        audioFileName: audioName,
-                        audioURL: audioURL
+                        audioName: audioName,
+                        shotName: shotName,
+                        media: media
                     ))
+                    let done = i + 1
+                    await MainActor.run { progressText = "准备词条 \(done)/\(list.count)…" }
                 }
                 await MainActor.run { progressText = "打包 .apkg…" }
                 return try AnkiExporter.makeApkg(
                     notes: notes,
-                    options: AnkiExportOptions(deckName: deck, includeAudio: includeAudioV)
+                    options: AnkiExportOptions(
+                        deckName: deck,
+                        includeAudio: includeAudioV,
+                        includeReverse: includeReverseV,
+                        includeCloze: includeClozeV,
+                        includeScreenshot: includeScreenshotV
+                    )
                 )
             }.value
             shareItem = ShareItem(url: url)
@@ -199,6 +268,14 @@ struct AnkiExportSheet: View {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\n", with: "<br>")
+    }
+
+    /// 按义项勾选过滤译文行(v0.13.0),再转 HTML。
+    private static func filteredTranslation(_ raw: String, excluded: Set<Int>) -> String {
+        guard !excluded.isEmpty else { return htmlize(raw) }
+        let lines = raw.components(separatedBy: "\n")
+        let kept = lines.enumerated().filter { !excluded.contains($0.offset) }.map { $0.element }
+        return htmlize(kept.joined(separator: "\n"))
     }
 }
 

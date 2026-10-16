@@ -95,7 +95,7 @@ struct LibraryView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         readerJump = target
                     }
-                })
+                }, docStore: store)
             }
             .overlay {
                 if let importingLabel {

@@ -304,6 +304,58 @@ struct VocabStore: Sendable {
         }
     }
 
+    /// 全部词元(v0.13.0;自动加亮扫描用)。
+    func allLemmas() -> Set<String> {
+        (try? db.dbQueue.read { db in
+            try Set(String.fetchAll(db, sql: "SELECT lemma FROM vocab_word"))
+        }) ?? []
+    }
+
+    /// 追加高亮(v0.13.0:自动加亮 / 已收录词再选中补亮;同 (词,文档,页,矩形) 自动去重)。
+    func addHighlight(wordId: Int64, docSha: String, page: Int, rectsJSON: String, colorName: String) {
+        guard rectsJSON != "[]" else { return }
+        try? db.dbQueue.write { db in
+            let same = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM vocab_highlight WHERE wordId = ? AND docSha = ? AND page = ? AND rects = ?",
+                arguments: [wordId, docSha, page, rectsJSON]
+            ) ?? 0
+            guard same == 0 else { return }
+            try db.execute(
+                sql: "INSERT INTO vocab_highlight (wordId, docSha, page, rects, color, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+                arguments: [wordId, docSha, page, rectsJSON, colorName, Date()]
+            )
+        }
+    }
+
+    // MARK: - 义项勾选(v0.13.0)
+
+    /// 被排除的义项序号(未记录 = 默认保留)。
+    func excludedSenseIndices(forLemma lemma: String) -> Set<Int> {
+        (try? db.dbQueue.read { db in
+            try Set(Int.fetchAll(
+                db,
+                sql: "SELECT idx FROM vocab_sense WHERE wordId = (SELECT id FROM vocab_word WHERE lemma = ?) AND selected = 0",
+                arguments: [lemma]
+            ))
+        }) ?? []
+    }
+
+    /// 设置义项是否保留(保留 = 清记录;排除 = 落库;卡片与 Anki 导出据此过滤)。
+    func setSenseSelection(forLemma lemma: String, idx: Int, keep: Bool) {
+        try? db.dbQueue.write { db in
+            guard let wordId = try Int64.fetchOne(db, sql: "SELECT id FROM vocab_word WHERE lemma = ?", arguments: [lemma]) else { return }
+            if keep {
+                try db.execute(sql: "DELETE FROM vocab_sense WHERE wordId = ? AND idx = ?", arguments: [wordId, idx])
+            } else {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO vocab_sense (wordId, idx, selected) VALUES (?, ?, 0)",
+                    arguments: [wordId, idx]
+                )
+            }
+        }
+    }
+
     /// 批量收录(v0.12.0,M7 词频分析):只建词卡,不携带语境/位置。
     @discardableResult
     func collectHeadword(lemma: String, surface: String) -> Int64? {

@@ -11,6 +11,10 @@ enum ReaderCardContent: Equatable {
 struct CardVocabBridge {
     /// 查询收录状态(键 = 归一化词元)
     var query: (String) -> (collected: Bool, occurrenceCount: Int)
+    /// v0.13.0:义项勾选 —— 返回被排除的义项序号集合(译文按行分义项)
+    var excludedSenses: ((String) -> Set<Int>)? = nil
+    /// v0.13.0:切换义项勾选(key + 行号 + 是否保留);「卡片只保留需要的义项」
+    var setSense: ((String, Int, Bool) -> Void)? = nil
 }
 
 /// 侧边词卡容器(单词卡 / 整句卡)
@@ -19,6 +23,8 @@ struct WordCardPanel: View {
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
+    /// v0.13.0:整句卡「翻译」
+    var onTranslate: ((String) -> Void)? = nil
 
     var body: some View {
         Group {
@@ -26,7 +32,7 @@ struct WordCardPanel: View {
             case .word(let term):
                 WordCardView(term: term, onClose: onClose, vocab: vocab)
             case .sentence(let text, let count):
-                SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord)
+                SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord, onTranslate: onTranslate)
             }
         }
     }
@@ -50,6 +56,7 @@ struct WordCardView: View {
     @State private var vocabKey = ""
     @State private var vocabCollected = false
     @State private var vocabCount = 0
+    @State private var excludedSenses: Set<Int> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -108,6 +115,7 @@ struct WordCardView: View {
             let q = vocab.query(key)
             vocabCollected = q.collected
             vocabCount = q.occurrenceCount
+            excludedSenses = vocab.excludedSenses?(key) ?? []
         }
     }
 
@@ -189,7 +197,42 @@ struct WordCardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if let translation = entry.translation, !translation.isEmpty {
-                        definitionSection(title: "释义", content: translation)
+                        // v0.13.0:义项勾选 —— 已收录词可逐条勾选保留(卡片只保留需要的义项;导出同步过滤)
+                        let canEditSenses = vocabCollected && (vocab?.setSense != nil)
+                        if canEditSenses {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("释义(勾选保留;取消的义项不出现在卡片与导出)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                let senseLines = translation.components(separatedBy: "\n")
+                                ForEach(Array(senseLines.enumerated()), id: \.offset) { index, line in
+                                    let kept = !excludedSenses.contains(index)
+                                    Button {
+                                        guard let setSense = vocab?.setSense else { return }
+                                        setSense(vocabKey, index, !kept)
+                                        if kept {
+                                            excludedSenses.insert(index)
+                                        } else {
+                                            excludedSenses.remove(index)
+                                        }
+                                    } label: {
+                                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                            Image(systemName: kept ? "checkmark.circle.fill" : "circle")
+                                                .font(.footnote)
+                                                .foregroundStyle(kept ? Color.accentColor : Color.secondary)
+                                            Text(line.isEmpty ? " " : line)
+                                                .font(.callout)
+                                                .foregroundStyle(kept ? .primary : .tertiary)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        } else {
+                            definitionSection(title: "释义", content: translation)
+                        }
                     }
                     if let definition = entry.definition, !definition.isEmpty {
                         definitionSection(title: "英文释义", content: definition, secondary: true)
@@ -239,6 +282,8 @@ struct SentenceCardView: View {
     let wordCount: Int
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
+    /// v0.13.0:整句翻译(透传自阅读页,弹系统翻译面板)
+    var onTranslate: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -246,6 +291,15 @@ struct SentenceCardView: View {
                 Text("整句 · \(wordCount) 个词")
                     .font(.headline)
                 Spacer()
+                if let onTranslate {
+                    Button {
+                        onTranslate(text)
+                    } label: {
+                        Label("翻译", systemImage: "character.book.closed")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 closeButton(onClose)
             }
 

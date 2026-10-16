@@ -9,6 +9,8 @@ struct VocabListView: View {
     let store: VocabStore
     var scopeDocSha: String? = nil
     var onJump: ((VocabJumpTarget) -> Void)? = nil
+    /// v0.13.0:导出时若提供,可生成「页面截图」媒体
+    var docStore: DocumentStore? = nil
 
     enum Filter: Equatable {
         case all
@@ -107,7 +109,7 @@ struct VocabListView: View {
                 VocabularyDetailView(store: store, word: word, onJump: onJump)
             }
             .sheet(isPresented: $showExport) {
-                AnkiExportSheet(store: store, words: words)
+                AnkiExportSheet(store: store, words: words, docStore: docStore)
             }
             .safeAreaInset(edge: .bottom) {
                 if isSelecting {
