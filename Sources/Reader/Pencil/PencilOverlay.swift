@@ -6,7 +6,8 @@ import PDFKit
 /// - `PencilOverlayProvider` 经 `PDFView.pageOverlayViewProvider` 为**每一页**叠加一个画布容器;
 /// - 画布为 `PKCanvasView`(`drawingPolicy = .pencilOnly`),只接受 Pencil;
 /// - **选词模式**:容器 `hitTest` 一律返回 nil → 触摸(手指与 Pencil)全部穿透给 PDFView,选区逻辑原样;
-/// - **标记模式**:容器只接 `touch.type == .pencil`(手指仍穿透,滚动/缩放/长按选词不受影响);
+/// - **标记模式**:容器一律接管命中(返回画布;v0.13.3 起不再按触摸类型过滤——手指行为
+///   由祖先手势与 `drawingPolicy` 保证);
 /// - 手写数据按 (docSha, page) 存 SQLite(`pencil_ink`),**不改动原 PDF**;停笔 0.8s 防抖落盘。
 ///
 /// 坐标约定:画布尺寸 = 该页 PDF 尺寸(页坐标 pt)。PDFView 会把叠加层随缩放一起变换,
@@ -42,6 +43,11 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
+            // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak overlay] in
+                guard let overlay, let host = overlay.superview else { return }
+                host.bringSubviewToFront(overlay)
+            }
         }
         return overlay
     }
@@ -77,6 +83,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private var loaded = false
     private var saveWork: DispatchWorkItem?
     private var lastLoggedSize = CGSize.zero
+    /// v0.13.3:命中诊断日志节流(1s 一次)
+    private var lastHitLog: CFAbsoluteTime = 0
 
     init(pageIndex: Int, docSha: String, inkStore: PencilInkStore?, markMode: Bool) {
         self.pageIndex = pageIndex
@@ -91,6 +99,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.delegate = self
+        // v0.13.3:①保证任何时候都有笔(不依赖工具面板是否已同步过状态);
+        // ②绘制手势显式只收 Pencil(公开属性,drawingPolicy 之外的第二道闸)。
+        canvas.tool = PKInkingTool(.pen, color: .black, width: 2.5)
+        canvas.drawingGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         canvas.translatesAutoresizingMaskIntoConstraints = false
         addSubview(canvas)
         NSLayoutConstraint.activate([
@@ -112,13 +124,21 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // 选词模式:整体穿透(手指与 Pencil 都交给 PDFView 的选区管线)
         guard marking else { return nil }
-        // 标记模式:只接 Pencil(手指仍穿透,滚动/缩放/长按选词不受影响)。
-        // v0.13.1(紧急修复):不能只看 allTouches.first —— 屏幕上已有手指(扶握/上一手势)
-        // 时 first 可能是手指,导致 Pencil 触摸被误判穿透、落回 PDFView「完全无反应」。
-        // 改为「事件中存在任一 Pencil 触摸即接管」。
-        guard let touches = event?.allTouches,
-              touches.contains(where: { $0.type == .pencil }) else { return nil }
-        return super.hitTest(point, with: event)
+        // v0.13.3(关键修复):标记模式**一律由本层接管**(返回画布),不再依赖 event 里能否
+        // 看到 Pencil——命中判定的时机不可靠(首次 hitTest 时 allTouches 可能缺失/不含笔),
+        // 一旦漏判 Pencil 就落空,真机表现 =「画不出字」。
+        // 手指各项能力都不依赖命中目标,全部由祖先机制保证、照常工作:
+        //   · 手指滚动 / 双指缩放:PDFView 滚动视图的 pan / pinch(祖先手势)照常收到触摸;
+        //   · 手指永不落墨:PKCanvasView.drawingPolicy = .pencilOnly(在画布内过滤);
+        //   · 长按选词:自定义长按手势挂在 pdfView(祖先),不受命中目标影响。
+        let target = super.hitTest(point, with: event)
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastHitLog > 1.0 {
+            lastHitLog = now
+            let types = (event?.allTouches ?? []).map { String($0.type.rawValue) }.sorted().joined(separator: ",")
+            DiagLog.log("pencil: hitTest page=\(pageIndex) touchTypes=[\(types)] -> \(target.map { String(describing: type(of: $0)) } ?? "nil")")
+        }
+        return target
     }
 
     // MARK: - 模式切换
@@ -143,8 +163,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             picker.addObserver(canvas)
             pickerObserved = true
         }
-        toolPicker?.setVisible(true, forFirstResponder: canvas)
+        superview?.bringSubviewToFront(self)   // v0.13.3:确保叠层在最上方(墨水可见、命中优先)
         canvas.becomeFirstResponder()
+        toolPicker?.setVisible(true, forFirstResponder: canvas)
+        DiagLog.log("pencil: activate page=\(pageIndex) size=\(Int(bounds.width))x\(Int(bounds.height)) super=\(superview.map { String(describing: type(of: $0)) } ?? "-")")
     }
 
     override func didMoveToWindow() {
@@ -176,6 +198,19 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         scheduleSave()
+    }
+
+    // v0.13.3:真机诊断——笔尖是否真的"开始/结束使用工具"。
+    // 无 BEGIN 日志 = 触摸没到画布(命中/手势链问题);
+    // 有 BEGIN 但屏幕上不见墨 = 叠层可见性问题(已被置顶修复兜底)。
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        DiagLog.log("pencil: tool BEGIN page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
+        NSLog("[yuewen/pencil] tool begin page=%d", pageIndex)
+    }
+
+    func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        DiagLog.log("pencil: tool END page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
+        NSLog("[yuewen/pencil] tool end page=%d strokes=%d", pageIndex, canvasView.drawing.strokes.count)
     }
 
     private func scheduleSave() {
