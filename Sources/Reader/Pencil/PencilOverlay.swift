@@ -112,8 +112,12 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // 选词模式:整体穿透(手指与 Pencil 都交给 PDFView 的选区管线)
         guard marking else { return nil }
-        // 标记模式:只接 Pencil(手指仍穿透,滚动/缩放/长按选词不受影响)
-        guard let touch = event?.allTouches?.first, touch.type == .pencil else { return nil }
+        // 标记模式:只接 Pencil(手指仍穿透,滚动/缩放/长按选词不受影响)。
+        // v0.13.1(紧急修复):不能只看 allTouches.first —— 屏幕上已有手指(扶握/上一手势)
+        // 时 first 可能是手指,导致 Pencil 触摸被误判穿透、落回 PDFView「完全无反应」。
+        // 改为「事件中存在任一 Pencil 触摸即接管」。
+        guard let touches = event?.allTouches,
+              touches.contains(where: { $0.type == .pencil }) else { return nil }
         return super.hitTest(point, with: event)
     }
 
