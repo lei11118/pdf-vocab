@@ -23,6 +23,18 @@ struct ReaderView: View {
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     /// v0.9.0(M4):标记 / 选词模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
     @AppStorage("readerMarkMode") private var markMode = false
+    /// v0.11.0(M4-B):Pencil 悬停预览 / 触觉开关
+    @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
+    @AppStorage("pencilHaptics") private var pencilHaptics = true
+    /// v0.11.0(M4-B):悬停预览(迷你释义气泡)
+    @State private var hoverTerm: String?
+    @State private var hoverPoint: CGPoint = .zero
+    @State private var hoverDetail: String?
+    @State private var hoverTask: Task<Void, Never>?
+    /// v0.11.0(M6):扫描版 OCR 进度
+    @State private var ocrRunning = false
+    @State private var ocrDone = 0
+    @State private var ocrTotal = 0
     @Environment(\.scenePhase) private var scenePhase
     /// 生词本"一键抵达"目标(v0.8.0;来自主页生词本=预览模式,会话内不记忆阅读位置)
     let jumpTarget: VocabJumpTarget?
@@ -151,9 +163,48 @@ struct ReaderView: View {
                             vocab: cardVocab
                         )
                     }
+                    // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
+                    if let hoverTerm, let hoverDetail {
+                        HoverTipView(
+                            term: hoverTerm,
+                            detail: hoverDetail,
+                            anchor: hoverPoint,
+                            bounds: geo.size
+                        )
+                    }
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: cardContent)
+    }
+
+    /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
+    private func runOCROnce() async {
+        let sha = doc.sha256
+        let ocrStore = OCRStore(db: store.db)
+        if ocrStore.isDone(docSha: sha) { return }
+        guard let url = try? store.pdfURL(for: doc) else { return }
+        let scanned = await Task.detached(priority: .utility) { () -> Bool in
+            guard let pdf = PDFDocument(url: url) else { return false }
+            return OCRService.isScanned(document: pdf)
+        }.value
+        guard scanned else {
+            ocrStore.markDone(docSha: sha)
+            DiagLog.log("ocr: text-layer doc, skip")
+            return
+        }
+        DiagLog.log("ocr: start (scanned doc)")
+        ocrRunning = true
+        ocrDone = 0
+        ocrTotal = max(doc.pageCount, 1)
+        await OCRService.run(url: url, docSha: sha, store: ocrStore) { current, total in
+            DispatchQueue.main.async {
+                ocrDone = current
+                ocrTotal = total
+            }
+        }
+        ocrRunning = false
+        readerHandle.coordinator?.ocrDidFinish()
+        DiagLog.log("ocr: done")
     }
 
     private var pdfArea: some View {
@@ -166,6 +217,39 @@ struct ReaderView: View {
                     docSha: doc.sha256,
                     vocabStore: VocabStore(db: store.db),
                     inkStore: PencilInkStore(db: store.db),
+                    ocrStore: OCRStore(db: store.db),
+                    hoverPreviewEnabled: pencilHoverPreview,
+                    hapticsEnabled: pencilHaptics,
+                    onHoverUpdate: { term, key, point in
+                        hoverTerm = term
+                        hoverPoint = point
+                        hoverDetail = nil
+                        hoverTask?.cancel()
+                        hoverTask = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            guard !Task.isCancelled else { return }
+                            let detail = await Task.detached(priority: .utility) { () -> String? in
+                                guard case .found(let entry) = DictionaryService.lookup(key) else { return nil }
+                                var parts: [String] = []
+                                if let phonetic = entry.phonetic, !phonetic.isEmpty {
+                                    parts.append("/\(phonetic)/")
+                                }
+                                if let translation = entry.translation, !translation.isEmpty,
+                                   let first = translation.split(separator: "\n").first {
+                                    parts.append(String(first))
+                                }
+                                return parts.isEmpty ? nil : parts.joined(separator: "\n")
+                            }.value
+                            guard !Task.isCancelled, hoverTerm == term else { return }
+                            hoverDetail = detail ?? "(词库未收录)"
+                        }
+                    },
+                    onHoverEnd: {
+                        hoverTask?.cancel()
+                        hoverTask = nil
+                        hoverTerm = nil
+                        hoverDetail = nil
+                    },
                     markMode: markMode,
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
@@ -220,6 +304,18 @@ struct ReaderView: View {
                     .padding(.bottom, 44)
             }
         }
+        .overlay(alignment: .top) {
+            // v0.11.0(M6):扫描版 OCR 进度
+            if ocrRunning {
+                Text("扫描版文字识别中… \(ocrDone)/\(ocrTotal)")
+                    .font(.caption2)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
+        }
         .task(id: doc.sha256) {
             let store = self.store
             let doc = self.doc
@@ -229,6 +325,9 @@ struct ReaderView: View {
             }.value
             resolvedURL = url
             optimizing = false
+        }
+        .task(id: doc.sha256) {
+            await runOCROnce()
         }
         .translationPresentation(isPresented: $showTranslate, text: translateText)
     }

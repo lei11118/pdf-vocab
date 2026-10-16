@@ -62,6 +62,22 @@ final class ReaderCoordinator: NSObject {
     private var lastHandleCheckKey: String?
     private var selectionText = ""
 
+    /// v0.11.0(M4-B):悬停预览 + 触觉(由 PDFKitView 注入,跟随设置页开关)
+    var hoverPreviewEnabled = true
+    var hapticsEnabled = true
+    var onHoverUpdate: ((String, String, CGPoint) -> Void)?
+    var onHoverEnd: (() -> Void)?
+    private var hoverKey = ""
+    private var hoverEntry: (page: PDFPage, annotation: PDFAnnotation)?
+
+    /// v0.11.0(M6):扫描版 OCR 取词
+    var ocrStore: OCRStore?
+    private var docScanned = false
+    private var ocrWordsCache: [Int: [OCRWord]] = [:]
+    private var ocrDrag: (page: PDFPage, pageIndex: Int, anchorIdx: Int, didMove: Bool)?
+    private var ocrSelectionActive = false
+    private var ocrContextOverride: String?
+
     // MARK: - 手势
 
     private weak var fingerPressRef: UILongPressGestureRecognizer?
@@ -168,6 +184,9 @@ final class ReaderCoordinator: NSObject {
     /// 文档加载完成后调用(压制内置手势 + 挂滚动观察 + 恢复阅读位置)
     func documentDidLoad(_ document: PDFDocument) {
         DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
+        docScanned = OCRService.isScanned(document: document)
+        ocrWordsCache.removeAll()
+        DiagLog.log("ocr: scanned=\(docScanned)")
         suppressNativeSelection(in: pdfView)
         observeScrolling()
         for delay in [0.5, 2.0] {
@@ -211,6 +230,8 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("docChanged: \(doc.pageCount) pages")
         }
         jumpGuardUntil = 0
+        docScanned = pdfView.document.map { OCRService.isScanned(document: $0) } ?? false
+        ocrWordsCache.removeAll()
         let index = pdfView.document.flatMap { doc in pdfView.currentPage.map { doc.index(for: $0) } } ?? 0
         lastGoodPage = (index, CFAbsoluteTimeGetCurrent())
         stopAutoscroll()
@@ -359,6 +380,10 @@ final class ReaderCoordinator: NSObject {
             self?.menuEnvelopeRect()
         }
 
+        // v0.11.0(M4-B):悬停预览(Pencil 悬停;仅在选词模式 + 开关开启时生效,见 handleHover)
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
+        view.addGestureRecognizer(hover)
+
         suppressNativeSelection(in: view)
         observeScrolling()
     }
@@ -416,6 +441,7 @@ final class ReaderCoordinator: NSObject {
         switch gesture.state {
         case .began:
             hasUserInteracted = true
+            clearHover()
             guard drag == nil else { return }
             // v0.6.5:长按生效前再压一遍(防"已有选区后再长按"时被重建的选择手势漏网)
             suppressNativeSelection(in: pdfView)
@@ -450,31 +476,41 @@ final class ReaderCoordinator: NSObject {
                 return
             }
 
-            // ② 新选词
+            // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
-            guard let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
-                  SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) else {
-                DiagLog.log(String(format: "press.began(%@): no word (%.0fms)", kind, (CFAbsoluteTimeGetCurrent() - t0) * 1000))
+            if let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
+               SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
+                DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
+                                   SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
+                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point, anchorWord: word, touchPoint: hit.point, viewPoint: viewPoint)
+                applySelection(word, src: "own")
+                if kind == "finger" {
+                    loupe.begin(at: viewPoint, widget: nil, in: pdfView)
+                }
+                scheduleHoldMenu()
                 return
             }
-            DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
-                               SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
-            beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point, anchorWord: word, touchPoint: hit.point, viewPoint: viewPoint)
-            applySelection(word, src: "own")
-            if kind == "finger" {
-                loupe.begin(at: viewPoint, widget: nil, in: pdfView)
+            // ②-b 扫描版 OCR 兜底
+            if let wordIdx = ocrWordIndex(at: hit.point, on: hit.page) {
+                DiagLog.log(String(format: "press.began(%@): ocr word #%d (%.0fms)", kind, wordIdx, (CFAbsoluteTimeGetCurrent() - t0) * 1000))
+                ocrDrag = (hit.page, currentPageIndexFor(page: hit.page), wordIdx, false)
+                lastTouchViewPoint = viewPoint
+                freezeScrolling(true)
+                applyOCRSelection(page: hit.page, range: wordIdx...wordIdx, src: "began")
+                if kind == "finger" {
+                    loupe.begin(at: viewPoint, widget: nil, in: pdfView)
+                }
+                scheduleHoldMenu()
+                return
             }
-            // 按住不动 ~0.35s 后菜单先弹出(原生时机);一旦拖动立即取消
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, let d = self.drag, d.kind == .word, !d.didMove,
-                      !self.selectionText.isEmpty, !self.menu.isPresented else { return }
-                self.presentMenu()
-                DiagLog.log("menu presented (hold)")
-            }
-            holdMenuWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+            DiagLog.log(String(format: "press.began(%@): no word (%.0fms)", kind, (CFAbsoluteTimeGetCurrent() - t0) * 1000))
 
         case .changed:
+            if ocrDrag != nil {
+                extendOCRDrag(to: viewPoint)
+                updateAutoscroll(for: viewPoint)
+                return
+            }
             guard var d = drag, d.kind == .word || d.kind == .body,
                   let hit = pageHit(viewPoint), hit.page === d.page else { return }
             lastTouchViewPoint = viewPoint
@@ -498,8 +534,23 @@ final class ReaderCoordinator: NSObject {
             updateAutoscroll(for: viewPoint)
 
         case .ended, .cancelled, .failed:
-            let wasDrag = drag
             let isEnded = gesture.state == .ended
+            if ocrDrag != nil {
+                ocrDrag = nil
+                holdMenuWork?.cancel()
+                holdMenuWork = nil
+                stopAutoscroll()
+                loupe.end()
+                freezeScrolling(false)
+                DiagLog.log("press.end(\(kind)) ocr ended=\(isEnded)")
+                refreshHandles()
+                if isEnded, !selectionText.isEmpty {
+                    if !menu.isPresented { presentMenu() }
+                    if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
+                }
+                return
+            }
+            let wasDrag = drag
             if let k = wasDrag?.kind, k != .word && k != .body { return } // 与拖柄状态隔离
             drag = nil
             holdMenuWork?.cancel()
@@ -512,10 +563,170 @@ final class ReaderCoordinator: NSObject {
             if isEnded, wasDrag != nil, !selectionText.isEmpty, !menu.isPresented {
                 presentMenu()
             }
+            if isEnded, wasDrag != nil, !selectionText.isEmpty, hapticsEnabled {
+                PencilHaptics.selectionCompleted(at: viewPoint)
+            }
 
         default:
             break
         }
+    }
+
+    /// 按住不动 ~0.35s 后菜单先弹出(原生时机);一旦拖动立即取消(文字层与 OCR 路径共用)。
+    private func scheduleHoldMenu() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.selectionText.isEmpty, !self.menu.isPresented else { return }
+            let moved = (self.drag?.didMove ?? false) || (self.ocrDrag?.didMove ?? false)
+            guard !moved else { return }
+            self.presentMenu()
+            DiagLog.log("menu presented (hold)")
+        }
+        holdMenuWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    // MARK: - 悬停预览(v0.11.0,M4-B)
+
+    @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
+        guard let pdfView else { return }
+        guard hoverPreviewEnabled, !markMode else {
+            clearHover()
+            return
+        }
+        switch gesture.state {
+        case .began, .changed:
+            let viewPoint = gesture.location(in: pdfView)
+            guard let hit = pageHit(viewPoint),
+                  let word = hit.page.selectionForWord(at: hit.point),
+                  let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty, text.count <= 40 else {
+                clearHover()
+                return
+            }
+            let term = WordPicker.firstLexicalWord(in: text) ?? text
+            let key = VocabStore.normalizedKey(term)
+            guard !key.isEmpty else {
+                clearHover()
+                return
+            }
+            if key != hoverKey {
+                hoverKey = key
+                setHoverAnnotation(page: hit.page, word: word)
+                onHoverUpdate?(term, key, viewPoint)
+                DiagLog.log("hover: 「\(term)」")
+            }
+        case .ended, .cancelled, .failed:
+            clearHover()
+        default:
+            break
+        }
+    }
+
+    private func setHoverAnnotation(page: PDFPage, word: PDFSelection) {
+        removeHoverAnnotation()
+        let rect = word.bounds(for: page)
+        guard SelectionGeometry.isValid(rect) else { return }
+        let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+        annotation.color = UIColor.systemYellow.withAlphaComponent(0.28)
+        page.addAnnotation(annotation)
+        hoverEntry = (page, annotation)
+    }
+
+    private func removeHoverAnnotation() {
+        if let entry = hoverEntry {
+            entry.page.removeAnnotation(entry.annotation)
+            hoverEntry = nil
+        }
+    }
+
+    func clearHover() {
+        guard hoverKey != "" || hoverEntry != nil else { return }
+        hoverKey = ""
+        removeHoverAnnotation()
+        onHoverEnd?()
+    }
+
+    // MARK: - 扫描版 OCR 取词(v0.11.0,M6)
+
+    /// 页面 OCR 词框(缓存 + 懒加载);未识别或无词返回 nil。
+    private func ocrWords(for page: PDFPage) -> [OCRWord]? {
+        guard docScanned, let ocrStore, !docSha.isEmpty,
+              let idx = pdfView?.document?.index(for: page) else { return nil }
+        if let cached = ocrWordsCache[idx] { return cached.isEmpty ? nil : cached }
+        let words = ocrStore.words(docSha: docSha, page: idx)
+        ocrWordsCache[idx] = words
+        return words.isEmpty ? nil : words
+    }
+
+    /// 页坐标点 → 当前页 OCR 词索引。
+    private func ocrWordIndex(at pagePoint: CGPoint, on page: PDFPage) -> Int? {
+        guard let pdfView, let words = ocrWords(for: page), !words.isEmpty else { return nil }
+        let bounds = page.bounds(for: pdfView.displayBox)
+        return OCRService.wordIndex(at: pagePoint, in: words, pageBounds: bounds)
+    }
+
+    private func currentPageIndexFor(page: PDFPage) -> Int {
+        pdfView?.document?.index(for: page) ?? -1
+    }
+
+    /// 识别全部完成后清缓存(宿主在 OCR 结束时调用,让下一页读取新数据)。
+    func ocrDidFinish() {
+        ocrWordsCache.removeAll()
+        DiagLog.log("ocr: cache cleared")
+    }
+
+    /// OCR 词框选区(词粒度,范围 = 锚词…拖动词);与文字层路径共用高亮 / 拖柄 / 菜单。
+    private func applyOCRSelection(page: PDFPage, range: ClosedRange<Int>, src: String) {
+        guard let pdfView, let words = ocrWords(for: page), !words.isEmpty,
+              range.lowerBound >= 0, range.upperBound < words.count else { return }
+        let sub = Array(words[range])
+        let text = sub.map { $0.text }.joined(separator: " ")
+        guard !text.isEmpty else { return }
+        lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
+        let bounds = page.bounds(for: pdfView.displayBox)
+        var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
+        var rejected = 0
+        for wz in sub {
+            let rect = OCRService.pageRect(from: wz, pageBounds: bounds)
+            guard SelectionGeometry.isValid(rect), rect.intersects(bounds.insetBy(dx: -24, dy: -24)) else {
+                rejected += 1
+                continue
+            }
+            desired[annotationKey(page, rect)] = (page, rect)
+        }
+        appliedKey = "ocr|\(range.lowerBound)-\(range.upperBound)|\(text.hashValue)"
+        appliedCharCount = text.count
+        selectionText = text
+        ocrSelectionActive = true
+        let lineIdx = sub.first?.line ?? -1
+        ocrContextOverride = words.filter { $0.line == lineIdx }.map { $0.text }.joined(separator: " ")
+        applyHighlightDesired(desired, rejected: rejected, t0: CFAbsoluteTimeGetCurrent())
+        refreshHandles()
+        let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
+        let wordCount = WordPicker.countWords(in: text)
+        let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
+        onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm))
+        if wordCount <= 1, !primaryTerm.isEmpty {
+            vocabDidSelectWord(term: primaryTerm)
+        }
+        DiagLog.log("ocr.select(\(src)): 「\(SelectionGeometry.logSnippet(text))」")
+        resuppressSoon()
+    }
+
+    /// OCR 拖动扩选(词粒度;跨行自动并集)。
+    private func extendOCRDrag(to viewPoint: CGPoint) {
+        guard let od = ocrDrag, let pdfView,
+              let hit = pageHit(viewPoint), hit.page === od.page,
+              let curIdx = ocrWordIndex(at: hit.point, on: od.page) else { return }
+        lastTouchViewPoint = viewPoint
+        guard curIdx != od.anchorIdx else { return }
+        ocrDrag?.didMove = true
+        holdMenuWork?.cancel()
+        holdMenuWork = nil
+        menu.dismiss()
+        let range = min(od.anchorIdx, curIdx)...max(od.anchorIdx, curIdx)
+        applyOCRSelection(page: od.page, range: range, src: "drag")
+        loupe.move(to: viewPoint)
     }
 
     // MARK: - 拖动柄(拖任意一端的圆点,以另一端为锚微调)
@@ -575,6 +786,9 @@ final class ReaderCoordinator: NSObject {
             if gesture.state == .ended, !selectionText.isEmpty, !menu.isPresented {
                 presentMenu()
             }
+            if gesture.state == .ended, !selectionText.isEmpty, hapticsEnabled {
+                PencilHaptics.selectionCompleted(at: viewPoint)
+            }
 
         default:
             break
@@ -627,13 +841,24 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, gesture.state == .ended else { return }
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
-        guard let hit = pageHit(viewPoint),
-              let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
-              SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) else { return }
-        DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
-        applySelection(word, src: "doubleTap")
-        refreshHandles()
-        presentMenu()
+        if let hit = pageHit(viewPoint),
+           let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
+           SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
+            DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
+            applySelection(word, src: "doubleTap")
+            refreshHandles()
+            presentMenu()
+            if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
+            return
+        }
+        // v0.11.0(M6):扫描版双击选词(OCR 词框)
+        if let hit = pageHit(viewPoint), let idx = ocrWordIndex(at: hit.point, on: hit.page) {
+            DiagLog.log("doubleTap: ocr word #\(idx)")
+            applyOCRSelection(page: hit.page, range: idx...idx, src: "doubleTap")
+            refreshHandles()
+            presentMenu()
+            if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
+        }
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
@@ -648,6 +873,7 @@ final class ReaderCoordinator: NSObject {
         applySelection(line, src: "tripleTap")
         refreshHandles()
         presentMenu()
+        if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
     }
 
     // MARK: - 选区应用 / 高亮
@@ -655,6 +881,8 @@ final class ReaderCoordinator: NSObject {
     private func applySelection(_ selection: PDFSelection, src: String) {
         guard let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
+        ocrSelectionActive = false
+        ocrContextOverride = nil
         guard SelectionGeometry.isSane(selection, maxPages: 1, maxChars: 6_000) else {
             // v0.6.6:坏帧只记录、**不清空现有选区**(拖动中偶发解析异常时保留上一个好状态)
             DiagLog.log("applySelection rejected(\(src)): pages=\(selection.pages.count) len=\(text.count)")
@@ -700,7 +928,11 @@ final class ReaderCoordinator: NSObject {
                 desired[annotationKey(page, rect)] = (page, rect)
             }
         }
+        applyHighlightDesired(desired, rejected: rejected, t0: t0)
+    }
 
+    /// 差量应用高亮(v0.11.0 抽出:文字层选区与 OCR 词框共用)。
+    private func applyHighlightDesired(_ desired: [String: (page: PDFPage, rect: CGRect)], rejected: Int, t0: CFAbsoluteTime) {
         let staleKeys = annotations.keys.filter { desired[$0] == nil }
         for key in staleKeys {
             if let entry = annotations.removeValue(forKey: key) {
@@ -747,6 +979,10 @@ final class ReaderCoordinator: NSObject {
         appliedKey = nil
         appliedCharCount = 0
         selectionText = ""
+        ocrDrag = nil
+        ocrSelectionActive = false
+        ocrContextOverride = nil
+        clearHover()
         clearTempHighlight()
         refreshHandles()
         onSelectionInfo(nil)
@@ -771,6 +1007,9 @@ final class ReaderCoordinator: NSObject {
         appliedKey = nil
         appliedCharCount = 0
         selectionText = ""
+        ocrDrag = nil
+        ocrSelectionActive = false
+        ocrContextOverride = nil
         clearTempHighlight()
         refreshHandles()
         resuppressSoon()
@@ -837,6 +1076,7 @@ final class ReaderCoordinator: NSObject {
             return false
         }
         reloadPermanentHighlights()
+        if hapticsEnabled { PencilHaptics.collected(at: lastTouchViewPoint) }
         DiagLog.log("vocab: collect 「\(surface)」(\(key)) rects=\(useRects.count) page=\(page)")
         return true
     }
@@ -891,6 +1131,10 @@ final class ReaderCoordinator: NSObject {
 
     /// v0.8.2:原句提取(整句语境;无文本层/失败时回退选中文本,再回退词面)。
     private func sentenceContextOrSelection(surface: String) -> String {
+        if ocrSelectionActive, let ocrLine = ocrContextOverride, !ocrLine.isEmpty {
+            DiagLog.log("context: ocr line len=\(ocrLine.count)")
+            return ocrLine
+        }
         if let (page, lineRects) = orderedSelectionRects(),
            let first = lineRects.first, let last = lineRects.last,
            let sentence = SentenceExtractor.sentenceContext(firstLine: first, lastLine: last, on: page) {
@@ -925,6 +1169,7 @@ final class ReaderCoordinator: NSObject {
     func setMarkMode(_ on: Bool) {
         guard markMode != on else { return }
         markMode = on
+        clearHover()
         overlayProvider?.setMarkMode(on)
         pencilPressRef?.isEnabled = !on
         let types: [NSNumber] = on

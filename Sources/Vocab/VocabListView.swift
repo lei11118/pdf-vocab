@@ -33,6 +33,7 @@ struct VocabListView: View {
     @State private var renameText = ""
     @State private var noteWord: VocabStore.WordSummary?
     @State private var noteText = ""
+    @State private var showExport = false
 
     var body: some View {
         NavigationStack {
@@ -48,6 +49,15 @@ struct VocabListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "搜索生词")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showExport = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("导出到 Anki")
+                    .disabled(words.isEmpty)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(isSelecting ? "取消" : "选择") {
                         isSelecting.toggle()
@@ -95,6 +105,9 @@ struct VocabListView: View {
             }
             .sheet(item: $detailWord) { word in
                 VocabularyDetailView(store: store, word: word, onJump: onJump)
+            }
+            .sheet(isPresented: $showExport) {
+                AnkiExportSheet(store: store, words: words)
             }
             .safeAreaInset(edge: .bottom) {
                 if isSelecting {

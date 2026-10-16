@@ -102,6 +102,26 @@ final class AppDatabase: @unchecked Sendable {
                 t.add(column: "note", .text).notNull().defaults(to: "")
             }
         }
+        migrator.registerMigration("v7.ocr") { db in
+            // 扫描版 OCR 词框与整本识别状态(v0.11.0,M6)
+            try db.create(table: "ocr_word") { t in
+                t.column("docSha", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("idx", .integer).notNull()
+                t.column("text", .text).notNull()
+                t.column("x", .double).notNull()
+                t.column("y", .double).notNull()
+                t.column("w", .double).notNull()
+                t.column("h", .double).notNull()
+                t.column("line", .integer).notNull()
+                t.primaryKey(["docSha", "page", "idx"])
+            }
+            try db.create(table: "ocr_status") { t in
+                t.column("docSha", .text).primaryKey()
+                t.column("done", .integer).notNull().defaults(to: 0)
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
         return migrator
     }
 }
