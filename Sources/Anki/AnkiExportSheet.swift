@@ -202,6 +202,12 @@ struct AnkiExportSheet: View {
     }
 }
 
+/// 通用分享条目(v0.12.0:阅读页导出批注版 / 设置页备份导出复用)。
+struct ShareFileItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// UIActivityViewController 包装(iPad 分享面板)。
 struct ActivityShareView: UIViewControllerRepresentable {
     let items: [Any]

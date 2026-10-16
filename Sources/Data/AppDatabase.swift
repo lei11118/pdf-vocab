@@ -5,14 +5,43 @@ import GRDB
 final class AppDatabase: @unchecked Sendable {
     static let shared: AppDatabase? = try? AppDatabase()
 
-    let dbQueue: DatabaseQueue
+    private(set) var dbQueue: DatabaseQueue
 
     private init() throws {
-        let fm = FileManager.default
-        let dir = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dbURL = dir.appendingPathComponent("readword.sqlite")
+        let dbURL = try Self.databaseURL()
         dbQueue = try DatabaseQueue(path: dbURL.path)
         try Self.migrator.migrate(dbQueue)
+    }
+
+    /// 数据库文件位置(v0.12.0:备份/恢复用)。
+    static func databaseURL() throws -> URL {
+        let fm = FileManager.default
+        let dir = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return dir.appendingPathComponent("readword.sqlite")
+    }
+
+    /// 生成一致性整库快照(VACUUM INTO;不能跑在事务里 → writeWithoutTransaction)。
+    func snapshotTo(url: URL) throws {
+        try? FileManager.default.removeItem(at: url)
+        try dbQueue.writeWithoutTransaction { db in
+            try db.execute(sql: "VACUUM INTO ?", arguments: [url.path])
+        }
+    }
+
+    /// 用快照热替换当前数据库(v0.12.0,P2 数据恢复):关旧队列 → 换文件 → 新队列 → 迁移。
+    /// 各 Store 持有 AppDatabase 引用,替换后自动使用新队列。
+    func replaceDatabase(withFileAt source: URL) throws {
+        let fm = FileManager.default
+        let dbURL = try Self.databaseURL()
+        try dbQueue.close()
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: dbURL.path + suffix))
+        }
+        try fm.copyItem(at: source, to: dbURL)
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try Self.migrator.migrate(queue)
+        dbQueue = queue
+        DiagLog.log("backup: database replaced")
     }
 
     private static var migrator: DatabaseMigrator {
@@ -120,6 +149,16 @@ final class AppDatabase: @unchecked Sendable {
                 t.column("docSha", .text).primaryKey()
                 t.column("done", .integer).notNull().defaults(to: 0)
                 t.column("updatedAt", .datetime).notNull()
+            }
+        }
+        migrator.registerMigration("v8.bookmark") { db in
+            // 书签(v0.12.0,M7):每文档每页一条
+            try db.create(table: "bookmark") { t in
+                t.column("docSha", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("label", .text).notNull().defaults(to: "")
+                t.column("createdAt", .datetime).notNull()
+                t.primaryKey(["docSha", "page"])
             }
         }
         return migrator
