@@ -135,8 +135,8 @@ struct ReaderOutlineSheet: View {
                     var page: Int?
                     if let destPage = child.destination?.page {
                         page = doc.index(for: destPage)
-                    } else if let goTo = child.action as? PDFActionGoTo {
-                        page = doc.index(for: goTo.destination.page)
+                    } else if let goTo = child.action as? PDFActionGoTo, let destPage = goTo.destination.page {
+                        page = doc.index(for: destPage)
                     }
                     if !title.isEmpty {
                         items.append(OutlineItem(title: title, page: page, depth: depth))
