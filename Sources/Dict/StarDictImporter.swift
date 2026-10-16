@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import Compression
 import UniformTypeIdentifiers
@@ -159,7 +160,8 @@ enum StarDictImporter {
             let word = entry.word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !word.isEmpty else { skipped += 1; continue }
             dictHandle.seek(toFileOffset: UInt64(entry.offset))
-            guard let chunk = try? dictHandle.read(upToCount: Int(entry.size)), let chunk, !chunk.isEmpty else {
+            let chunk = try? dictHandle.read(upToCount: Int(entry.size))
+            guard let chunk, !chunk.isEmpty else {
                 skipped += 1
                 continue
             }
