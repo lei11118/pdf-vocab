@@ -134,6 +134,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             flushSave()
         }
         DiagLog.log("pencil: page \(pageIndex) marking=\(on)")
+        NSLog("[yuewen/pencil] overlay page=%d marking=%d", pageIndex, on ? 1 : 0)
     }
 
     private func activateMarking() {

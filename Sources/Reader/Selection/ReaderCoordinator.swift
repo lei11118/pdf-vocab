@@ -54,9 +54,8 @@ final class ReaderCoordinator: NSObject {
     var inkStore: PencilInkStore?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
-    /// v0.13.1(紧急修复):已隔离的手势账本(原始 delegate / 触型;退出标记模式逐条还原)
-    private var armedScrollGestures: [ObjectIdentifier: (gesture: UIGestureRecognizer, originalDelegate: UIGestureRecognizerDelegate?, originalTouchTypes: [NSNumber])] = [:]
-    private var pencilScrollGuard: PencilScrollGuard?
+    /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
+    private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
     private var appliedKey: String?
     private var appliedCharCount = 0
     /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
@@ -1128,55 +1127,45 @@ final class ReaderCoordinator: NSObject {
         removeWordHighlights(key: word.key)
     }
 
-    /// v0.13.1(紧急修复):标记模式下把 Pencil 触摸从 PDFView 子树内**全部**对手机势上剔除。
+    /// v0.13.2(紧急修复):标记模式下把**滚动视图自己的 pan** 触型收紧为「仅手指」,
+    /// Pencil 触摸不再被滚动接管,全部落到页叠层画布;同时关闭滚动视图的触摸延迟,
+    /// 让画布立即收到 Pencil(不吞笔画起手)。
     ///
-    /// 真机复盘:旧实现只改「第一个」滚动视图的 pan 触型,且 PDFView 在文档加载/翻页时重建
-    /// 内部手势层级后修改被顶掉,导致 Pencil 仍被滚动抢走(或落空"无反应")。现改为:
-    /// ① 遍历整棵子树收集目标手势(pin 除外;跳过页叠层画布子树,绝不碰 PKCanvasView 绘制手势);
-    /// ② 每个手势换上动态 guard delegate —— 逐触摸判断「标记模式 + Pencil → 拒收」,
-    ///    对 pan 同时收紧 allowedTouchTypes 为仅手指(双保险,防 delegate 转发路径被绕);
-    /// ③ 幂等:已处理的手势跳过;`setMarkMode`(含冗余调用)/documentDidLoad/documentDidChange/
-    ///    pageDidChange 都会重臂,层级怎么重建都能兜住;
-    /// ④ 退出标记模式逐条还原原始 delegate 与触型。
+    /// ⚠️ v0.13.1 崩溃复盘(严禁重蹈):此前给 PDFView 内部手势**替换 delegate** 触发真机闪退——
+    /// UIScrollView / PDFKit 的内部手势由 UIKit 私有机制管理,delegate 被换成自定义对象后,
+    /// 内部代码向"假定的私有类型"发消息 → EXC_BAD_ACCESS / unrecognized selector → 闪退。
+    /// 现在只用两个**公开安全属性**,绝不触碰任何 delegate:
+    /// ① `scroll.panGestureRecognizer.allowedTouchTypes = [.direct]`(禁 Pencil 滚动);
+    /// ② `scroll.delaysContentTouches = false`(画布立即收笔,不被 150ms 滚动判定吞掉起手)。
+    /// 收集**全部** UIScrollView(不只第一个)、跳过页叠层画布子树;逐条记账、退出还原;
+    /// 幂等重臂(setMarkMode 冗余调用 / documentDidLoad / documentDidChange / pageDidChange)。
     private func setScrollPanPencilExcluded(_ excluded: Bool) {
         guard let pdfView else { return }
         if excluded {
-            let guardObj: PencilScrollGuard
-            if let existing = pencilScrollGuard {
-                guardObj = existing
-            } else {
-                let created = PencilScrollGuard()
-                created.isMarkMode = { [weak self] in self?.markMode == true }
-                created.originalDelegateFor = { [weak self] gesture in
-                    self?.armedScrollGestures[ObjectIdentifier(gesture)]?.originalDelegate
-                }
-                pencilScrollGuard = created
-                guardObj = created
-            }
             var newlyArmed = 0
-            for gesture in PencilTouchIsolation.targetGestures(in: pdfView) {
-                let id = ObjectIdentifier(gesture)
-                guard armedScrollGestures[id] == nil else { continue }
-                guard gesture.delegate !== self else { continue }   // 自家选区手势不换 delegate
-                let originalDelegate = gesture.delegate
-                armedScrollGestures[id] = (gesture, originalDelegate, gesture.allowedTouchTypes)
-                gesture.delegate = guardObj
-                if gesture is UIPanGestureRecognizer {
-                    gesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-                }
+            for scroll in PencilTouchIsolation.scrollViews(in: pdfView) {
+                let pan = scroll.panGestureRecognizer
+                let id = ObjectIdentifier(pan)
+                guard armedScrollPans[id] == nil else { continue }
+                guard pan.state == .possible else { continue }   // 正在跟踪中的手势别动,等下一轮重臂
+                armedScrollPans[id] = (pan, scroll, pan.allowedTouchTypes, scroll.delaysContentTouches)
+                pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                scroll.delaysContentTouches = false
                 newlyArmed += 1
             }
             if newlyArmed > 0 {
-                DiagLog.log("pencil: isolation armed +\(newlyArmed) (total \(armedScrollGestures.count))")
+                DiagLog.log("pencil: isolation armed +\(newlyArmed) (total \(armedScrollPans.count))")
+                NSLog("[yuewen/pencil] isolation armed +%d (total %d)", newlyArmed, armedScrollPans.count)
             }
-        } else if !armedScrollGestures.isEmpty {
-            for (_, armed) in armedScrollGestures {
-                armed.gesture.delegate = armed.originalDelegate
-                armed.gesture.allowedTouchTypes = armed.originalTouchTypes
+        } else if !armedScrollPans.isEmpty {
+            let count = armedScrollPans.count
+            for (_, armed) in armedScrollPans {
+                armed.pan.allowedTouchTypes = armed.originalTouchTypes
+                armed.scroll.delaysContentTouches = armed.originalDelays
             }
-            armedScrollGestures.removeAll()
-            pencilScrollGuard = nil
-            DiagLog.log("pencil: isolation restored")
+            armedScrollPans.removeAll()
+            DiagLog.log("pencil: isolation restored (\(count))")
+            NSLog("[yuewen/pencil] isolation restored (%d)", count)
         }
     }
 
@@ -1236,7 +1225,8 @@ final class ReaderCoordinator: NSObject {
         tapRef?.allowedTouchTypes = types
         doubleTapRef?.allowedTouchTypes = types
         tripleTapRef?.allowedTouchTypes = types
-        setScrollPanPencilExcluded(on)   // v0.13.1(紧急修复):标记模式下 Pencil 全子树隔离(不进 PDFView 手势)
+        setScrollPanPencilExcluded(on)   // v0.13.2:标记模式下 Pencil 滚动隔离(仅公开属性,见函数注释)
+        NSLog("[yuewen/pencil] setMarkMode -> %@", on ? "mark" : "select")
         if on, !selectionText.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.clearSelection() }
         }
@@ -1823,53 +1813,22 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
     }
 }
 
-// MARK: - v0.13.1(紧急修复):标记模式 Pencil 输入独占
+// MARK: - v0.13.2(紧急修复):标记模式 Pencil 输入独占(只动公开安全开关)
 
-/// 逐触摸动态拦笔(标记模式专属):把 Pencil 触摸从 PDFView 子树内的对手机势上全部拒收,
-/// 保证页叠层 PKCanvasView 独占 Pencil;其余情况原样转发原 delegate(保真,不破坏系统行为)。
-final class PencilScrollGuard: NSObject, UIGestureRecognizerDelegate {
-    /// 实时读取「是否标记模式」(由协调器注入闭包,避免持有强引用)
-    var isMarkMode: () -> Bool = { false }
-    /// 取某手势武装前的原 delegate(由协调器账本查询;转发保真)
-    var originalDelegateFor: (UIGestureRecognizer) -> UIGestureRecognizerDelegate? = { _ in nil }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        if isMarkMode(), touch.type == .pencil { return false }
-        return originalDelegateFor(gestureRecognizer)?.gestureRecognizer?(gestureRecognizer, shouldReceive: touch) ?? true
-    }
-
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        originalDelegateFor(gestureRecognizer)?.gestureRecognizerShouldBegin?(gestureRecognizer) ?? true
-    }
-
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        originalDelegateFor(gestureRecognizer)?.gestureRecognizer?(
-            gestureRecognizer,
-            shouldRecognizeSimultaneouslyWith: otherGestureRecognizer
-        ) ?? false
-    }
-}
-
-/// 目标手势收集:PDFView 整棵子树内全部 pan / pinch / longPress / tap / swipe,
-/// 但**跳过页叠层画布子树**(PKCanvasView 的绘制手势与内部滚动绝不触碰)。
+/// 滚动视图收集:PDFView 整棵子树内全部 UIScrollView,
+/// 但**跳过页叠层画布子树**(PKCanvasView 自己的滚动与手势绝不触碰)。
+///
+/// 为什么只动滚动视图、且绝不碰 delegate(v0.13.1 真机闪退根因):
+/// 系统手势的 delegate 是 UIKit 私有对象,替换它会破坏内部契约(向假定类型发消息)直接闪退。
+/// 这里只使用两个公开属性:`panGestureRecognizer.allowedTouchTypes` 与 `delaysContentTouches`。
 enum PencilTouchIsolation {
-    static func targetGestures(in root: UIView) -> [UIGestureRecognizer] {
-        var result: [UIGestureRecognizer] = []
+    static func scrollViews(in root: UIView) -> [UIScrollView] {
+        var result: [UIScrollView] = []
         var seen = Set<ObjectIdentifier>()
         func visit(_ view: UIView) {
             if view is InkOverlayView { return }
-            for gesture in view.gestureRecognizers ?? [] {
-                guard gesture is UIPanGestureRecognizer
-                    || gesture is UIPinchGestureRecognizer
-                    || gesture is UILongPressGestureRecognizer
-                    || gesture is UITapGestureRecognizer
-                    || gesture is UISwipeGestureRecognizer else { continue }
-                if seen.insert(ObjectIdentifier(gesture)).inserted {
-                    result.append(gesture)
-                }
+            if let scroll = view as? UIScrollView, seen.insert(ObjectIdentifier(scroll)).inserted {
+                result.append(scroll)
             }
             for sub in view.subviews { visit(sub) }
         }
