@@ -86,12 +86,7 @@ struct VocabStore: Sendable {
         }) ?? nil
     }
 
-    func status(forLemma lemma: String) -> Status? {
-        let raw = (try? db.dbQueue.read { db in
-            try String.fetchOne(db, sql: "SELECT status FROM vocab_word WHERE lemma = ?", arguments: [lemma])
-        }) ?? nil
-        return raw.flatMap { Status(rawValue: $0) }
-    }
+    // (v0.10.0:「已掌握」Status 查询已随概念一起移除)
 
     func occurrenceCount(forLemma lemma: String) -> Int {
         ((try? db.dbQueue.read { db in
