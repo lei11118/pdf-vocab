@@ -50,12 +50,12 @@ final class ReaderCoordinator: NSObject {
     private var jumpAnnotations: [(page: PDFPage, annotation: PDFAnnotation)] = []
     private var jumpClearWork: DispatchWorkItem?
 
-    // v0.9.0(M4):Pencil 标记层(按页 PKCanvasView 叠加)+ Pencil Pro 挤压交互
+    // v0.9.0(M4):Pencil 标记层(按页 PKCanvasView 叠加);v0.10.0:挤压交给原生、触型还原账本
     var inkStore: PencilInkStore?
-    var onPencilSqueeze: (() -> Void)?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
-    private var squeezeRef: UIPencilInteraction?
+    /// v0.10.0(Bug 1.2):标记模式前的滚动 pan 原始触型(退出时完整还原)
+    private var scrollPanOriginalTouchTypes: [NSNumber]?
     private var appliedKey: String?
     private var appliedCharCount = 0
     /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
@@ -336,17 +336,21 @@ final class ReaderCoordinator: NSObject {
         overlayProvider = provider
         view.pageOverlayViewProvider = provider
 
-        // Pencil Pro 挤压(iPadOS 17.5+):默认切换标记/选词模式(动作映射设置项留 M4-B 后续)
-        // UIPencilInteraction 是 UIInteraction(不是手势识别器)→ 用 addInteraction 安装
-        let squeeze = UIPencilInteraction()
-        squeeze.delegate = self
-        view.addInteraction(squeeze)
-        squeezeRef = squeeze
+        // v0.10.0(Bug 1.3):**不再拦截挤压**——让 PKToolPicker 原生接管
+        // (Pencil Pro 挤压自动呼出系统工具面板;轻点两下切换工具也是原生行为。
+        //  自装 UIPencilInteraction 反而会把这两个系统行为顶掉,故整体移除。)
 
         // 编辑菜单(系统组件)
         menu.onTranslate = { [weak self] text in
             self?.onTranslate?(text)
         }
+        // v0.10.0(Task 2.1):「加入生词本 / 高亮」统一进编辑栏
+        menu.vocabStateProvider = { [weak self] in
+            self?.currentSelectionVocabState() ?? (collected: false, colorName: nil)
+        }
+        menu.onCollectWord = { [weak self] in self?.collectFromMenu() }
+        menu.onHighlight = { [weak self] name in self?.highlightFromMenu(colorName: name) }
+        menu.onRemoveHighlight = { [weak self] in self?.removeHighlightFromMenu() }
         menu.textProvider = { [weak self] in
             self?.selectionText ?? ""
         }
@@ -810,8 +814,9 @@ final class ReaderCoordinator: NSObject {
 
     /// 加入生词本 / 重新收录(词卡按钮):建卡 + 记录语境 + 用当前选区矩形永久加亮;返回新状态。
     /// 仅当"当前选区就是这个词"时把选区矩形作为加亮位置,否则只建卡(如从整句卡词块点进来的)。
-    func collectWord(key: String, surface: String) -> VocabStore.Status? {
-        guard let vocabStore, !docSha.isEmpty else { return nil }
+    @discardableResult
+    func collectWord(key: String, surface: String) -> Bool {
+        guard let vocabStore, !docSha.isEmpty else { return false }
         let selectionIsTerm = selectionText
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == surface.lowercased()
@@ -829,11 +834,59 @@ final class ReaderCoordinator: NSObject {
         )
         guard wordId != nil else {
             DiagLog.log("vocab: collect FAILED 「\(surface)」")
-            return nil
+            return false
         }
         reloadPermanentHighlights()
         DiagLog.log("vocab: collect 「\(surface)」(\(key)) rects=\(useRects.count) page=\(page)")
-        return .new
+        return true
+    }
+
+    // MARK: - 编辑栏「生词本」(v0.10.0,Task 2.1)
+
+    /// 当前选区的首个词(键 + 原形);无词返回 nil。
+    private func menuWord() -> (key: String, surface: String)? {
+        guard let term = WordPicker.firstLexicalWord(in: selectionText), !term.isEmpty else { return nil }
+        return (VocabStore.normalizedKey(term), term)
+    }
+
+    private func currentSelectionVocabState() -> (collected: Bool, colorName: String?) {
+        guard let vocabStore, let word = menuWord() else { return (collected: false, colorName: nil) }
+        return (collected: vocabStore.entryId(forLemma: word.key) != nil,
+                colorName: vocabStore.highlightColorName(forLemma: word.key))
+    }
+
+    private func collectFromMenu() {
+        guard let word = menuWord() else { return }
+        collectWord(key: word.key, surface: word.surface)
+    }
+
+    /// 高亮隐含收录(高亮数据挂在词条上);已收录则直接换色。
+    private func highlightFromMenu(colorName: String) {
+        guard let word = menuWord(), let vocabStore else { return }
+        if vocabStore.entryId(forLemma: word.key) == nil {
+            collectWord(key: word.key, surface: word.surface)
+        }
+        setHighlightColor(key: word.key, colorName: colorName)
+    }
+
+    private func removeHighlightFromMenu() {
+        guard let word = menuWord() else { return }
+        removeWordHighlights(key: word.key)
+    }
+
+    /// v0.10.0(Bug 1.2):标记模式下把内层滚动视图的 pan 触型收紧为"仅手指"——
+    /// Pencil 触摸不再被滚动抢走,全部落到画布;关闭时恢复原触型(滚动交互完整还原)。
+    private func setScrollPanPencilExcluded(_ excluded: Bool) {
+        guard let pdfView, let scroll = pdfScrollView(pdfView) else { return }
+        let pan = scroll.panGestureRecognizer
+        if excluded {
+            if scrollPanOriginalTouchTypes == nil { scrollPanOriginalTouchTypes = pan.allowedTouchTypes }
+            pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        } else if let original = scrollPanOriginalTouchTypes {
+            pan.allowedTouchTypes = original
+            scrollPanOriginalTouchTypes = nil
+        }
+        DiagLog.log("pencil: scroll pan \(excluded ? "finger-only" : "restored")")
     }
 
     /// v0.8.2:原句提取(整句语境;无文本层/失败时回退选中文本,再回退词面)。
@@ -848,15 +901,8 @@ final class ReaderCoordinator: NSObject {
         return fallback.isEmpty ? surface : fallback
     }
 
-    /// 标记已掌握:取消加亮(status 保留为 mastered,供 P1 批量过滤/排除)。
-    func masterWord(key: String) -> VocabStore.Status? {
-        guard let vocabStore, let wordId = vocabStore.entryId(forLemma: key) else { return nil }
-        vocabStore.setStatus(wordId: wordId, status: .mastered)
-        vocabStore.removeHighlights(wordId: wordId)
-        reloadPermanentHighlights()
-        DiagLog.log("vocab: mastered 「\(key)」")
-        return .mastered
-    }
+    /// (v0.10.0 起「已掌握」概念整体移除;取消高亮改由编辑栏「生词本 → 取消高亮」承担)
+    /// 删除某词的全部高亮(v0.8.0;保留词条与语境)。
 
     /// 设置某词高亮颜色(v0.8.0)。
     func setHighlightColor(key: String, colorName: String) {
@@ -888,6 +934,7 @@ final class ReaderCoordinator: NSObject {
         tapRef?.allowedTouchTypes = types
         doubleTapRef?.allowedTouchTypes = types
         tripleTapRef?.allowedTouchTypes = types
+        setScrollPanPencilExcluded(on)   // v0.10.0(Bug 1.2):标记模式下 Pencil 不再被滚动抢走
         if on, !selectionText.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.clearSelection() }
         }
@@ -1403,17 +1450,5 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         true
-    }
-}
-
-extension ReaderCoordinator: UIPencilInteractionDelegate {
-    /// Pencil Pro 挤压(iPadOS 17.5+):默认映射 = 切换标记/选词模式(v0.9.0;动作映射设置项留 M4-B)。
-    func pencilInteraction(
-        _ interaction: UIPencilInteraction,
-        didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
-    ) {
-        guard squeeze.phase == .began else { return }
-        DiagLog.log("pencil: squeeze → toggle mark mode")
-        onPencilSqueeze?()
     }
 }

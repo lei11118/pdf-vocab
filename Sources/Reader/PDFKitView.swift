@@ -24,7 +24,6 @@ struct PDFKitView: UIViewRepresentable {
     var markMode: Bool = false
     var jumpTarget: VocabJumpTarget? = nil
     var onVocabJumpPerformed: () -> Void = {}
-    var onPencilSqueeze: () -> Void = {}
     var onVocabWordTap: (String) -> Void = { _ in }
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: (SelectionInfo?) -> Void
@@ -42,7 +41,6 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.vocabStore = vocabStore
         coordinator.inkStore = inkStore
         coordinator.markMode = markMode
-        coordinator.onPencilSqueeze = onPencilSqueeze
         coordinator.pendingVocabJump = jumpTarget
         coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         coordinator.onVocabWordTap = onVocabWordTap
@@ -78,7 +76,6 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onTeardown = onTeardown
         context.coordinator.vocabStore = vocabStore
         context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
-        context.coordinator.onPencilSqueeze = onPencilSqueeze
         context.coordinator.setMarkMode(markMode)
         context.coordinator.onVocabWordTap = onVocabWordTap
     }

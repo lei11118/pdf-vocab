@@ -12,16 +12,10 @@ import GRDB
 struct VocabStore: Sendable {
     let db: AppDatabase
 
-    enum Status: String {
-        case new
-        case mastered
-    }
-
     struct WordSummary: Identifiable {
         let id: Int64
         let lemma: String
         let surface: String
-        let status: Status
         let occurrenceCount: Int
         let updatedAt: Date
         // 出处(v0.8.0:最近一次语境所在文档/页;若该处有高亮,带出矩形供"一键抵达"临时高亮)
@@ -118,7 +112,7 @@ struct VocabStore: Sendable {
                     SELECT h.wordId AS wordId, h.page AS page, h.rects AS rects, h.color AS color, w.surface AS term
                     FROM vocab_highlight h
                     JOIN vocab_word w ON w.id = h.wordId
-                    WHERE h.docSha = ? AND w.status != 'mastered'
+                    WHERE h.docSha = ?
                     ORDER BY h.page
                     """,
                 arguments: [docSha]
@@ -134,10 +128,10 @@ struct VocabStore: Sendable {
         }) ?? []
     }
 
-    /// 生词本列表(v0.8.0:支持按文档 / 分组 / 搜索筛选;带出处)。
-    func listWords(docSha: String? = nil, groupId: Int64? = nil, search: String? = nil) -> [WordSummary] {
+    /// 生词本列表(v0.8.0:按文档 / 分组 / 搜索筛选;v0.10.0:支持「未分组」筛选;带出处)。
+    func listWords(docSha: String? = nil, groupId: Int64? = nil, ungrouped: Bool = false, search: String? = nil) -> [WordSummary] {
         var sql = """
-            SELECT w.id AS id, w.lemma AS lemma, w.surface AS surface, w.status AS status,
+            SELECT w.id AS id, w.lemma AS lemma, w.surface AS surface,
                    w.updatedAt AS updatedAt,
                    (SELECT COUNT(*) FROM vocab_occurrence o0 WHERE o0.wordId = w.id
                     \(docSha != nil ? "AND o0.docSha = ?" : "")) AS cnt,
@@ -158,6 +152,9 @@ struct VocabStore: Sendable {
         }
         if groupId != nil {
             sql += "\n    AND EXISTS (SELECT 1 FROM vocab_word_group wx WHERE wx.wordId = w.id AND wx.groupId = ?)"
+        }
+        if ungrouped {
+            sql += "\n    AND NOT EXISTS (SELECT 1 FROM vocab_word_group wx WHERE wx.wordId = w.id)"
         }
         if search != nil {
             sql += "\n    AND (w.surface LIKE ? OR w.lemma LIKE ?)"
@@ -183,7 +180,6 @@ struct VocabStore: Sendable {
                 let id: Int64 = row["id"]
                 let lemma: String = row["lemma"]
                 let surface: String = row["surface"]
-                let statusRaw: String = row["status"]
                 let cnt: Int = row["cnt"]
                 let updatedAt: Date = row["updatedAt"]
                 let srcDoc: String? = row["srcDoc"]
@@ -194,7 +190,6 @@ struct VocabStore: Sendable {
                     id: id,
                     lemma: lemma,
                     surface: surface,
-                    status: Status(rawValue: statusRaw) ?? .new,
                     occurrenceCount: cnt,
                     updatedAt: updatedAt,
                     sourceDocSha: srcDoc,
@@ -249,7 +244,7 @@ struct VocabStore: Sendable {
             if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM vocab_word WHERE lemma = ?", arguments: [lemma]) {
                 wordId = existing
                 try db.execute(
-                    sql: "UPDATE vocab_word SET status = 'new', updatedAt = ? WHERE id = ?",
+                    sql: "UPDATE vocab_word SET updatedAt = ? WHERE id = ?",
                     arguments: [now, wordId]
                 )
             } else {
@@ -290,18 +285,27 @@ struct VocabStore: Sendable {
         }
     }
 
-    func setStatus(wordId: Int64, status: Status) {
-        try? db.dbQueue.write { db in
-            try db.execute(
-                sql: "UPDATE vocab_word SET status = ?, updatedAt = ? WHERE id = ?",
-                arguments: [status.rawValue, Date(), wordId]
-            )
-        }
-    }
-
     func removeHighlights(wordId: Int64) {
         try? db.dbQueue.write { db in
             try db.execute(sql: "DELETE FROM vocab_highlight WHERE wordId = ?", arguments: [wordId])
+        }
+    }
+
+    // MARK: - 备注(v0.10.0,Task 2.2)
+
+    func note(forLemma lemma: String) -> String {
+        let value = (try? db.dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT note FROM vocab_word WHERE lemma = ?", arguments: [lemma])
+        }) ?? nil
+        return value ?? ""
+    }
+
+    func setNote(forLemma lemma: String, note: String) {
+        try? db.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE vocab_word SET note = ?, updatedAt = ? WHERE lemma = ?",
+                arguments: [note, Date(), lemma]
+            )
         }
     }
 
@@ -353,6 +357,13 @@ struct VocabStore: Sendable {
     }
 
     // MARK: - 分组(v0.8.0,M3-B)
+
+    /// 把词移出所有分组(拖到「未分组」文件夹;v0.10.0 Task 2.3)。
+    func removeFromAllGroups(wordId: Int64) {
+        try? db.dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM vocab_word_group WHERE wordId = ?", arguments: [wordId])
+        }
+    }
 
     func groups() -> [GroupSummary] {
         (try? db.dbQueue.read { db -> [GroupSummary] in

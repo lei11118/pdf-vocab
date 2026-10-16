@@ -20,9 +20,7 @@ struct FloatingCardWindow: View {
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
     @State private var moveBase: CGPoint?
-    @State private var moveStart: CGPoint?
     @State private var resizeBase: CGSize?
-    @State private var resizeStart: CGPoint?
     @State private var sizeBeforeCompact: CGSize?
     @AppStorage("readerCardX") private var storedX: Double = -1
     @AppStorage("readerCardY") private var storedY: Double = -1
@@ -75,7 +73,7 @@ struct FloatingCardWindow: View {
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeActive)
                 .allowsHitTesting(false)
         }
-        .overlay { resizeHitArea }
+        .overlay(alignment: .bottomTrailing) { resizeHitArea }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: currentPosition.x, y: currentPosition.y)
@@ -130,59 +128,65 @@ struct FloatingCardWindow: View {
     }
 
     private var moveGesture: some Gesture {
+        // v0.10.0:同样改为"起手位置 + 总位移"——不做逐帧增量,坐标系重置也不会跳。
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
                 if moveBase == nil {
                     moveBase = currentPosition
-                    moveStart = value.location
                 }
-                guard let base = moveBase, let start = moveStart else { return }
+                guard let base = moveBase else { return }
                 position = clampedPosition(CGPoint(
-                    x: base.x + value.location.x - start.x,
-                    y: base.y + value.location.y - start.y
+                    x: base.x + value.translation.width,
+                    y: base.y + value.translation.height
                 ))
             }
             .onEnded { _ in
                 moveBase = nil
-                moveStart = nil
                 persist()
             }
     }
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
-    /// 命中区(v0.6.9):**全窗大小**的透明层,`contentShape` = 窗口形状 ∩ 右下角区 ——
-    /// 触摸判定每时每刻与窗口形状一致,形状之外不拦截(视觉仍由白色弧条 `CornerGripArc` 提供)。
+    /// 缩放手柄命中区(v0.10.0,Bug 1.1):**44×44 实心热区**钉在右下角(不再做"形状∩弧线"裁剪)——
+    /// 手指与 Pencil 都容易抓住;`highPriorityGesture` 保证它优先于"拖动窗口"手势,
+    /// 拖小白条不会再误触发移动、松手也不会瞬移。
     private var resizeHitArea: some View {
         Color.clear
-            .contentShape(CornerHitShape(cornerRadius: cornerRadius, size: gripSide))
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if resizeBase == nil {
-                            resizeBase = size
-                            resizeStart = value.location
-                        }
-                        guard let base = resizeBase, let start = resizeStart else { return }
-                        size = clampedSize(CGSize(
-                            width: base.width + value.location.x - start.x,
-                            height: base.height + value.location.y - start.y
-                        ))
-                        if let p = position {
-                            position = clampedPosition(p)
-                        }
-                    }
-                    .onEnded { _ in
-                        resizeBase = nil
-                        resizeStart = nil
-                        persist()
-                    }
-            )
+            .frame(width: gripZone, height: gripZone)
+            .contentShape(Rectangle())
+            .highPriorityGesture(resizeDragGesture)
+    }
+
+    /// 缩放拖拽(v0.10.0):以**手势开始时的尺寸**为基准 + 手势**总位移**(translation)计算——
+    /// 严禁逐帧增量累加,坐标系重置/事件冒泡都不会再产生"瞬移"。
+    private var resizeDragGesture: some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .onChanged { value in
+                if resizeBase == nil {
+                    resizeBase = size
+                    DiagLog.log("card: resize begin \(Int(size.width))x\(Int(size.height))")
+                }
+                guard let base = resizeBase else { return }
+                size = clampedSize(CGSize(
+                    width: base.width + value.translation.width,
+                    height: base.height + value.translation.height
+                ))
+                if let p = position {
+                    position = clampedPosition(p)
+                }
+            }
+            .onEnded { _ in
+                resizeBase = nil
+                persist()
+                DiagLog.log("card: resize end \(Int(size.width))x\(Int(size.height))")
+            }
     }
 
     private var resizeActive: Bool { resizeBase != nil }
 
-    private var gripSide: CGFloat { isCompact ? 22 : 32 }
+    /// 缩放手柄最小热区(≥44×44,人机指南;v0.10.0 Bug 1.1)
+    private let gripZone: CGFloat = 44
 
     // MARK: - 迷你/展开切换(双击胶囊)
 
@@ -267,18 +271,5 @@ private struct CornerGripArc: Shape {
     }
 }
 
-/// v0.6.9:右下角「窗口形状 ∩ 右下角方形区」的命中形状 ——
-/// 让缩放手柄的可触区严格等于窗口自身形状(圆角之外不拦截触摸)。
-private struct CornerHitShape: Shape {
-    var cornerRadius: CGFloat
-    var size: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let card = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-        let zone = CGPath(
-            rect: CGRect(x: rect.maxX - size, y: rect.maxY - size, width: size, height: size),
-            transform: nil
-        )
-        return Path(card.intersection(zone))
-    }
-}
+/// v0.6.9 的 `CornerHitShape`(形状∩弧线裁剪)已废弃——v0.10.0 起命中区改为 44×44 实心方块,
+/// 不做形状裁剪(手指抓得住的优先级 > "形状之外不拦截")。
