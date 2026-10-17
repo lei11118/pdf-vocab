@@ -49,6 +49,8 @@ struct ReaderView: View {
 
     /// v0.14.0:手写工具会话(浮动工具带)
     @StateObject private var pencilTools = PencilToolSession()
+    /// v0.15.0:挤压弧形工具盘锚点(nil = 收起)
+    @State private var arcAnchor: CGPoint?
 
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
@@ -305,6 +307,20 @@ struct ReaderView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .overlay {
+                // v0.15.0:挤压 → 围绕笔尖的弧形工具盘(撤销 / 钢笔 / 铅笔 / 荧光笔 / 橡皮)
+                GeometryReader { geo in
+                    if let arcAnchor {
+                        PencilArcMenu(
+                            session: pencilTools,
+                            anchor: arcAnchor,
+                            bounds: geo.size,
+                            onUndo: { readerHandle.coordinator?.undoInk() },
+                            onDismiss: { self.arcAnchor = nil }
+                        )
+                    }
+                }
+            }
             .animation(.spring(response: 0.3, dampingFraction: 0.88), value: markMode)
     }
 
@@ -407,6 +423,11 @@ struct ReaderView: View {
                     },
                     markMode: markMode,
                     toolSession: pencilTools,
+                    onPencilSqueeze: { point in
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                            arcAnchor = point
+                        }
+                    },
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
                     onVocabWordTap: { term in

@@ -25,7 +25,7 @@ struct LibraryView: View {
                     documentList
                 }
             }
-            .background(PaperBackground())
+            .background(DS.background1.ignoresSafeArea())
             .navigationTitle("跃文")
             .toolbarBackground(DS.background1, for: .navigationBar)
             .toolbar {

@@ -31,6 +31,8 @@ struct PDFKitView: UIViewRepresentable {
     var markMode: Bool = false
     /// v0.14.0:手写工具会话(浮动工具带驱动各页画布)
     var toolSession: PencilToolSession? = nil
+    /// v0.15.0:挤压 → 弧形工具盘(回调笔尖坐标)
+    var onPencilSqueeze: ((CGPoint) -> Void)? = nil
     var jumpTarget: VocabJumpTarget? = nil
     var onVocabJumpPerformed: () -> Void = {}
     var onVocabWordTap: (String) -> Void = { _ in }
@@ -56,6 +58,7 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.onHoverEnd = onHoverEnd
         coordinator.markMode = markMode
         coordinator.toolSession = toolSession
+        coordinator.onPencilSqueeze = onPencilSqueeze
         coordinator.pendingVocabJump = jumpTarget
         coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         coordinator.onVocabWordTap = onVocabWordTap
@@ -98,6 +101,7 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         context.coordinator.setMarkMode(markMode)
         context.coordinator.toolSession = toolSession
+        context.coordinator.onPencilSqueeze = onPencilSqueeze
         context.coordinator.applyToolSession()
         context.coordinator.onVocabWordTap = onVocabWordTap
     }

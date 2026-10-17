@@ -1,7 +1,7 @@
 import SwiftUI
 import PencilKit
 
-/// v0.14.0:手写工具类型(Notability 式四件套)
+/// v0.15.0:手写工具类型(Notability 四件套)
 enum PencilToolKind: String, CaseIterable, Identifiable {
     case pen, pencil, marker, eraser
 
@@ -24,12 +24,10 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .eraser: return "eraser"
         }
     }
-
-    var isInk: Bool { self != .eraser }
 }
 
-/// v0.14.0:手写工具会话 —— 工具 + 墨色/荧光色 + 笔宽,持久记忆;
-/// 由自绘浮动工具带(PencilPaletteView)驱动,并套用到所有页画布。
+/// v0.15.0:手写工具会话 —— 工具 + 墨色/荧光色 + **5 档笔宽** + **橡皮双模式**,持久记忆。
+/// 由双列浮动工具托盘(PencilPaletteView)与挤压弧形工具盘(PencilArcMenu)共同驱动。
 final class PencilToolSession: ObservableObject {
     @Published var kind: PencilToolKind = .pen {
         didSet {
@@ -39,9 +37,12 @@ final class PencilToolSession: ObservableObject {
     }
     @Published var colorIndex: Int = 0 { didSet { persist() } }
     @Published var markerColorIndex: Int = 0 { didSet { persist() } }
-    @Published var widthIndex: Int = 1 { didSet { persist() } }
+    /// 0…4 五档笔宽(Notability 托盘为 5 档尺寸圆点)
+    @Published var widthIndex: Int = 2 { didSet { persist() } }
+    /// 橡皮:false = 局部(bitmap,擦过即擦),true = 整笔(vector,整条笔迹消失)
+    @Published var eraserWhole: Bool = false { didSet { persist() } }
 
-    /// v0.14.1:被隐藏的工具(rawValue 列表;长按工具图标隐藏,「⋯」里恢复)——技能 P1「可定制工具带」
+    /// 被隐藏的工具(rawValue 列表;长按工具图标隐藏,「⋯」里恢复)——可定制工具带
     @Published var hiddenToolRaw: String = UserDefaults.standard.string(forKey: "pencilHiddenTools") ?? "" {
         didSet { UserDefaults.standard.set(hiddenToolRaw, forKey: "pencilHiddenTools") }
     }
@@ -49,10 +50,10 @@ final class PencilToolSession: ObservableObject {
     /// 橡皮切换前的上一支笔(双击手势回退用)
     private(set) var lastInkKind: PencilToolKind = .pen
 
-    /// 墨色(深色纸面上也可读;蓝=主操作色)
-    static let inkHex: [UInt32] = [0x14120E, 0x0A84FF, 0xE5484D, 0x2E9E63, 0xF08C33, 0x9B6BD6]
-    /// 荧光笔色(半透明叠加由 PencilKit marker 处理)
-    static let markerHex: [UInt32] = [0xFFD84D, 0x8FE08A, 0x86C8FF, 0xFFA9C4, 0xFFC48A]
+    /// 墨色:近黑 / 主操作蓝 / 录音红 / 绿 / 橙 / 紫
+    static let inkHex: [UInt32] = [0x0A0A0A, 0x4377FF, 0xED5279, 0x2E9E63, 0xF08C33, 0x9B6BD6]
+    /// 荧光笔色(references/tokens.json 采样:黄 #FDFD01 / 青柠 #A9FD1B / 品红 #FD00D4 + 天蓝 / 粉)
+    static let markerHex: [UInt32] = [0xFDFD01, 0xA9FD1B, 0xFD00D4, 0x86C8FF, 0xFFB3C7]
 
     static let inkColors: [UIColor] = inkHex.map { UIColor(hex: $0) }
     static let markerColors: [UIColor] = markerHex.map { UIColor(hex: $0) }
@@ -65,7 +66,10 @@ final class PencilToolSession: ObservableObject {
         }
         colorIndex = defaults.integer(forKey: "pencilColorIndex")
         markerColorIndex = defaults.integer(forKey: "pencilMarkerIndex")
-        widthIndex = defaults.integer(forKey: "pencilWidthIndex")
+        widthIndex = defaults.object(forKey: "pencilWidthIndex") == nil
+            ? 2
+            : defaults.integer(forKey: "pencilWidthIndex")
+        eraserWhole = defaults.bool(forKey: "pencilEraserWhole")
         if kind == .eraser { kind = .pen }
     }
 
@@ -79,21 +83,22 @@ final class PencilToolSession: ObservableObject {
     var currentUIColor: UIColor {
         switch kind {
         case .eraser:
-            return Self.inkColors[min(max(colorIndex, 0), Self.inkColors.count - 1)]
+            return Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
         case .marker:
-            return Self.markerColors[min(max(markerColorIndex, 0), Self.markerColors.count - 1)]
+            return Self.markerColors[clamped(markerColorIndex, 0, Self.markerColors.count - 1)]
         default:
-            return Self.inkColors[min(max(colorIndex, 0), Self.inkColors.count - 1)]
+            return Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
         }
     }
 
     var swatchColor: Color { Color(uiColor: currentUIColor) }
 
+    /// 五档笔宽(按工具分档)
     var width: CGFloat {
         switch kind {
-        case .pen: return [1.8, 3.2, 5.6][min(widthIndex, 2)]
-        case .pencil: return [1.2, 2.6, 4.6][min(widthIndex, 2)]
-        case .marker: return [12, 20, 30][min(widthIndex, 2)]
+        case .pen: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
+        case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
+        case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
         case .eraser: return 0
         }
     }
@@ -107,7 +112,7 @@ final class PencilToolSession: ObservableObject {
         case .marker:
             return PKInkingTool(.marker, color: currentUIColor, width: width)
         case .eraser:
-            return PKEraserTool(.bitmap)
+            return PKEraserTool(eraserWhole ? .vector : .bitmap)
         }
     }
 
@@ -127,10 +132,28 @@ final class PencilToolSession: ObservableObject {
     }
 
     func cycleWidth() {
-        widthIndex = (widthIndex + 1) % 3
+        widthIndex = (widthIndex + 1) % 5
     }
 
-    // MARK: - v0.14.1:工具隐藏 / 恢复(可定制工具带)
+    func setWidth(_ index: Int) {
+        widthIndex = clamped(index, 0, 4)
+    }
+
+    func toggleEraserWhole() {
+        eraserWhole.toggle()
+    }
+
+    /// Pencil 轻点两下:橡皮 ⇄ 上一支笔
+    func toggleEraser() {
+        if kind == .eraser {
+            kind = lastInkKind
+        } else {
+            lastInkKind = kind
+            kind = .eraser
+        }
+    }
+
+    // MARK: - 工具隐藏 / 恢复(可定制工具带)
 
     var hiddenSet: Set<String> { Set(hiddenToolRaw.split(separator: ",").map(String.init)) }
     var visibleKinds: [PencilToolKind] { PencilToolKind.allCases.filter { !hiddenSet.contains($0.rawValue) } }
@@ -152,14 +175,10 @@ final class PencilToolSession: ObservableObject {
         hiddenToolRaw = set.sorted().joined(separator: ",")
     }
 
-    /// Pencil 轻点两下:橡皮 ⇄ 上一支笔
-    func toggleEraser() {
-        if kind == .eraser {
-            kind = lastInkKind
-        } else {
-            lastInkKind = kind
-            kind = .eraser
-        }
+    // MARK: - 私有
+
+    private func clamped(_ value: Int, _ low: Int, _ high: Int) -> Int {
+        min(max(value, low), high)
     }
 
     private func persist() {
@@ -168,5 +187,6 @@ final class PencilToolSession: ObservableObject {
         defaults.set(colorIndex, forKey: "pencilColorIndex")
         defaults.set(markerColorIndex, forKey: "pencilMarkerIndex")
         defaults.set(widthIndex, forKey: "pencilWidthIndex")
+        defaults.set(eraserWhole, forKey: "pencilEraserWhole")
     }
 }

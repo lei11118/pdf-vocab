@@ -90,7 +90,7 @@ struct SettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(PaperBackground())
+            .background(DS.background1.ignoresSafeArea())
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

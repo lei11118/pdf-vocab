@@ -230,7 +230,7 @@ struct VocabListView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(PaperBackground())
+        .background(DS.background1.ignoresSafeArea())
         .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
     }
 
@@ -373,7 +373,7 @@ struct VocabListView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(PaperBackground())
+            .background(DS.background1.ignoresSafeArea())
             .navigationTitle("「\(word.surface)」的语境(\(rows.count))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

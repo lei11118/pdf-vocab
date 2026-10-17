@@ -1,32 +1,34 @@
 import SwiftUI
 
-/// v0.14.0:Notability 风格浮动工具带。
-/// - 首层:钢笔 / 铅笔 / 荧光笔 / 橡皮 + 墨色圆点 + 笔宽 + 撤销 / 重做;
-/// - 点墨色圆点展开调色盘(渐进披露);
-/// - 可拖动(位置持久记忆),随标记模式出现/消失(短动画,不干扰书写)。
+/// v0.15.0:Notability 式**双列竖向工具托盘**(参照 references/assets/ui-tool-tray-colors-sizes.png):
+/// - 左列:钢笔 / 铅笔 / 荧光笔 / 橡皮 | 撤销 / 重做 | 折叠;
+/// - 右列:颜色网格(6 色 / 荧光 5 色)+ 5 档尺寸圆点 + 当前笔画预览;
+/// - 橡皮选中时:右列切换为「局部 / 整笔」模式选择;
+/// - 白色卡片、圆角 20、轻阴影;可拖动(位置记忆);长按工具图标可隐藏,「⋯」恢复。
 struct PencilPaletteView: View {
     @ObservedObject var session: PencilToolSession
     var onUndo: () -> Void
     var onRedo: () -> Void
 
-    @State private var expanded = false
+    @State private var expanded = true
     @State private var dragStart: CGPoint?
     @AppStorage("pencilPaletteX") private var offsetX: Double = 0
     @AppStorage("pencilPaletteY") private var offsetY: Double = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
+        HStack(alignment: .top, spacing: 0) {
+            toolsColumn
             if expanded {
-                colorPanel
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                dividerV
+                styleColumn
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
             }
-            bar
         }
         .padding(DS.Space.x2s)
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                 .fill(DS.background3)
-                .shadow(color: .black.opacity(0.16), radius: 16, x: 0, y: 6)
+                .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 6)
         )
         .overlay(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
@@ -48,10 +50,10 @@ struct PencilPaletteView: View {
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: expanded)
     }
 
-    // MARK: - 工具带
+    // MARK: - 左列:工具
 
-    private var bar: some View {
-        HStack(spacing: DS.Space.x4s) {
+    private var toolsColumn: some View {
+        VStack(spacing: 2) {
             ForEach(session.visibleKinds) { tool in
                 toolButton(tool)
                     .contextMenu {
@@ -74,72 +76,35 @@ struct PencilPaletteView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DS.foreground3)
-                        .frame(width: 30, height: 36)
+                        .frame(width: 40, height: 36)
                         .contentShape(Rectangle())
                 }
             }
 
-            divider
+            dividerH
 
-            // 墨色(点开调色盘)
+            iconButton("arrow.uturn.backward", label: "撤销", action: onUndo)
+            iconButton("arrow.uturn.forward", label: "重做", action: onRedo)
+
+            dividerH
+
             Button {
                 withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
                     expanded.toggle()
                 }
             } label: {
-                Circle()
-                    .fill(session.swatchColor)
-                    .frame(width: 22, height: 22)
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 2))
-                    .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.12), lineWidth: 0.8))
-                    .frame(width: 36, height: 36)
+                Image(systemName: expanded ? "chevron.left" : "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.foreground3)
+                    .frame(width: 40, height: 30)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("墨色")
-
-            // 笔宽(三档循环,三条粗细线作指示)
-            Button {
-                session.cycleWidth()
-            } label: {
-                HStack(alignment: .center, spacing: 2.5) {
-                    ForEach(0..<3, id: \.self) { index in
-                        Capsule()
-                            .fill(index == session.widthIndex ? DS.accent : DS.foreground3)
-                            .frame(width: 2.5, height: CGFloat(7 + index * 4))
-                    }
-                }
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("笔宽")
-
-            divider
-
-            Button(action: onUndo) {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(DS.foreground2)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("撤销")
-
-            Button(action: onRedo) {
-                Image(systemName: "arrow.uturn.forward")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(DS.foreground2)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("重做")
+            .accessibilityLabel(expanded ? "收起选项" : "展开选项")
         }
-        .padding(.horizontal, DS.Space.x2s)
+        .frame(width: 40)
     }
 
     private func toolButton(_ tool: PencilToolKind) -> some View {
@@ -148,9 +113,9 @@ struct PencilPaletteView: View {
             session.select(kind: tool)
         } label: {
             Image(systemName: tool.systemImage)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(selected ? DS.accent : DS.foreground2)
-                .frame(width: 36, height: 36)
+                .frame(width: 40, height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
                         .fill(selected ? DS.accentContainer : Color.clear)
@@ -161,41 +126,152 @@ struct PencilPaletteView: View {
         .accessibilityLabel(tool.label)
     }
 
-    private var divider: some View {
-        Rectangle()
-            .fill(DS.foreground1.opacity(0.10))
-            .frame(width: 1, height: 22)
+    private func iconButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(DS.foreground2)
+                .frame(width: 40, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
-    // MARK: - 调色盘
+    // MARK: - 右列:颜色 / 尺寸 / 预览
 
-    private var colorPanel: some View {
-        HStack(spacing: DS.Space.xs) {
-            ForEach(Array(session.swatches.enumerated()), id: \.offset) { pair in
-                let index = pair.offset
-                let color = pair.element
-                let selected = session.kind == .marker
-                    ? session.markerColorIndex == index
-                    : session.colorIndex == index
-                Button {
-                    session.selectColor(index)
-                } label: {
-                    Circle()
-                        .fill(Color(uiColor: color))
-                        .frame(width: 26, height: 26)
-                        .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.10), lineWidth: 0.8))
-                        .overlay(
-                            Circle()
-                                .strokeBorder(selected ? DS.accent : Color.clear, lineWidth: 2.5)
-                                .padding(-3)
-                        )
-                        .contentShape(Circle())
+    private var styleColumn: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            LazyVGrid(columns: [GridItem(.fixed(26), spacing: 8), GridItem(.fixed(26), spacing: 8)], spacing: 8) {
+                ForEach(Array(session.swatches.enumerated()), id: \.offset) { pair in
+                    colorDot(index: pair.offset, color: pair.element)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("颜色 \(index + 1)")
+            }
+
+            dividerH
+
+            if session.kind == .eraser {
+                eraserModeRow
+            } else {
+                sizeDots
+                strokePreview
             }
         }
-        .padding(.horizontal, DS.Space.x2s)
-        .padding(.top, DS.Space.x4s)
+        .padding(.leading, DS.Space.x2s)
+        .padding(.vertical, DS.Space.x3s)
+        .frame(width: 108, alignment: .leading)
+    }
+
+    private func colorDot(index: Int, color: UIColor) -> some View {
+        let selected = session.kind == .marker
+            ? session.markerColorIndex == index
+            : session.colorIndex == index
+        return Button {
+            session.selectColor(index)
+        } label: {
+            Circle()
+                .fill(Color(uiColor: color))
+                .frame(width: 26, height: 26)
+                .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.10), lineWidth: 0.8))
+                .overlay(
+                    Circle()
+                        .strokeBorder(selected ? DS.accent : Color.clear, lineWidth: 2.5)
+                        .padding(-3)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("颜色 \(index + 1)")
+    }
+
+    /// 5 档尺寸圆点(直径递增,选中有描边环)
+    private var sizeDots: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<5, id: \.self) { index in
+                let selected = session.widthIndex == index
+                let diameter = CGFloat(7 + index * 4)
+                Button {
+                    session.setWidth(index)
+                } label: {
+                    Circle()
+                        .fill(selected ? DS.accent : DS.foreground4)
+                        .frame(width: diameter, height: diameter)
+                        .frame(width: 18, height: 22)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(selected ? DS.accent.opacity(0.35) : Color.clear, lineWidth: 2)
+                                .frame(width: diameter + 6, height: diameter + 6)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("笔宽 \(index + 1)")
+            }
+        }
+    }
+
+    /// 当前笔画预览(颜色 + 粗细)
+    private var strokePreview: some View {
+        Canvas { context, size in
+            var path = Path()
+            let midY = size.height / 2
+            path.move(to: CGPoint(x: 2, y: midY))
+            path.addCurve(
+                to: CGPoint(x: size.width - 2, y: midY),
+                control1: CGPoint(x: size.width * 0.32, y: midY - 9),
+                control2: CGPoint(x: size.width * 0.68, y: midY + 9)
+            )
+            let lineWidth = min(max(session.width * 0.9, 1.2), 8)
+            context.stroke(
+                path,
+                with: .color(session.swatchColor),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+            )
+        }
+        .frame(height: 26)
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+    }
+
+    /// 橡皮双模式:局部(bitmap)/ 整笔(vector)
+    private var eraserModeRow: some View {
+        HStack(spacing: 4) {
+            eraserChip("局部", on: !session.eraserWhole) {
+                if session.eraserWhole { session.toggleEraserWhole() }
+            }
+            eraserChip("整笔", on: session.eraserWhole) {
+                if !session.eraserWhole { session.toggleEraserWhole() }
+            }
+        }
+    }
+
+    private func eraserChip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(DS.Fonts.caption2)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(on ? DS.accentContainer : Color.clear, in: Capsule())
+                .foregroundStyle(on ? DS.accent : DS.foreground2)
+                .overlay(Capsule().strokeBorder(DS.foreground1.opacity(on ? 0 : 0.12), lineWidth: 0.8))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 分隔线
+
+    private var dividerV: some View {
+        Rectangle()
+            .fill(DS.foreground1.opacity(0.08))
+            .frame(width: 1)
+            .padding(.vertical, DS.Space.x3s)
+    }
+
+    private var dividerH: some View {
+        Rectangle()
+            .fill(DS.foreground1.opacity(0.08))
+            .frame(width: 28, height: 1)
+            .padding(.vertical, 3)
     }
 }
