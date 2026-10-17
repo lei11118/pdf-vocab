@@ -165,6 +165,7 @@ struct ReaderView: View {
         .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
         .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
         .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
+        .onChange(of: pencilTools.eraserWhole) { _, _ in applyPencilTool() }
         .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
         .onChange(of: pencilAutoReturnEraser) { _, value in
             pencilTools.autoReturnFromEraser = value

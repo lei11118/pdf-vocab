@@ -32,49 +32,58 @@ struct PencilPaletteView: View {
     // MARK: - 常驻胶囊
 
     private var compactBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                ForEach(session.visibleKinds) { tool in
-                    toolButton(tool)
-                }
-
-                rulerButton
-
-                divider
-
-                Button {
-                    withAnimation(DS.Motion.spring) { expanded.toggle() }
-                } label: {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(session.kind == .eraser ? DS.foreground3 : session.swatchColor)
-                            .frame(width: 13, height: 13)
-                            .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.12), lineWidth: 0.7))
-                        Image(systemName: expanded ? "chevron.down" : "chevron.up")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(DS.foreground3)
-                    }
-                    .frame(width: 48, height: 38)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(DSPressableButtonStyle())
-                .accessibilityLabel(expanded ? "收起笔刷选项" : "展开颜色与笔宽")
-
-                divider
-
-                if let onExitWriting {
-                    compactIcon("text.cursor", label: "回到选词阅读", action: onExitWriting)
-                    divider
-                }
-
-                compactIcon("arrow.uturn.backward", label: "撤销", action: onUndo)
-                compactIcon("arrow.uturn.forward", label: "重做", action: onRedo)
+        // v0.16.0:工具条按内容收成一颗胶囊(Notability 的 toolbox 是“浮在纸上的小条”,
+        // 不是固定宽的栏);窄分屏时才退化为横向滚动。
+        ViewThatFits(in: .horizontal) {
+            barContent
+            ScrollView(.horizontal, showsIndicators: false) {
+                barContent
             }
-            .padding(.horizontal, DS.Space.x3s)
-            .padding(.vertical, 5)
+            .frame(maxWidth: 520)
         }
-        .frame(maxWidth: 520)
         .dsFloatingPanel(radius: DS.Radius.pill)
+    }
+
+    private var barContent: some View {
+        HStack(spacing: 2) {
+            ForEach(session.visibleKinds) { tool in
+                toolButton(tool)
+            }
+
+            rulerButton
+
+            divider
+
+            Button {
+                withAnimation(DS.Motion.spring) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(session.kind == .eraser ? DS.foreground3 : session.swatchColor)
+                        .frame(width: 13, height: 13)
+                        .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.12), lineWidth: 0.7))
+                    Image(systemName: expanded ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(DS.foreground3)
+                }
+                .frame(width: 48, height: 38)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(DSPressableButtonStyle())
+            .accessibilityLabel(expanded ? "收起笔刷选项" : "展开颜色与笔宽")
+
+            divider
+
+            if let onExitWriting {
+                compactIcon("text.cursor", label: "回到选词阅读", action: onExitWriting)
+                divider
+            }
+
+            compactIcon("arrow.uturn.backward", label: "撤销", action: onUndo)
+            compactIcon("arrow.uturn.forward", label: "重做", action: onRedo)
+        }
+        .padding(.horizontal, DS.Space.x3s)
+        .padding(.vertical, 5)
     }
 
     private var divider: some View {
