@@ -1,6 +1,6 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
-> 交接时间:2026-10-17 · 当前版本:**v0.15.0(build 48)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
+> 交接时间:2026-10-17 · 当前版本:**v0.16.0(build 50)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 
 ---
@@ -11,8 +11,8 @@
 - **形态**:纯本地、无账号、无云同步、无内购、无埋点;免费 Apple ID 自签侧载(AltStore / SideStore / Sideloadly)。
 - **开发机**:Windows,**没有 Mac**。一切编译与打包走 GitHub Actions(`macos-26` + Xcode 26.6),产出未签名 IPA,用户自己侧载。
 - **代码规模**:47 个 Swift 文件 / 10,141 行;2 个第三方依赖(GRDB、ZIPFoundation),其余全 Apple 原生框架。
-- **状态**:M0–M7 全部里程碑主体完成;最新一轮在做"按 Notability 逆向资料重构 UI 语言 + Pencil Pro 书写体验"(v0.14 → v0.15)。
-- **下一步最该做的**:让用户在真机上验收 v0.15.0 的 6 个新交互项(见 §9),再决定是打磨还是开新功能。
+- **状态**:M0–M7 全部里程碑主体完成;v0.16.0 已完成"Notability 式 UI 与书写体验"重构(封面书架 / 浮动阅读 chrome / 手写工具条状态机 / 套索 / 直尺 / 擦后回笔 / 专注模式)。
+- **下一步最该做的**:让用户在真机上验收 v0.16.0 的交互项(见 §9.1),再决定是打磨还是开新功能。
 
 ---
 
@@ -140,17 +140,18 @@ Sources/
 │  ├─ BackupService.swift     109   VACUUM INTO 快照 / 恢复
 │  └─ BookmarkStore.swift      44   每页书签
 ├─ Library/
-│  ├─ LibraryView.swift       290   文档库(白卡列表/空状态/导入/⚙️/诊断)
+│  ├─ LibraryView.swift       533   文档库(封面网格/继续阅读卡/悬浮导入坞/搜索/空状态/诊断)
+│  ├─ DocumentCover.swift     146   PDF 首页封面缩略图(内存缓存 + 纸封面回退 + 元数据行)
 │  └─ PDFDocumentPicker.swift  46   UIDocumentPicker 包装(asCopy: true)
 ├─ Reader/
-│  ├─ ReaderView.swift        692   阅读页总装:PDFKitView + 浮卡 + 工具带 + 弧盘 + 各 sheet + 位置记忆 + 夜间罩层
+│  ├─ ReaderView.swift        828   阅读页总装:PDFKitView + 浮卡 + 工具条 + 弧盘 + 各 sheet + 位置记忆 + 夜间罩层 + 专注模式 + 浮动顶栏/底部模式条
 │  ├─ PDFKitView.swift        112   UIViewRepresentable;把 SwiftUI 状态灌给 Coordinator
 │  ├─ VocabPDFView.swift       14   PDFView 子类,屏蔽"全选"
 │  ├─ Pencil/
 │  │  ├─ PencilOverlay.swift      254  PDFPageOverlayViewProvider + InkOverlayView(每页 PKCanvasView)
-│  │  ├─ PencilToolSession.swift  192  工具/颜色/5档笔宽/橡皮模式/持久化
-│  │  ├─ PencilPaletteView.swift  277  双列竖向工具托盘(v0.15)
-│  │  ├─ PencilArcMenu.swift      128  挤压弧形工具盘(v0.15)
+│  │  ├─ PencilToolSession.swift  217   工具/颜色/5档笔宽/橡皮双模式/擦后回笔/直尺/工具隐藏
+│  │  ├─ PencilPaletteView.swift  420   Notability 式悬浮工具条(点当前工具展开样式层;按内容收成胶囊)
+│  │  ├─ PencilArcMenu.swift      136   挤压弧形工具盘(撤销/直尺/各笔具)
 │  │  └─ PencilInkStore.swift      42  笔迹按页存取(GRDB)
 │  ├─ Selection/
 │  │  ├─ ReaderCoordinator.swift 1906  ★核心★ 取词/选区/菜单/手柄/拖选/OCR 兜底/手势隔离/Pencil 模式/工具会话
@@ -231,9 +232,14 @@ Sources/
 - 模式切换:`select` 模式 `hitTest` 返回 nil(全穿透);`mark` 模式**无条件返回画布**(不判触摸类型)。
 - 让 Pencil 绘制不被滚动抢:遍历 PDFView 内所有 `UIScrollView`,把 `panGestureRecognizer.allowedTouchTypes = [.direct]` + `delaysContentTouches = false`,账本记原值,退出还原;**幂等重臂**(文档加载/变更/翻页/每次 updateUIView 都要重做,因为 PDFKit 会重建内部层级)。
 - 工具:**不用 PKToolPicker**(v0.14 起移除),自绘 `PencilPaletteView` + 自装 `UIPencilInteraction`:
-  - 挤压 → 选词模式下先 `setMarkMode(true)`,再呼出 `PencilArcMenu`(围绕笔尖的扇环,半径 132 / 环宽 70);
+  - **v0.16 工具状态机(Notability 式)**:点**其他**工具 = 立即切换并直接书写;点**当前**工具 = 展开/收起样式层(颜色 / 五档笔宽 / 笔画预览);橡皮的样式层是「局部 ⇄ 整笔」+「擦完回笔」;套索给出圈选说明;
+  - 工具条是一条**按内容宽度收拢的悬浮胶囊**(`ViewThatFits`:宽屏一行,窄分屏退化为横向滚动),不占固定栏位;
+  - 挤压 → 选词模式下先 `setMarkMode(true)`,再呼出 `PencilArcMenu`(围绕笔尖的扇环,半径 132 / 环宽 70;含撤销与直尺);
   - 轻点两下 → 橡皮 ⇄ 上一支笔;
-  - 双指轻点 = 撤销、三指轻点 = 重做(仅 mark 模式;`numberOfTouchesRequired` 2/3)。
+  - 双指轻点 = 撤销、三指轻点 = 重做(仅 mark 模式;`numberOfTouchesRequired` 2/3);
+  - **直尺** = `PKCanvasView.isRulerActive`(拖尺对准边缘画直线,不改笔具);
+  - **擦后回笔** = `canvasViewDidEndUsingTool` → `returnFromEraserIfNeeded()`,可在工具条右键菜单/设置页关闭。
+- 阅读 chrome(v0.16):浮动胶囊顶栏(返回 / 标题+页码跳转 / 专注 / ⋯)+ 底部「选词 · 手写」模式条;手写模式下底部换成工具条。**专注模式**隐藏顶栏与模式条,只留纸面与一个「退出专注」胶囊;四指轻点或顶栏按钮切换。
 - 撤销目标 = 最近一次 `canvasViewDidBeginUsingTool` 记下的活跃画布(`canvas.undoManager`)。
 
 ### 6.3 设计系统(`DS`)
@@ -251,7 +257,9 @@ v0.15 起对齐逆向资料采样值(不是自创暖色):
 
 间距 2/4/6/8/12/16/24/32/48;圆角 sharp 4 / regular 12 / comfy 20;字号 28/26/22/17/15/17/13/11/10。
 内容色:墨 `#0A0A0A`、荧光黄 `#FDFD01`、青柠 `#A9FD1B`、品红 `#FD00D4`、录音红 `#ED5279`。
-画布外沿用 `paperWhite #FBF8F3`。`PaperBackground`(暖底 + `Resources/paper-grain.png` 纸纹)**目前无使用点**——v0.15.0 把文档库/词表/设置都改回中性面了,它保留着给未来的"纸张内容面"(如词卡预览/笔记页)用;要用就直接 `.background(PaperBackground())`。
+画布外沿用 `paperWhite #FBF8F3`。
+
+**v0.16 增补**:字体分四声部 —— SF Rounded 承担 UI/展示(`display3/title1/title2/headline/subhead/caption/caption2/micro`),`wordTitle/wordBody/wordQuote`(衬线)承担英文词条与例句,`monoCaption` 承担音标/页码/计数;组件层新增 `DSPressableButtonStyle`、`DSPillButtonStyle`、`DSIconButton`、`DSChip`、`DSSectionHeader`、`dsFloatingPanel`(薄材质 + 细边 + 柔和阴影)、`coverPalette`(6 色文档封面)。**文档库 = 封面网格 + 继续阅读卡;阅读页 chrome 全部浮在纸面上**。`PaperBackground`(暖底 + `Resources/paper-grain.png` 纸纹)**目前无使用点**——v0.15.0 把文档库/词表/设置都改回中性面了,它保留着给未来的"纸张内容面"(如词卡预览/笔记页)用;要用就直接 `.background(PaperBackground())`。
 
 > 有一处小遗留值得知道:`PaperBackground` 与 `paper-grain.png` 现在是**死代码/死资源**(无害,1 个 struct + 3.6KB)。若追求整洁可删;若打算做"纸张感"的笔记面则留着。
 
@@ -277,6 +285,7 @@ v0.15 起对齐逆向资料采样值(不是自创暖色):
 | 0.14.0 | 46 | Paper Modern:DS + 浮动工具带 + 移除 PKToolPicker |
 | 0.14.1 | 47 | 纸纹素材 + 工具带隐藏/恢复 |
 | **0.15.0** | **48** | 采样 token 重构 + 双列工具托盘 + 挤压弧盘 + 双指撤销/三指重做 + 5 档笔宽 + 橡皮双模式 |
+| **0.16.0** | **50** | Notability 式重构:封面书架/继续阅读卡/悬浮导入坞;阅读页浮动顶栏+底部模式条+专注模式(四指);工具条状态机(点当前工具展开样式)、套索、直尺、擦后回笔、工具隐藏;词卡/词表衬线排版 |
 
 更早细节(v0.1–v0.6.8)以 tag 与 `docs/PLAN.md` 为准。远端 48 个 tag,本地已 `git fetch --tags` 同步。
 
@@ -302,16 +311,22 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 9. 当前待办
 
-### 9.1 v0.15.0 真机验收(最优先,用户还没给反馈)
-1. 双列托盘的折叠 / 拖动 / 长按隐藏 / 「⋯」恢复是否顺手;笔画预览是否随色/宽实时变。
-2. **挤压弧盘的位置**:是否落在笔尖附近、扇区点得准不准(圆心钳制写死 200pt 边距,大概率需要真机调参 `radius`/`center` 偏移)。
-3. 双指轻点撤销 / 三指轻点重做**会不会误触**(若误触,改法:仅当 Pencil 悬停或 `markMode` 且最近 1.5s 有笔迹时启用)。
-4. 5 档笔宽手感;荧光笔最粗档(46pt)是否过粗。
-5. 橡皮「整笔」(vector)是否符合预期。
-6. 深色模式下 `#101215` / `#1A1D21` 的中性面观感;白卡在深色里是否刺眼。
+### 9.1 v0.16.0 真机验收(最优先,用户还没给反馈)
+1. **工具条状态机**:点其他工具是否立即能写;点当前工具是否展开样式层;样式层是否挡住正在写的位置;工具条在横竖屏、分屏下是否仍是一颗胶囊(不拉满全宽)。
+2. **橡皮**:局部/整笔切换是否即时生效(本轮修了 `eraserWhole` 未同步的 bug);「擦完回到上一支笔」是否太急(想连擦多笔时会不会烦)——若烦,默认关掉。
+3. **直尺**:开启后直尺是否出现、可拖动、沿尺边画直线是否顺手;退出书写模式后直尺状态是否残留。
+4. **套索**:圈选后能否整体移动/删除;与 PDF 滚动是否冲突。
+5. **挤压弧盘**:位置是否落在笔尖附近、扇区点得准不准(圆心钳制写死 200pt 边距,可能需要真机调 `radius`/`center` 偏移);新增「直尺」扇区是否好点。
+6. **双指撤销 / 三指重做**会不会误触;四指轻点进/出专注模式会不会与系统手势打架。
+7. **封面书架**:PDF 首页封面是否正确、滚动是否掉帧、深色模式下封面与标题对比是否够。
+8. **阅读 chrome**:浮动顶栏是否遮住 PDF 页面顶部内容(可滚动让开);底部模式条是否挡住页码/正文。
 
 ### 9.2 已知缺口 / 未验证(诚实清单)
 - **无自动化测试**;无 UI 测试;CI 绿 ≠ 真机不崩(v0.13.1 已证)。
+- **v0.16 未做真机验收**:本轮所有 UI/手写改动只过了 CI 编译。
+- **没有形状识别 / 画线吸附**:PencilKit 不暴露笔迹几何识别 API,Notability 的「画完停顿变直线/形状」在零依赖前提下做不了(除非自研墨迹引擎,不在范围内)。
+- **手指不能书写**(`drawingPolicy = .pencilOnly`,保手掌排除);Notability 有「断开 Pencil 后手指书写」开关,本 App 暂无。
+- **工具条不能拖到任意位置**(固定底部居中);Notability 的 toolbox 可拖动。
 - **Anki**:v0.13.4 修了 `dconf.id`,但**反向卡 / 挖空卡 / 页面截图 / 内嵌音频**在 Anki 桌面与 AnkiMobile 的实际导入播放仍缺一次完整真机验收。
 - **OCR**:旋转页/倾斜页未处理;识别质量未做基准;超长文档内存表现未测。
 - **批注导出**:输出是**页面图片化 PDF**(不是矢量叠加),体积会变大,文字不可选——这是已知取舍。
@@ -332,6 +347,8 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 ## 10. 坑位手册(踩过的,别重踩)
 
 **编译 / Swift**
+- **SwiftUI `body` 不能写成 20+ 个修饰符的一条长链**:会触发 `unable to type-check this expression in reasonable time`(v0.16 实测:CI 在 Archive 卡 11 分钟才报错)。拆成多个 `private var xxxContent: some View`(每组 ≤6 个修饰符),body 只返回最后一段。
+- `DS.Motion.base/fast/slow` 是 **`Double`(秒),不是 `Animation`**;`withAnimation` / `.animation` 要写 `.easeInOut(duration: DS.Motion.base)`。
 - `ForEach(Array(x.enumerated()), id: \.offset) { index, item in }` 在 Swift 5 下报 SE-0110 → 写 `{ pair in pair.offset / pair.element }`。
 - 新文件忘 `import SwiftUI` 会引发一大串看似无关的 `buildExpression` 报错,先查 import。
 - 成员初始化器参数顺序**必须与属性声明顺序一致**,`PDFKitView` 加参数时同步改 call site。
@@ -379,6 +396,6 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 12. 给下一个 agent 的开场提示(可直接粘贴)
 
-> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。当前版本 v0.15.0(48)。
+> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。当前版本 v0.16.0(50)。
 > 先读 `docs/HANDOFF.md`,再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
-> 当前处于"按 Notability 逆向资料重构 UI 与 Pencil 体验"阶段,v0.15.0 的 6 个新交互项待用户真机验收(见 HANDOFF §9.1)。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
+> 当前处于"按 Notability 逆向资料重构 UI 与 Pencil 体验"阶段,v0.16.0 的 8 项新交互待用户真机验收(见 HANDOFF §9.1)。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
