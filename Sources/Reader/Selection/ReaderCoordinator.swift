@@ -54,6 +54,8 @@ final class ReaderCoordinator: NSObject {
     var inkStore: PencilInkStore?
     /// v0.14.0:手写工具会话(浮动工具带 → 各页画布)
     var toolSession: PencilToolSession?
+    /// v0.15.0:挤压 → 弧形工具盘(由 ReaderView 弹层;参数为笔尖视图坐标)
+    var onPencilSqueeze: ((CGPoint) -> Void)?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
@@ -380,6 +382,14 @@ final class ReaderCoordinator: NSObject {
         let pencilInteraction = UIPencilInteraction()
         pencilInteraction.delegate = self
         view.addInteraction(pencilInteraction)
+
+        // v0.15.0:Notability 式手势——双指轻点撤销、三指轻点重做(仅标记模式生效)
+        let inkUndoTap = UITapGestureRecognizer(target: self, action: #selector(handleInkUndoTap(_:)))
+        inkUndoTap.numberOfTouchesRequired = 2
+        view.addGestureRecognizer(inkUndoTap)
+        let inkRedoTap = UITapGestureRecognizer(target: self, action: #selector(handleInkRedoTap(_:)))
+        inkRedoTap.numberOfTouchesRequired = 3
+        view.addGestureRecognizer(inkRedoTap)
 
         // 编辑菜单(系统组件)
         menu.onTranslate = { [weak self] text in
@@ -1252,6 +1262,19 @@ final class ReaderCoordinator: NSObject {
     func undoInk() { overlayProvider?.undo() }
     func redoInk() { overlayProvider?.redo() }
 
+    // v0.15.0:双指轻点 = 撤销、三指轻点 = 重做(Notability 手势;仅标记模式生效)
+    @objc private func handleInkUndoTap(_ gesture: UITapGestureRecognizer) {
+        guard markMode else { return }
+        undoInk()
+        PencilHaptics.selectionCompleted(at: lastTouchViewPoint)
+    }
+
+    @objc private func handleInkRedoTap(_ gesture: UITapGestureRecognizer) {
+        guard markMode else { return }
+        redoInk()
+        PencilHaptics.selectionCompleted(at: lastTouchViewPoint)
+    }
+
     /// 生词本 → 出处跳转:跳页 + 橙色临时高亮(约 2.5s 自动消失;点空白/清选区也会清掉)。
     func jumpToVocab(target: VocabJumpTarget) {
         guard let pdfView, let doc = pdfView.document else { return }
@@ -1867,11 +1890,17 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
         DiagLog.log("pencil: double-tap tool=\(session.kind.rawValue)")
     }
 
-    /// Pencil Pro 挤压:切换标记 / 选词模式
+    /// v0.15.0:Pencil Pro 挤压 = 呼出弧形工具盘(选词模式下先进入标记模式)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        let entering = !markMode
-        setMarkMode(entering)
-        if entering { applyToolSession() }
-        DiagLog.log("pencil: squeeze -> markMode=\(entering)")
+        if !markMode {
+            setMarkMode(true)
+        }
+        applyToolSession()
+        let point = lastTouchViewPoint == .zero
+            ? CGPoint(x: pdfView?.bounds.midX ?? 0, y: pdfView?.bounds.midY ?? 0)
+            : lastTouchViewPoint
+        PencilHaptics.selectionCompleted(at: point)
+        DiagLog.log("pencil: squeeze -> arc menu at \(Int(point.x)),\(Int(point.y))")
+        onPencilSqueeze?(point)
     }
 }

@@ -1,59 +1,83 @@
 import SwiftUI
 import UIKit
 
-/// Paper Modern 设计系统(v0.14.0)
-/// 依据《Notability 16.13 逆向学习 Skill》提炼的**语义化 token 设计**(非像素复刻,不使用其任何专有资产):
-/// 暖纸面 + 现代排版 + 语义色层级 + 克制动效。
+/// Paper Modern 设计系统 v0.15.0 —— 依据《Notability 16.13 逆向学习》references
+/// (`tokens.json` 采样色 + `03-design-language.md` 类型/间距/圆角规格)重构:
+/// **中性面(#F6F6F8)+ 白卡 + 一个强调蓝(#5A89FF)**;90% 中性、1 个强调色,彩色只留给内容与状态。
 /// 规则:组件不得直接写十六进制色/字号/阴影——一律引用这里的 token。
 enum DS {
 
+    // MARK: - 采样品牌 / 内容色(references/tokens.json · sampled)
+
+    /// 品牌蓝(营销面/插画主色)
+    static let brandBlue = dynamic(light: 0x5497FE, dark: 0x5497FE)
+    /// 主操作蓝(Chat 发送按钮采样)
+    static let actionBlue = dynamic(light: 0x4377FF, dark: 0x6B95FF)
+    /// 选中底(文本工具栏选中态采样)
+    static let selectedTint = dynamic(light: 0xECF2FF, dark: 0x1C2A45)
+    /// 中性面(卡片容器底)
+    static let surfaceNeutral = dynamic(light: 0xF6F6F8, dark: 0x101215)
+    /// 内容卡片面
+    static let surfaceWhite = dynamic(light: 0xFFFFFF, dark: 0x1A1D21)
+    /// 工具图标描边灰
+    static let iconGray = dynamic(light: 0x444F60, dark: 0xAEB6C2)
+    /// 录音/警示红
+    static let recordRed = dynamic(light: 0xED5279, dark: 0xFF6E8C)
+    /// 暖白纸面(画布外沿)
+    static let paperWhite = dynamic(light: 0xFBF8F3, dark: 0x14161A)
+    /// 内容色(采样自荧光笔调色盘)
+    static let inkYellow = dynamic(light: 0xFDFD01, dark: 0xFDFD01)
+    static let inkLime = dynamic(light: 0xA9FD1B, dark: 0xA9FD1B)
+    static let inkMagenta = dynamic(light: 0xFD00D4, dark: 0xFD00D4)
+    static let inkBlack = dynamic(light: 0x0A0A0A, dark: 0x0A0A0A)
+
     // MARK: - 语义色(自动适配浅色 / 深色)
 
-    /// 背景 1:主背景(暖纸白 / 墨黑)
-    static let background1 = dynamic(light: 0xF7F4EC, dark: 0x151412)
-    /// 背景 2:次级面板 / 工具条底
-    static let background2 = dynamic(light: 0xEFEBDF, dark: 0x1D1C19)
-    /// 背景 3:浮层 / 卡片
-    static let background3 = dynamic(light: 0xFFFFFF, dark: 0x26241F)
-    /// 背景 4:强调容器 / 选中底
-    static let background4 = dynamic(light: 0xE8E3D3, dark: 0x322F28)
+    /// 背景 1:页面底(中性灰)
+    static let background1 = dynamic(light: 0xF6F6F8, dark: 0x101215)
+    /// 背景 2:卡片 / 面板
+    static let background2 = dynamic(light: 0xFFFFFF, dark: 0x1A1D21)
+    /// 背景 3:浮层(工具托盘、词卡)
+    static let background3 = dynamic(light: 0xFFFFFF, dark: 0x23262B)
+    /// 背景 4:选中底 / 强调容器
+    static let background4 = dynamic(light: 0xECF2FF, dark: 0x26334A)
 
-    /// 前景 1:主文字 / 主图标
-    static let foreground1 = dynamic(light: 0x171510, dark: 0xF3EFE2)
-    /// 前景 2:次文字
-    static let foreground2 = dynamic(light: 0x5B564A, dark: 0xB7B1A1)
-    /// 前景 3:弱提示 / 占位
-    static let foreground3 = dynamic(light: 0x8B8678, dark: 0x8D8879)
+    /// 前景 1:主文字
+    static let foreground1 = dynamic(light: 0x0E1116, dark: 0xF3F5F8)
+    /// 前景 2:次文字 / 图标灰
+    static let foreground2 = dynamic(light: 0x444F60, dark: 0xAEB6C2)
+    /// 前景 3:弱提示
+    static let foreground3 = dynamic(light: 0x8892A6, dark: 0x7C8595)
     /// 前景 4:禁用 / 极弱
-    static let foreground4 = dynamic(light: 0xC2BDAD, dark: 0x5C584D)
+    static let foreground4 = dynamic(light: 0xC3C9D4, dark: 0x4E5665)
 
-    /// 主操作 / 当前工具 / 链接(Notability 蓝)
-    static let accent = dynamic(light: 0x0A84FF, dark: 0x3D9BFF)
-    /// 主色浅底(选中态容器)
-    static let accentContainer = dynamic(light: 0xE3F0FF, dark: 0x12263D)
+    /// 主强调(选中、当前工具、链接)
+    static let accent = dynamic(light: 0x5A89FF, dark: 0x7BA3FF)
+    /// 主色浅底(选中容器)
+    static let accentContainer = dynamic(light: 0xECF2FF, dark: 0x1C2A45)
     /// 主色上的文字 / 图标
     static let onAccent = Color.white
     /// 次级强调
-    static let secondary = dynamic(light: 0x6E8B96, dark: 0x8FA9B2)
+    static let secondary = dynamic(light: 0x6E7C91, dark: 0x8E9AAD)
 
     static let success = dynamic(light: 0x2E9E63, dark: 0x55C289)
     static let caution = dynamic(light: 0xD98E24, dark: 0xE3A94D)
-    static let alert = dynamic(light: 0xD2544A, dark: 0xE5766D)
+    static let alert = dynamic(light: 0xED5279, dark: 0xFF6E8C)
     static let incorrect = dynamic(light: 0xC74440, dark: 0xE06B67)
 
-    /// 内容 / 品牌辅助色(用于标签、分组、贴纸位;不是 UI 状态色)
-    static let ink = dynamic(light: 0x14120E, dark: 0x14120E)
+    /// 内容 / 品牌辅助色(标签、分组、插画位)
+    static let ink = dynamic(light: 0x0A0A0A, dark: 0x0A0A0A)
     static let coral = dynamic(light: 0xFF8E4D, dark: 0xFF8E4D)
     static let sage = dynamic(light: 0x8FA98D, dark: 0x8FA98D)
     static let sky = dynamic(light: 0x86B9DB, dark: 0x86B9DB)
     static let terracotta = dynamic(light: 0xC97B5D, dark: 0xC97B5D)
 
-    /// UIKit 侧使用(PDFView 背景等)
+    /// UIKit 侧使用(画布外沿:暖白纸面)
     static let uiBackground1 = UIColor(dynamicProvider: { trait in
-        trait.userInterfaceStyle == .dark ? UIColor(hex: 0x151412) : UIColor(hex: 0xF7F4EC)
+        trait.userInterfaceStyle == .dark ? UIColor(hex: 0x14161A) : UIColor(hex: 0xFBF8F3)
     })
 
-    // MARK: - 间距(4pt 基准)
+    // MARK: - 间距(4pt 基准;9 级)
 
     enum Space {
         static let x4s: CGFloat = 2
@@ -67,29 +91,30 @@ enum DS {
         static let xxl: CGFloat = 48
     }
 
-    // MARK: - 圆角
+    // MARK: - 圆角(sharp / regular / comfy / pill)
 
     enum Radius {
-        static let sharp: CGFloat = 6
+        static let sharp: CGFloat = 4
         static let regular: CGFloat = 12
-        static let comfy: CGFloat = 18
+        static let comfy: CGFloat = 20
+        static let pill: CGFloat = 999
     }
 
-    // MARK: - 语义字号(与 Dynamic Type 联动由系统字体负责)
+    // MARK: - 语义字号(references/tokens.json · inferred)
 
     enum Fonts {
         static let display3 = Font.system(size: 28, weight: .bold)
-        static let title1 = Font.system(size: 24, weight: .bold)
-        static let title2 = Font.system(size: 20, weight: .semibold)
+        static let title1 = Font.system(size: 26, weight: .bold)
+        static let title2 = Font.system(size: 22, weight: .semibold)
         static let headline = Font.system(size: 17, weight: .semibold)
         static let subhead = Font.system(size: 15, weight: .regular)
-        static let body = Font.system(size: 16, weight: .regular)
+        static let body = Font.system(size: 17, weight: .regular)
         static let caption = Font.system(size: 13, weight: .regular)
-        static let caption2 = Font.system(size: 11, weight: .regular)
+        static let caption2 = Font.system(size: 11, weight: .medium)
         static let micro = Font.system(size: 10, weight: .medium)
     }
 
-    // MARK: - 纸感卡片(暖底 + 轻描边 + 柔和阴影;纸感来自叠层,不来自复古装饰)
+    // MARK: - 卡片(白面 + 轻描边 + 极轻阴影;卡片几乎无阴影,靠底色分层)
 
     struct PaperCard: ViewModifier {
         var radius: CGFloat = DS.Radius.comfy
@@ -100,8 +125,8 @@ enum DS {
                 .padding(padding)
                 .background(
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(DS.background3)
-                        .shadow(color: Color.black.opacity(0.07), radius: 12, x: 0, y: 4)
+                        .fill(DS.background2)
+                        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 3)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -120,7 +145,7 @@ enum DS {
 }
 
 extension View {
-    /// 纸感卡片:用于文档卡、提示块、浮层内容。
+    /// 卡片:用于文档卡、提示块、浮层内容。
     func dsCard(radius: CGFloat = DS.Radius.comfy, padding: CGFloat = DS.Space.m) -> some View {
         modifier(DS.PaperCard(radius: radius, padding: padding))
     }
@@ -137,12 +162,12 @@ extension UIColor {
     }
 }
 
-/// 纸感背景:暖底 + 细微纸纹(自制素材 paper-grain;无资产时自动退化为纯色)。
-/// 依据设计原则:纸纹只出现在内容表面(文档库 / 词卡),系统面板保持现代。
+/// 纸纹背景(可选):暖白底 + 细微纸纹。v0.15.0 起文档库/词表改用中性面 `DS.background1`,
+/// 纸纹仅保留给需要"纸张感"的内容面;素材缺失时自动退化为纯色。
 struct PaperBackground: View {
     var body: some View {
         ZStack {
-            DS.background1
+            DS.paperWhite
             if let grain = UIImage(named: "paper-grain") {
                 Image(uiImage: grain)
                     .resizable(resizingMode: .tile)
