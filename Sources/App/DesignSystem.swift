@@ -136,3 +136,19 @@ extension UIColor {
         )
     }
 }
+
+/// 纸感背景:暖底 + 细微纸纹(自制素材 paper-grain;无资产时自动退化为纯色)。
+/// 依据设计原则:纸纹只出现在内容表面(文档库 / 词卡),系统面板保持现代。
+struct PaperBackground: View {
+    var body: some View {
+        ZStack {
+            DS.background1
+            if let grain = UIImage(named: "paper-grain") {
+                Image(uiImage: grain)
+                    .resizable(resizingMode: .tile)
+                    .allowsHitTesting(false)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}

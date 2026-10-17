@@ -25,7 +25,7 @@ struct LibraryView: View {
                     documentList
                 }
             }
-            .background(DS.background1.ignoresSafeArea())
+            .background(PaperBackground())
             .navigationTitle("跃文")
             .toolbarBackground(DS.background1, for: .navigationBar)
             .toolbar {
@@ -161,7 +161,7 @@ struct LibraryView: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(DS.background1)
+        .background(Color.clear)
     }
 
     private var documentList: some View {
@@ -180,7 +180,7 @@ struct LibraryView: View {
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.s)
         }
-        .background(DS.background1)
+        .background(Color.clear)
     }
 
     // MARK: - Bindings

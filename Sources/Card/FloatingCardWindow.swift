@@ -55,7 +55,7 @@ struct FloatingCardWindow: View {
         }
         .animation(.easeInOut(duration: 0.25), value: isCompact)
         .frame(width: size.width, height: size.height)
-        .background(.regularMaterial)
+        .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         // v0.8.0:整窗触摸判定 = 窗口形状——形状之外一律不拦截(交给下层 PDF),杜绝"摸到窗口外的空气也能拖动"
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))

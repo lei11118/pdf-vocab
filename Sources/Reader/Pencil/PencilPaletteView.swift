@@ -52,8 +52,33 @@ struct PencilPaletteView: View {
 
     private var bar: some View {
         HStack(spacing: DS.Space.x4s) {
-            ForEach(PencilToolKind.allCases) { tool in
+            ForEach(session.visibleKinds) { tool in
                 toolButton(tool)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            session.hide(tool)
+                        } label: {
+                            Label("隐藏\(tool.label)", systemImage: "eye.slash")
+                        }
+                    }
+            }
+
+            if !session.hiddenKinds.isEmpty {
+                Menu {
+                    ForEach(session.hiddenKinds) { tool in
+                        Button {
+                            session.unhide(tool)
+                        } label: {
+                            Label("显示\(tool.label)", systemImage: "eye")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DS.foreground3)
+                        .frame(width: 30, height: 36)
+                        .contentShape(Rectangle())
+                }
             }
 
             divider

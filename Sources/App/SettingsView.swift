@@ -89,6 +89,8 @@ struct SettingsView: View {
                     Text(userDictName.map { "当前用户词典:\($0)(查词时优先命中)。" } ?? "支持 StarDict 三件套(.ifo/.idx/.dict 或 .dict.dz,可多选一起选),或打包成 .zip 直接选;导入后离线可用,查词优先命中用户词典。")
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PaperBackground())
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
