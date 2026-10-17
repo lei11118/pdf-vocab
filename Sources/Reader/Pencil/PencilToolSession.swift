@@ -41,6 +41,11 @@ final class PencilToolSession: ObservableObject {
     @Published var markerColorIndex: Int = 0 { didSet { persist() } }
     @Published var widthIndex: Int = 1 { didSet { persist() } }
 
+    /// v0.14.1:被隐藏的工具(rawValue 列表;长按工具图标隐藏,「⋯」里恢复)——技能 P1「可定制工具带」
+    @Published var hiddenToolRaw: String = UserDefaults.standard.string(forKey: "pencilHiddenTools") ?? "" {
+        didSet { UserDefaults.standard.set(hiddenToolRaw, forKey: "pencilHiddenTools") }
+    }
+
     /// 橡皮切换前的上一支笔(双击手势回退用)
     private(set) var lastInkKind: PencilToolKind = .pen
 
@@ -123,6 +128,28 @@ final class PencilToolSession: ObservableObject {
 
     func cycleWidth() {
         widthIndex = (widthIndex + 1) % 3
+    }
+
+    // MARK: - v0.14.1:工具隐藏 / 恢复(可定制工具带)
+
+    var hiddenSet: Set<String> { Set(hiddenToolRaw.split(separator: ",").map(String.init)) }
+    var visibleKinds: [PencilToolKind] { PencilToolKind.allCases.filter { !hiddenSet.contains($0.rawValue) } }
+    var hiddenKinds: [PencilToolKind] { PencilToolKind.allCases.filter { hiddenSet.contains($0.rawValue) } }
+
+    func hide(_ target: PencilToolKind) {
+        guard visibleKinds.count > 1 else { return }   // 至少保留一个工具
+        var set = hiddenSet
+        set.insert(target.rawValue)
+        hiddenToolRaw = set.sorted().joined(separator: ",")
+        if kind == target, let fallback = visibleKinds.first {
+            kind = fallback
+        }
+    }
+
+    func unhide(_ target: PencilToolKind) {
+        var set = hiddenSet
+        set.remove(target.rawValue)
+        hiddenToolRaw = set.sorted().joined(separator: ",")
     }
 
     /// Pencil 轻点两下:橡皮 ⇄ 上一支笔

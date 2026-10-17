@@ -62,7 +62,7 @@ struct WordCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(term)
-                    .font(.title2.bold())
+                    .font(DS.Fonts.title1)
                     .textSelection(.enabled)
                 Spacer()
                 closeButton(onClose)
@@ -82,7 +82,7 @@ struct WordCardView: View {
             case .missing:
                 Text("内置词库缺失(此构建未包含词库)")
                     .font(.callout)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(DS.caution)
                     .padding(.top, 12)
             }
 
@@ -186,8 +186,8 @@ struct WordCardView: View {
                             .font(.caption2)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
-                            .foregroundStyle(Color.accentColor)
+                            .background(DS.accentContainer, in: Capsule())
+                            .foregroundStyle(DS.accent)
                     }
                 }
             }
@@ -325,8 +325,8 @@ struct SentenceCardView: View {
                                         .font(.callout)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                                        .foregroundStyle(Color.accentColor)
+                                        .background(DS.accentContainer, in: Capsule())
+                                        .foregroundStyle(DS.accent)
                                 }
                                 .buttonStyle(.plain)
                             }
