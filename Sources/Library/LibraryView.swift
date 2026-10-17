@@ -25,7 +25,9 @@ struct LibraryView: View {
                     documentList
                 }
             }
+            .background(DS.background1.ignoresSafeArea())
             .navigationTitle("跃文")
+            .toolbarBackground(DS.background1, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -129,28 +131,56 @@ struct LibraryView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("还没有文档", systemImage: "text.book.closed")
-        } description: {
-            Text("导入英文 PDF,长按单词开始学习。")
-        } actions: {
-            Button("导入 PDF") { showImporter = true }
-                .buttonStyle(.borderedProminent)
+        VStack(spacing: DS.Space.m) {
+            ZStack {
+                RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
+                    .fill(DS.background4)
+                    .frame(width: 96, height: 96)
+                Image(systemName: "text.book.closed")
+                    .font(.system(size: 38, weight: .medium))
+                    .foregroundStyle(DS.accent)
+            }
+            VStack(spacing: DS.Space.x3s) {
+                Text("还没有文档")
+                    .font(DS.Fonts.title2)
+                    .foregroundStyle(DS.foreground1)
+                Text("导入英文 PDF,长按单词开始学习")
+                    .font(DS.Fonts.subhead)
+                    .foregroundStyle(DS.foreground3)
+            }
+            Button {
+                showImporter = true
+            } label: {
+                Label("导入 PDF", systemImage: "plus")
+                    .font(DS.Fonts.headline)
+                    .padding(.horizontal, DS.Space.l)
+                    .padding(.vertical, DS.Space.s)
+                    .background(DS.accent, in: Capsule())
+                    .foregroundStyle(DS.onAccent)
+            }
+            .buttonStyle(.plain)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DS.background1)
     }
 
     private var documentList: some View {
-        List {
-            ForEach(documents) { doc in
-                NavigationLink(value: doc) {
-                    DocumentRow(doc: doc)
-                }
-                .contextMenu {
-                    Button("删除", role: .destructive) { pendingDelete = doc }
+        ScrollView {
+            LazyVStack(spacing: DS.Space.s) {
+                ForEach(documents) { doc in
+                    NavigationLink(value: doc) {
+                        DocumentRow(doc: doc)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("删除", role: .destructive) { pendingDelete = doc }
+                    }
                 }
             }
+            .padding(.horizontal, DS.Space.m)
+            .padding(.vertical, DS.Space.s)
         }
-        .listStyle(.insetGrouped)
+        .background(DS.background1)
     }
 
     // MARK: - Bindings
@@ -208,7 +238,8 @@ struct LibraryView: View {
                 Text("正在导入 \(label)…")
             }
             .padding(20)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(DS.background3, in: RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous))
+            .shadow(color: .black.opacity(0.15), radius: 16, y: 6)
         }
     }
 }
@@ -217,20 +248,35 @@ private struct DocumentRow: View {
     let doc: DocumentRecord
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "doc.richtext")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 34)
+        HStack(spacing: DS.Space.s) {
+            ZStack {
+                RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
+                    .fill(DS.accentContainer)
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(DS.accent)
+            }
+            .frame(width: 46, height: 46)
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(doc.title)
+                    .font(DS.Fonts.headline)
+                    .foregroundStyle(DS.foreground1)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DS.Fonts.caption)
+                    .foregroundStyle(DS.foreground3)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: DS.Space.xs)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(DS.foreground4)
         }
-        .padding(.vertical, 2)
+        .dsCard(radius: DS.Radius.comfy, padding: DS.Space.s)
+        .contentShape(Rectangle())
     }
 
     private var subtitle: String {

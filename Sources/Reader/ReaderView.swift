@@ -47,6 +47,9 @@ struct ReaderView: View {
     /// 生词本"一键抵达"目标(v0.8.0;来自主页生词本=预览模式,会话内不记忆阅读位置)
     let jumpTarget: VocabJumpTarget?
 
+    /// v0.14.0:手写工具会话(浮动工具带)
+    @StateObject private var pencilTools = PencilToolSession()
+
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
         self.store = store
@@ -67,8 +70,10 @@ struct ReaderView: View {
                 )
             }
         }
+        .background(DS.background1.ignoresSafeArea())
         .navigationTitle(doc.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(DS.background1, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -78,7 +83,8 @@ struct ReaderView: View {
                         .font(.footnote.monospacedDigit())
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
+                        .background(DS.background4, in: Capsule())
+                        .foregroundStyle(DS.foreground1)
                 }
                 .accessibilityLabel("跳转页码")
             }
@@ -137,7 +143,7 @@ struct ReaderView: View {
                     markMode.toggle()
                 } label: {
                     Image(systemName: markMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
-                        .foregroundStyle(markMode ? Color.accentColor : Color.primary)
+                        .foregroundStyle(markMode ? DS.accent : DS.foreground1)
                 }
                 .accessibilityLabel(markMode ? "切换到选词模式" : "切换到标记模式")
             }
@@ -215,6 +221,16 @@ struct ReaderView: View {
         .onDisappear {
             saveProgressNow()
         }
+        // v0.14.0:工具会话变化 → 立即套到所有页画布(钢笔/铅笔/荧光笔/颜色/笔宽)
+        .onChange(of: pencilTools.kind) { _, _ in applyPencilTool() }
+        .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
+        .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
+        .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
+    }
+
+    /// v0.14.0:把当前笔具同步给预览画布的协调器
+    private func applyPencilTool() {
+        readerHandle.coordinator?.applyToolSession()
     }
 
     /// v0.6.9:选词后自动发音(设置项,默认关;美音)
@@ -276,6 +292,20 @@ struct ReaderView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: cardContent)
+            .overlay(alignment: .bottomLeading) {
+                // v0.14.0:标记模式 → 浮动工具带(钢笔/铅笔/荧光笔/橡皮 + 调色盘 + 撤销重做)
+                if markMode {
+                    PencilPaletteView(
+                        session: pencilTools,
+                        onUndo: { readerHandle.coordinator?.undoInk() },
+                        onRedo: { readerHandle.coordinator?.redoInk() }
+                    )
+                    .padding(.leading, DS.Space.m)
+                    .padding(.bottom, DS.Space.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.88), value: markMode)
     }
 
     /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
@@ -376,6 +406,7 @@ struct ReaderView: View {
                         hoverDetail = nil
                     },
                     markMode: markMode,
+                    toolSession: pencilTools,
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
                     onVocabWordTap: { term in
