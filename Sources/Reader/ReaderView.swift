@@ -65,6 +65,129 @@ struct ReaderView: View {
     }
 
     var body: some View {
+        lifecycleContent
+    }
+
+    // v0.16.0:把原来 20+ 个修饰符的一条长链拆成几段(CI 实测 body 单表达式
+    // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
+    private var lifecycleContent: some View {
+        pencilSyncContent
+            .onChange(of: pencilAutoReturnEraser) { _, value in
+                pencilTools.autoReturnFromEraser = value
+            }
+            .onAppear {
+                pencilTools.autoReturnFromEraser = pencilAutoReturnEraser
+            }
+    }
+
+    private var pencilSyncContent: some View {
+        sceneContent
+            .onChange(of: pencilTools.kind) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.eraserWhole) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
+    }
+
+    private var sceneContent: some View {
+        sheetContent
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active {
+                    saveProgressNow()
+                }
+            }
+            .onDisappear {
+                saveProgressNow()
+            }
+    }
+
+    private var sheetContent: some View {
+        primarySheetContent
+            .sheet(isPresented: $showAnalyze) {
+                if let resolvedURL {
+                    VocabAnalyzeSheet(
+                        url: resolvedURL,
+                        docSha: doc.sha256,
+                        store: VocabStore(db: store.db)
+                    )
+                }
+            }
+            .sheet(isPresented: $showPageJump) {
+                PageJumpSheet(
+                    pageCount: doc.pageCount,
+                    current: currentPage,
+                    url: resolvedURL
+                ) { target in
+                    readerHandle.coordinator?.go(toPage: target)
+                    currentPage = min(max(target, 0), doc.pageCount - 1)
+                }
+                .presentationDetents([.medium, .large])
+            }
+            .alert("导出失败", isPresented: $exportFailed) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text("生成批注版 PDF 时出错,请重试。")
+            }
+            .sheet(item: $shareFile) { item in
+                ActivityShareView(items: [item.url])
+            }
+    }
+
+    private var primarySheetContent: some View {
+        chromeContent
+            .sheet(isPresented: $showSettings) {
+                SettingsView(db: store.db)
+            }
+            .sheet(isPresented: $showVocab) {
+                VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
+                    showVocab = false
+                    readerHandle.coordinator?.jumpToVocab(target: target)
+                }, docStore: store)
+            }
+            .sheet(isPresented: $showOutline) {
+                if let resolvedURL {
+                    ReaderOutlineSheet(
+                        url: resolvedURL,
+                        docSha: doc.sha256,
+                        docTitle: doc.title,
+                        currentPage: currentPage,
+                        bookmarkStore: BookmarkStore(db: store.db),
+                        onJump: { page in
+                            readerHandle.coordinator?.go(toPage: page)
+                            currentPage = page
+                        }
+                    )
+                }
+            }
+            .sheet(isPresented: $showSearch) {
+                if let resolvedURL {
+                    ReaderSearchSheet(
+                        url: resolvedURL,
+                        docSha: doc.sha256,
+                        docTitle: doc.title,
+                        ocrStore: OCRStore(db: store.db),
+                        onJump: { target in
+                            readerHandle.coordinator?.jumpToVocab(target: target)
+                        }
+                    )
+                }
+            }
+    }
+
+    private var chromeContent: some View {
+        rootContent
+            .overlay(alignment: .top) {
+                readerTopOverlay
+            }
+            .overlay(alignment: .bottom) {
+                readerBottomDock
+            }
+            .animation(.easeInOut(duration: DS.Motion.base), value: focusMode)
+            .animation(DS.Motion.spring, value: markMode)
+    }
+
+    private var rootContent: some View {
         Group {
             if let url = try? store.pdfURL(for: doc), FileManager.default.fileExists(atPath: url.path) {
                 reader(for: url)
@@ -79,100 +202,6 @@ struct ReaderView: View {
         .background(DS.paperWhite.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        .overlay(alignment: .top) {
-            readerTopOverlay
-        }
-        .overlay(alignment: .bottom) {
-            readerBottomDock
-        }
-        .animation(DS.Motion.base, value: focusMode)
-        .animation(DS.Motion.spring, value: markMode)
-        .sheet(isPresented: $showSettings) {
-            SettingsView(db: store.db)
-        }
-        .sheet(isPresented: $showVocab) {
-            VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
-                showVocab = false
-                readerHandle.coordinator?.jumpToVocab(target: target)
-            }, docStore: store)
-        }
-        .sheet(isPresented: $showOutline) {
-            if let resolvedURL {
-                ReaderOutlineSheet(
-                    url: resolvedURL,
-                    docSha: doc.sha256,
-                    docTitle: doc.title,
-                    currentPage: currentPage,
-                    bookmarkStore: BookmarkStore(db: store.db),
-                    onJump: { page in
-                        readerHandle.coordinator?.go(toPage: page)
-                        currentPage = page
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showSearch) {
-            if let resolvedURL {
-                ReaderSearchSheet(
-                    url: resolvedURL,
-                    docSha: doc.sha256,
-                    docTitle: doc.title,
-                    ocrStore: OCRStore(db: store.db),
-                    onJump: { target in
-                        readerHandle.coordinator?.jumpToVocab(target: target)
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showAnalyze) {
-            if let resolvedURL {
-                VocabAnalyzeSheet(
-                    url: resolvedURL,
-                    docSha: doc.sha256,
-                    store: VocabStore(db: store.db)
-                )
-            }
-        }
-        .sheet(item: $shareFile) { item in
-            ActivityShareView(items: [item.url])
-        }
-        .alert("导出失败", isPresented: $exportFailed) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text("生成批注版 PDF 时出错,请重试。")
-        }
-        .sheet(isPresented: $showPageJump) {
-            PageJumpSheet(
-                pageCount: doc.pageCount,
-                current: currentPage,
-                url: resolvedURL
-            ) { target in
-                readerHandle.coordinator?.go(toPage: target)
-                currentPage = min(max(target, 0), doc.pageCount - 1)
-            }
-            .presentationDetents([.medium, .large])
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
-                saveProgressNow()
-            }
-        }
-        .onDisappear {
-            saveProgressNow()
-        }
-        // v0.14.0:工具会话变化 → 立即套到所有页画布(钢笔/铅笔/荧光笔/颜色/笔宽)
-        .onChange(of: pencilTools.kind) { _, _ in applyPencilTool() }
-        .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
-        .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
-        .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
-        .onChange(of: pencilTools.eraserWhole) { _, _ in applyPencilTool() }
-        .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
-        .onChange(of: pencilAutoReturnEraser) { _, value in
-            pencilTools.autoReturnFromEraser = value
-        }
-        .onAppear {
-            pencilTools.autoReturnFromEraser = pencilAutoReturnEraser
-        }
     }
 
     // MARK: - v0.16.0 Reader Chrome
@@ -533,7 +562,7 @@ struct ReaderView: View {
                         }
                     },
                     onFocusToggle: {
-                        withAnimation(DS.Motion.base) { focusMode.toggle() }
+                        withAnimation(.easeInOut(duration: DS.Motion.base)) { focusMode.toggle() }
                     },
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
