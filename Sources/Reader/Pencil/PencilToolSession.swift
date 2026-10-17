@@ -3,7 +3,7 @@ import PencilKit
 
 /// v0.15.0:手写工具类型(Notability 四件套)
 enum PencilToolKind: String, CaseIterable, Identifiable {
-    case pen, pencil, marker, eraser
+    case pen, pencil, marker, lasso, eraser
 
     var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .pen: return "钢笔"
         case .pencil: return "铅笔"
         case .marker: return "荧光笔"
+        case .lasso: return "套索"
         case .eraser: return "橡皮"
         }
     }
@@ -21,6 +22,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .pen: return "pencil.tip"
         case .pencil: return "pencil"
         case .marker: return "highlighter"
+        case .lasso: return "lasso"
         case .eraser: return "eraser"
         }
     }
@@ -31,7 +33,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
 final class PencilToolSession: ObservableObject {
     @Published var kind: PencilToolKind = .pen {
         didSet {
-            if kind != .eraser, kind != oldValue { lastInkKind = kind }
+            if kind != .eraser, kind != .lasso, kind != oldValue { lastInkKind = kind }
             persist()
         }
     }
@@ -41,6 +43,10 @@ final class PencilToolSession: ObservableObject {
     @Published var widthIndex: Int = 2 { didSet { persist() } }
     /// 橡皮:false = 局部(bitmap,擦过即擦),true = 整笔(vector,整条笔迹消失)
     @Published var eraserWhole: Bool = false { didSet { persist() } }
+    /// Notability 式细节:擦除一笔后自动回到上一支笔(可在工具托盘右键菜单开关)。
+    @Published var autoReturnFromEraser: Bool = true { didSet { persist() } }
+    /// PencilKit 原生直尺:开启后沿直尺边画线,适合画表格/下划线;不改动笔具。
+    @Published var rulerActive: Bool = false { didSet { persist() } }
 
     /// 被隐藏的工具(rawValue 列表;长按工具图标隐藏,「⋯」里恢复)——可定制工具带
     @Published var hiddenToolRaw: String = UserDefaults.standard.string(forKey: "pencilHiddenTools") ?? "" {
@@ -70,6 +76,10 @@ final class PencilToolSession: ObservableObject {
             ? 2
             : defaults.integer(forKey: "pencilWidthIndex")
         eraserWhole = defaults.bool(forKey: "pencilEraserWhole")
+        autoReturnFromEraser = defaults.object(forKey: "pencilAutoReturnEraser") == nil
+            ? true
+            : defaults.bool(forKey: "pencilAutoReturnEraser")
+        rulerActive = defaults.bool(forKey: "pencilRulerActive")
         if kind == .eraser { kind = .pen }
     }
 
@@ -99,7 +109,7 @@ final class PencilToolSession: ObservableObject {
         case .pen: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
         case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
         case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
-        case .eraser: return 0
+        case .lasso, .eraser: return 0
         }
     }
 
@@ -111,6 +121,8 @@ final class PencilToolSession: ObservableObject {
             return PKInkingTool(.pencil, color: currentUIColor, width: width)
         case .marker:
             return PKInkingTool(.marker, color: currentUIColor, width: width)
+        case .lasso:
+            return PKLassoTool()
         case .eraser:
             return PKEraserTool(eraserWhole ? .vector : .bitmap)
         }
@@ -143,14 +155,25 @@ final class PencilToolSession: ObservableObject {
         eraserWhole.toggle()
     }
 
+    /// 直尺是叠加在画布上的辅助层,不改变当前笔具;适合 Notability 式“画直线/表格”。
+    func toggleRuler() {
+        rulerActive.toggle()
+    }
+
     /// Pencil 轻点两下:橡皮 ⇄ 上一支笔
     func toggleEraser() {
         if kind == .eraser {
             kind = lastInkKind
         } else {
-            lastInkKind = kind
+            if kind != .lasso { lastInkKind = kind }
             kind = .eraser
         }
+    }
+
+    /// 完成一次擦除后回到上一支笔(Notability 的可选“用完即回”行为)。
+    func returnFromEraserIfNeeded() {
+        guard kind == .eraser, autoReturnFromEraser else { return }
+        kind = lastInkKind
     }
 
     // MARK: - 工具隐藏 / 恢复(可定制工具带)
@@ -188,5 +211,7 @@ final class PencilToolSession: ObservableObject {
         defaults.set(markerColorIndex, forKey: "pencilMarkerIndex")
         defaults.set(widthIndex, forKey: "pencilWidthIndex")
         defaults.set(eraserWhole, forKey: "pencilEraserWhole")
+        defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
+        defaults.set(rulerActive, forKey: "pencilRulerActive")
     }
 }

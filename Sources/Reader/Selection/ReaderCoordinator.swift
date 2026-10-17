@@ -56,6 +56,8 @@ final class ReaderCoordinator: NSObject {
     var toolSession: PencilToolSession?
     /// v0.15.0:挤压 → 弧形工具盘(由 ReaderView 弹层;参数为笔尖视图坐标)
     var onPencilSqueeze: ((CGPoint) -> Void)?
+    /// v0.16.0:四指轻点 → 专注模式(ReaderView 负责真正的 chrome 显隐)
+    var onFocusToggle: (() -> Void)?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
@@ -355,6 +357,13 @@ final class ReaderCoordinator: NSObject {
         tap.require(toFail: doubleTap)
         doubleTap.require(toFail: tripleTap)
 
+        // v0.16.0:四指轻点 = 专注模式(Notability 手势;不影响单/双/三指点选)
+        let focusTap = UITapGestureRecognizer(target: self, action: #selector(handleFocusTap(_:)))
+        focusTap.numberOfTouchesRequired = 4
+        focusTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        focusTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(focusTap)
+
         // 拖动柄(原生不对称布局)
         let start = SelectionHandleView(isStart: true)
         start.isHidden = true
@@ -372,9 +381,14 @@ final class ReaderCoordinator: NSObject {
         // v0.9.0(M4):Pencil 标记层(PDFPageOverlayViewProvider 按页叠 PKCanvasView;不改动原 PDF)
         let provider = PencilOverlayProvider(
             pdfView: view, docSha: docSha, inkStore: inkStore, markMode: markMode,
-            tool: toolSession?.makeTool()
+            tool: toolSession?.makeTool(), rulerActive: toolSession?.rulerActive ?? false
         )
         overlayProvider = provider
+        provider.onStrokeEnded = { [weak self] in
+            guard let self, self.markMode, let session = self.toolSession else { return }
+            session.returnFromEraserIfNeeded()
+            self.applyToolSession()
+        }
         view.pageOverlayViewProvider = provider
 
         // v0.14.0:自绘浮动工具带取代系统 PKToolPicker —— Pencil 系统手势回到自定义映射:
@@ -1257,6 +1271,7 @@ final class ReaderCoordinator: NSObject {
     func applyToolSession() {
         guard let provider = overlayProvider, let session = toolSession else { return }
         provider.setTool(session.makeTool())
+        provider.setRulerActive(session.rulerActive)
     }
 
     func undoInk() { overlayProvider?.undo() }
@@ -1267,6 +1282,13 @@ final class ReaderCoordinator: NSObject {
         guard markMode else { return }
         undoInk()
         PencilHaptics.selectionCompleted(at: lastTouchViewPoint)
+    }
+
+    // v0.16.0:四指轻点 = 专注模式(也用于退出;手势只收手指,不影响 Pencil 书写)
+    @objc private func handleFocusTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        onFocusToggle?()
+        DiagLog.log("reader: focus toggle (4-finger tap)")
     }
 
     @objc private func handleInkRedoTap(_ gesture: UITapGestureRecognizer) {

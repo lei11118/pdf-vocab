@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
+    @AppStorage("pencilAutoReturnEraser") private var pencilAutoReturnEraser = true
     @Environment(\.dismiss) private var dismiss
 
     private enum BackupState { case idle, exporting, importing }
@@ -45,10 +46,11 @@ struct SettingsView: View {
                 Section {
                     Toggle("Pencil 悬停预览", isOn: $pencilHoverPreview)
                     Toggle("触觉反馈", isOn: $pencilHaptics)
+                    Toggle("橡皮擦完自动回到上一支笔", isOn: $pencilAutoReturnEraser)
                 } header: {
                     Text("Pencil")
                 } footer: {
-                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。")
+                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。「擦完自动回笔」可在工具条右键菜单或这里切换。")
                 }
                 Section {
                     Button {

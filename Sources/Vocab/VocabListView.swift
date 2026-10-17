@@ -170,10 +170,10 @@ struct VocabListView: View {
                     showNewGroup = true
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, DS.Layout.pageMargin)
+            .padding(.vertical, DS.Space.xs)
         }
-        .background(.bar)
+        .background(DS.background1)
     }
 
     /// 拖放落地:groupId = nil → 移出所有分组(「未分组」)。
@@ -226,9 +226,12 @@ struct VocabListView: View {
                     }
                 }
                 .contextMenu { rowMenu(word) }
+                .listRowInsets(EdgeInsets(top: 4, leading: DS.Layout.pageMargin, bottom: 4, trailing: DS.Layout.pageMargin))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(DS.background1.ignoresSafeArea())
         .environment(\.editMode, .constant(isSelecting ? .active : .inactive))
@@ -310,16 +313,17 @@ struct VocabListView: View {
     // MARK: - 空态
 
     private var emptyHint: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: DS.Space.s) {
             Spacer()
             Image(systemName: "text.book.closed")
-                .font(.largeTitle)
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 36, weight: .medium))
+                .foregroundStyle(DS.foreground3)
             Text(emptyHintText)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(DS.Fonts.subhead)
+                .foregroundStyle(DS.foreground3)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                .lineSpacing(3)
+                .padding(.horizontal, DS.Space.xl)
             Spacer()
         }
         .frame(maxWidth: .infinity)
@@ -387,22 +391,24 @@ struct VocabListView: View {
     // MARK: - 批量(删除)
 
     private var batchBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: DS.Space.m) {
             Text("已选 \(selectedIds.count) 项")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(DS.Fonts.caption)
+                .foregroundStyle(DS.foreground2)
             Spacer()
             Button(role: .destructive) {
                 showBatchDeleteConfirm = true
             } label: {
                 Label("删除", systemImage: "trash")
-                    .font(.subheadline)
+                    .font(DS.Fonts.caption2)
             }
             .disabled(selectedIds.isEmpty)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
+        .padding(.horizontal, DS.Space.m)
+        .frame(height: 52)
+        .dsFloatingPanel(radius: DS.Radius.pill)
+        .padding(.horizontal, DS.Space.m)
+        .padding(.bottom, DS.Space.xs)
     }
 
     private func batchDelete() {
@@ -448,23 +454,30 @@ private struct FolderChip: View {
 
     var body: some View {
         Button(action: tap) {
-            HStack(spacing: 5) {
+            HStack(spacing: DS.Space.x2s) {
                 Image(systemName: icon)
                     .font(.system(size: 12, weight: .semibold))
                 Text(title)
-                    .font(.footnote.weight(.medium))
+                    .font(DS.Fonts.caption2)
                 if let count {
                     Text("\(count)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(active ? Color.white.opacity(0.85) : Color.secondary)
+                        .font(DS.Fonts.micro.monospacedDigit())
+                        .foregroundStyle(active ? DS.onAccent.opacity(0.82) : DS.foreground3)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(active ? Color.accentColor : Color(.secondarySystemBackground), in: Capsule())
-            .foregroundStyle(active ? Color.white : Color.primary)
+            .padding(.horizontal, DS.Space.s)
+            .frame(height: 32)
+            .background(active ? DS.accent : DS.background2, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    active ? Color.clear : DS.foreground1.opacity(0.07),
+                    lineWidth: 0.8
+                )
+            )
+            .foregroundStyle(active ? DS.onAccent : DS.foreground2)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
     }
 }
 
@@ -480,48 +493,59 @@ private struct VocabRowView: View {
     @State private var translation: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: DS.Space.x2s) {
+            HStack(spacing: DS.Space.s) {
                 Text(word.surface)
-                    .font(.body.weight(.semibold))
+                    .font(DS.Fonts.title2)
+                    .foregroundStyle(DS.foreground1)
                 Spacer(minLength: 0)
                 Button(action: onAudio) {
                     Image(systemName: "speaker.wave.2.fill")
-                        .font(.footnote)
-                        .foregroundStyle(Color.accentColor)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(DS.accent)
+                        .frame(width: 32, height: 32)
+                        .background(DS.accentContainer, in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DSPressableButtonStyle())
                 .accessibilityLabel("发音")
                 if let onJump {
                     Button(action: onJump) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.footnote)
-                            .foregroundStyle(Color.accentColor)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(DS.foreground2)
+                            .frame(width: 32, height: 32)
+                            .background(DS.background1, in: Circle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DSPressableButtonStyle())
                     .accessibilityLabel("跳转至原文")
                 }
             }
             if let translation, !translation.isEmpty {
                 Text(translation)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .font(DS.Fonts.wordBody)
+                    .foregroundStyle(DS.foreground2)
+                    .lineLimit(2)
+                    .lineSpacing(2)
             }
             if let onContexts, let title = word.sourceDocTitle, let page = word.sourcePage {
                 Button(action: onContexts) {
-                    HStack(spacing: 3) {
+                    HStack(spacing: DS.Space.x3s) {
                         Text("\(title) · 第 \(page + 1) 页 · \(word.occurrenceCount) 处语境")
-                            .font(.caption)
+                            .font(DS.Fonts.caption2)
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .semibold))
                     }
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.foreground3)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 2)
+        .padding(DS.Space.s)
+        .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
+                .strokeBorder(DS.foreground1.opacity(0.065), lineWidth: 0.8)
+        )
         .task(id: word.id) {
             translation = await translationLoader()
         }

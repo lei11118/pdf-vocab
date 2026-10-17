@@ -26,6 +26,7 @@ struct ReaderView: View {
     /// v0.11.0(M4-B):Pencil 悬停预览 / 触觉开关
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
+    @AppStorage("pencilAutoReturnEraser") private var pencilAutoReturnEraser = true
     /// v0.11.0(M4-B):悬停预览(迷你释义气泡)
     @State private var hoverTerm: String?
     @State private var hoverPoint: CGPoint = .zero
@@ -51,6 +52,9 @@ struct ReaderView: View {
     @StateObject private var pencilTools = PencilToolSession()
     /// v0.15.0:挤压弧形工具盘锚点(nil = 收起)
     @State private var arcAnchor: CGPoint?
+    /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
+    @State private var focusMode = false
+    @Environment(\.dismiss) private var dismiss
 
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
@@ -72,84 +76,17 @@ struct ReaderView: View {
                 )
             }
         }
-        .background(DS.background1.ignoresSafeArea())
-        .navigationTitle(doc.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(DS.background1, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showPageJump = true
-                } label: {
-                    Text("\(min(currentPage + 1, doc.pageCount)) / \(doc.pageCount)")
-                        .font(.footnote.monospacedDigit())
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(DS.background4, in: Capsule())
-                        .foregroundStyle(DS.foreground1)
-                }
-                .accessibilityLabel("跳转页码")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showSearch = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                }
-                .accessibilityLabel("全文搜索")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Toggle(isOn: $nightMode) {
-                        Label("夜间模式", systemImage: "moon.fill")
-                    }
-                    Button {
-                        showOutline = true
-                    } label: {
-                        Label("目录与书签", systemImage: "list.bullet.indent")
-                    }
-                    Button {
-                        showAnalyze = true
-                    } label: {
-                        Label("词频分析 · 批量收录", systemImage: "chart.bar.doc.horizontal")
-                    }
-                    Divider()
-                    Button {
-                        exportAnnotatedPDF()
-                    } label: {
-                        Label("导出批注版 PDF(高亮+手写)", systemImage: "square.and.arrow.up.on.square")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("更多")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .accessibilityLabel("设置")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showVocab = true
-                } label: {
-                    Image(systemName: "text.book.closed")
-                }
-                .accessibilityLabel("生词本")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    markMode.toggle()
-                } label: {
-                    Image(systemName: markMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
-                        .foregroundStyle(markMode ? DS.accent : DS.foreground1)
-                }
-                .accessibilityLabel(markMode ? "切换到选词模式" : "切换到标记模式")
-            }
+        .background(DS.paperWhite.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .overlay(alignment: .top) {
+            readerTopOverlay
         }
+        .overlay(alignment: .bottom) {
+            readerBottomDock
+        }
+        .animation(DS.Motion.base, value: focusMode)
+        .animation(DS.Motion.spring, value: markMode)
         .sheet(isPresented: $showSettings) {
             SettingsView(db: store.db)
         }
@@ -228,6 +165,185 @@ struct ReaderView: View {
         .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
         .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
         .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
+        .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
+        .onChange(of: pencilAutoReturnEraser) { _, value in
+            pencilTools.autoReturnFromEraser = value
+        }
+        .onAppear {
+            pencilTools.autoReturnFromEraser = pencilAutoReturnEraser
+        }
+    }
+
+    // MARK: - v0.16.0 Reader Chrome
+
+    @ViewBuilder
+    private var readerTopOverlay: some View {
+        if focusMode {
+            HStack {
+                Spacer()
+                Button {
+                    focusMode = false
+                } label: {
+                    Label("退出专注", systemImage: "rectangle.expand.vertical")
+                        .font(DS.Fonts.caption2)
+                        .foregroundStyle(DS.foreground2)
+                        .padding(.horizontal, DS.Space.s)
+                        .frame(height: 34)
+                        .dsFloatingPanel(radius: DS.Radius.pill)
+                }
+                .buttonStyle(DSPressableButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.m)
+            .padding(.top, DS.Space.xs)
+        } else {
+            HStack(spacing: DS.Space.x2s) {
+                DSIconButton(
+                    systemImage: "chevron.left",
+                    iconSize: 16,
+                    accessibility: "返回文档库"
+                ) {
+                    dismiss()
+                }
+
+                Button {
+                    showPageJump = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(doc.title)
+                            .font(DS.Fonts.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(DS.foreground1)
+                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text("第 \(min(currentPage + 1, doc.pageCount)) / \(doc.pageCount) 页")
+                                .font(DS.Fonts.micro.monospacedDigit())
+                            Text("· 点按跳转")
+                                .font(DS.Fonts.micro)
+                        }
+                        .foregroundStyle(DS.foreground3)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(DSPressableButtonStyle())
+                .accessibilityLabel("第 \(min(currentPage + 1, doc.pageCount)) 页,点按跳转")
+
+                DSIconButton(
+                    systemImage: "rectangle.compress.vertical",
+                    iconSize: 15,
+                    accessibility: "进入专注模式"
+                ) {
+                    focusMode = true
+                }
+
+                Menu {
+                    Toggle(isOn: $nightMode) {
+                        Label("夜间模式", systemImage: "moon.fill")
+                    }
+                    Button {
+                        showVocab = true
+                    } label: {
+                        Label("生词本", systemImage: "text.book.closed")
+                    }
+                    Button {
+                        showSearch = true
+                    } label: {
+                        Label("全文搜索", systemImage: "magnifyingglass")
+                    }
+                    Button {
+                        showOutline = true
+                    } label: {
+                        Label("目录与书签", systemImage: "list.bullet.indent")
+                    }
+                    Button {
+                        showAnalyze = true
+                    } label: {
+                        Label("词频分析 · 批量收录", systemImage: "chart.bar.doc.horizontal")
+                    }
+                    Divider()
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                    Button {
+                        exportAnnotatedPDF()
+                    } label: {
+                        Label("导出批注版 PDF", systemImage: "square.and.arrow.up.on.square")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(DS.foreground2)
+                        .frame(width: 38, height: 38)
+                        .background(DS.background1, in: Circle())
+                        .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+                }
+                .accessibilityLabel("更多")
+            }
+            .frame(maxWidth: 900)
+            .padding(5)
+            .dsFloatingPanel(radius: DS.Radius.pill)
+            .padding(.horizontal, DS.Space.m)
+            .padding(.top, DS.Space.xs)
+        }
+    }
+
+    @ViewBuilder
+    private var readerBottomDock: some View {
+        if markMode {
+            PencilPaletteView(
+                session: pencilTools,
+                onUndo: { readerHandle.coordinator?.undoInk() },
+                onRedo: { readerHandle.coordinator?.redoInk() },
+                onExitWriting: { markMode = false }
+            )
+            .padding(.horizontal, DS.Space.m)
+            .padding(.bottom, DS.Space.s)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if !focusMode {
+            HStack(spacing: 3) {
+                readingModeSegment(
+                    title: "选词",
+                    systemImage: "text.cursor",
+                    active: true
+                ) {}
+                readingModeSegment(
+                    title: "手写",
+                    systemImage: "pencil.tip",
+                    active: false
+                ) {
+                    markMode = true
+                }
+            }
+            .padding(4)
+            .dsFloatingPanel(radius: DS.Radius.pill)
+            .padding(.bottom, DS.Space.m)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func readingModeSegment(
+        title: String,
+        systemImage: String,
+        active: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(DS.Fonts.caption2)
+            }
+            .foregroundStyle(active ? DS.accent : DS.foreground3)
+            .padding(.horizontal, DS.Space.s)
+            .frame(height: 36)
+            .background(active ? DS.accentContainer : Color.clear, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
     }
 
     /// v0.14.0:把当前笔具同步给预览画布的协调器
@@ -294,19 +410,6 @@ struct ReaderView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: cardContent)
-            .overlay(alignment: .bottomLeading) {
-                // v0.14.0:标记模式 → 浮动工具带(钢笔/铅笔/荧光笔/橡皮 + 调色盘 + 撤销重做)
-                if markMode {
-                    PencilPaletteView(
-                        session: pencilTools,
-                        onUndo: { readerHandle.coordinator?.undoInk() },
-                        onRedo: { readerHandle.coordinator?.redoInk() }
-                    )
-                    .padding(.leading, DS.Space.m)
-                    .padding(.bottom, DS.Space.m)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
             .overlay {
                 // v0.15.0:挤压 → 围绕笔尖的弧形工具盘(撤销 / 钢笔 / 铅笔 / 荧光笔 / 橡皮)
                 GeometryReader { geo in
@@ -427,6 +530,9 @@ struct ReaderView: View {
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
                             arcAnchor = point
                         }
+                    },
+                    onFocusToggle: {
+                        withAnimation(DS.Motion.base) { focusMode.toggle() }
                     },
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },

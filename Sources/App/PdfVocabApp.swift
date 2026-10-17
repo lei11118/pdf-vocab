@@ -14,6 +14,8 @@ struct PdfVocabApp: App {
         WindowGroup {
             if let store {
                 LibraryView(store: store)
+                    .tint(DS.accent)
+                    .preferredColorScheme(nil)
             } else {
                 ContentUnavailableView(
                     "数据库打开失败",

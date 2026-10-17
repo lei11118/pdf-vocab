@@ -26,15 +26,18 @@ struct PencilArcMenu: View {
 
     private struct ArcEntry: Identifiable {
         let id: Int
-        /// nil = 撤销
+        /// nil = 撤销 / 直尺
         let tool: PencilToolKind?
+        var ruler = false
     }
 
     private var entries: [ArcEntry] {
-        let tools = session.visibleKinds
-        var list: [ArcEntry] = [ArcEntry(id: 0, tool: nil)]
-        for (offset, tool) in tools.enumerated() {
-            list.append(ArcEntry(id: offset + 1, tool: tool))
+        var list: [ArcEntry] = [
+            ArcEntry(id: 0, tool: nil),
+            ArcEntry(id: 1, tool: nil, ruler: true),
+        ]
+        for (offset, tool) in session.visibleKinds.enumerated() {
+            list.append(ArcEntry(id: offset + 2, tool: tool))
         }
         return list
     }
@@ -94,7 +97,10 @@ struct PencilArcMenu: View {
             activate(entry)
         } label: {
             Group {
-                if let tool = entry.tool {
+                if entry.ruler {
+                    Image(systemName: "ruler")
+                        .foregroundStyle(session.rulerActive ? DS.accent : DS.foreground2)
+                } else if let tool = entry.tool {
                     Image(systemName: tool.systemImage)
                         .foregroundStyle(session.kind == tool ? DS.accent : DS.foreground2)
                 } else {
@@ -107,11 +113,13 @@ struct PencilArcMenu: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(entry.tool?.label ?? "撤销")
+        .accessibilityLabel(entry.ruler ? (session.rulerActive ? "关闭直尺" : "打开直尺") : (entry.tool?.label ?? "撤销"))
     }
 
     private func activate(_ entry: ArcEntry) {
-        if let tool = entry.tool {
+        if entry.ruler {
+            session.toggleRuler()
+        } else if let tool = entry.tool {
             session.select(kind: tool)
         } else {
             onUndo()

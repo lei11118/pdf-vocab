@@ -20,15 +20,20 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var overlays: [Int: InkOverlayView] = [:]
     /// v0.14.0:当前笔具(新页画布创建时套用;调色盘变化时由协调器 setTool 更新)
     var currentTool: PKTool?
+    /// v0.16.0:直尺辅助层状态(对所有页同一口径)
+    private(set) var rulerActive = false
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
+    /// v0.16.0:一次书写/擦除手势结束(用于“擦完回到上一支笔”)
+    var onStrokeEnded: (() -> Void)?
 
-    init(pdfView: PDFView?, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool? = nil) {
+    init(pdfView: PDFView?, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool? = nil, rulerActive: Bool = false) {
         self.pdfView = pdfView
         self.docSha = docSha
         self.inkStore = inkStore
         self.markMode = markMode
         self.currentTool = tool
+        self.rulerActive = rulerActive
         super.init()
     }
 
@@ -39,12 +44,15 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         if let existing = overlays[index] {
             overlay = existing
         } else {
-            overlay = InkOverlayView(pageIndex: index, docSha: docSha, inkStore: inkStore, markMode: markMode, tool: currentTool)
+            overlay = InkOverlayView(pageIndex: index, docSha: docSha, inkStore: inkStore, markMode: markMode, tool: currentTool, rulerActive: rulerActive)
             let size = page.bounds(for: view.displayBox).size
             overlay.frame = CGRect(origin: .zero, size: size)
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.onCanvasBecameActive = { [weak self] canvas in
                 self?.activeCanvas = canvas
+            }
+            overlay.onToolEnded = { [weak self] in
+                self?.onStrokeEnded?()
             }
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
@@ -67,6 +75,14 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         guard let tool else { return }
         for (_, overlay) in overlays {
             overlay.canvas.tool = tool
+        }
+    }
+
+    /// v0.16.0:直尺开关同步到所有已创建页画布(新页在创建时继承)。
+    func setRulerActive(_ active: Bool) {
+        rulerActive = active
+        for (_, overlay) in overlays {
+            overlay.setRulerActive(active)
         }
     }
 
@@ -105,6 +121,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     let canvas = PKCanvasView()
     /// v0.14.0:落笔通知(协调器记录撤销目标)
     var onCanvasBecameActive: ((PKCanvasView) -> Void)?
+    /// v0.16.0:一次工具手势结束通知
+    var onToolEnded: (() -> Void)?
 
     private var marking = false
     private var loaded = false
@@ -113,7 +131,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     /// v0.13.3:命中诊断日志节流(1s 一次)
     private var lastHitLog: CFAbsoluteTime = 0
 
-    init(pageIndex: Int, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool?) {
+    init(pageIndex: Int, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool?, rulerActive: Bool) {
         self.pageIndex = pageIndex
         self.docSha = docSha
         self.inkStore = inkStore
@@ -128,6 +146,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.delegate = self
         // v0.14.0:工具由外部会话驱动(保底黑笔);绘制手势只收 Pencil(公开属性第二道闸)
         canvas.tool = tool ?? PKInkingTool(.pen, color: .black, width: 2.5)
+        canvas.isRulerActive = rulerActive
         canvas.drawingGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         canvas.translatesAutoresizingMaskIntoConstraints = false
         addSubview(canvas)
@@ -168,6 +187,12 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     }
 
     // MARK: - 模式切换
+
+    /// v0.16.0:同步直尺辅助层;PencilKit 会在画布上绘制可拖动的直尺。
+    func setRulerActive(_ active: Bool) {
+        canvas.isRulerActive = active
+        if active, marking { canvas.becomeFirstResponder() }
+    }
 
     func setMarking(_ on: Bool) {
         guard marking != on else { return }
@@ -230,6 +255,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         DiagLog.log("pencil: tool END page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
         NSLog("[yuewen/pencil] tool end page=%d strokes=%d", pageIndex, canvasView.drawing.strokes.count)
+        onToolEnded?()
     }
 
     private func scheduleSave() {

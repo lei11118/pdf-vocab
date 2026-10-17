@@ -62,7 +62,8 @@ struct WordCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(term)
-                    .font(DS.Fonts.title1)
+                    .font(DS.Fonts.wordTitle)
+                    .foregroundStyle(DS.foreground1)
                     .textSelection(.enabled)
                 Spacer()
                 closeButton(onClose)
@@ -157,7 +158,7 @@ struct WordCardView: View {
                     }
                     if let phonetic = entry.phonetic, !phonetic.isEmpty {
                         Text("/\(phonetic)/")
-                            .font(.subheadline)
+                            .font(DS.Fonts.monoCaption)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -249,9 +250,9 @@ struct WordCardView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(content)
-                .font(secondary ? .footnote : .callout)
-                .foregroundStyle(secondary ? .secondary : .primary)
-                .lineSpacing(3)
+                .font(secondary ? DS.Fonts.caption : DS.Fonts.wordBody)
+                .foregroundStyle(secondary ? DS.foreground3 : DS.foreground1)
+                .lineSpacing(4)
                 .textSelection(.enabled)
         }
     }
@@ -306,8 +307,9 @@ struct SentenceCardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(text)
-                        .font(.body)
-                        .lineSpacing(3)
+                        .font(DS.Fonts.wordQuote)
+                        .foregroundStyle(DS.foreground1)
+                        .lineSpacing(5)
                         .textSelection(.enabled)
 
                     let words = WordPicker.lexicalWords(in: text)

@@ -103,16 +103,57 @@ enum DS {
     // MARK: - 语义字号(references/tokens.json · inferred)
 
     enum Fonts {
-        static let display3 = Font.system(size: 28, weight: .bold)
-        static let title1 = Font.system(size: 26, weight: .bold)
-        static let title2 = Font.system(size: 22, weight: .semibold)
-        static let headline = Font.system(size: 17, weight: .semibold)
-        static let subhead = Font.system(size: 15, weight: .regular)
+        /// v0.16.0:UI 声部使用 SF Rounded 近似 Proxima Soft 的圆润人文感;
+        /// 展示标题更粗、更圆,正文仍保持系统默认以保证中英混排可读性。
+        static let display3 = Font.system(size: 28, weight: .bold, design: .rounded)
+        static let title1 = Font.system(size: 26, weight: .bold, design: .rounded)
+        static let title2 = Font.system(size: 22, weight: .bold, design: .rounded)
+        static let headline = Font.system(size: 17, weight: .semibold, design: .rounded)
+        static let subhead = Font.system(size: 15, weight: .regular, design: .rounded)
         static let body = Font.system(size: 17, weight: .regular)
-        static let caption = Font.system(size: 13, weight: .regular)
-        static let caption2 = Font.system(size: 11, weight: .medium)
-        static let micro = Font.system(size: 10, weight: .medium)
+        static let caption = Font.system(size: 13, weight: .regular, design: .rounded)
+        static let caption2 = Font.system(size: 11, weight: .medium, design: .rounded)
+        static let micro = Font.system(size: 10, weight: .medium, design: .rounded)
+
+        /// 学习内容的“纸媒”声部:英文词条、例句、阅读摘要用衬线字体。
+        static let wordTitle = Font.system(size: 34, weight: .bold, design: .serif)
+        static let wordBody = Font.system(size: 17, weight: .regular, design: .serif)
+        static let wordQuote = Font.system(size: 16, weight: .regular, design: .serif).italic()
+
+        /// 元数据 / 页码 / 数量使用等宽数字,避免跳动。
+        static let monoCaption = Font.system(size: 12, weight: .semibold, design: .monospaced)
     }
+
+    // MARK: - 动效(短、轻;书写过程零装饰动效)
+
+    enum Motion {
+        static let fast: Double = 0.16
+        static let base: Double = 0.24
+        static let slow: Double = 0.34
+        static let spring = Animation.spring(response: 0.30, dampingFraction: 0.86)
+        static let quickSpring = Animation.spring(response: 0.22, dampingFraction: 0.90)
+    }
+
+    // MARK: - 布局与封面
+
+    enum Layout {
+        static let pageMargin: CGFloat = 24
+        static let cardGap: CGFloat = 16
+        static let libraryGridMin: CGFloat = 164
+        static let coverAspect: CGFloat = 0.72
+    }
+
+    /// 资料库封面底色(采样自 Notability Note Covers;此处只借色彩关系,不使用其资产)。
+    static let coverBlue = dynamic(light: 0xA9CAE5, dark: 0x35506A)
+    static let coverBlueLight = dynamic(light: 0xCCE0F0, dark: 0x263B50)
+    static let coverCream = dynamic(light: 0xF9F9E6, dark: 0x49473A)
+    static let coverSand = dynamic(light: 0xEECDA2, dark: 0x5A4630)
+    static let coverSage = dynamic(light: 0xCBD9C4, dark: 0x364838)
+    static let coverCoral = dynamic(light: 0xF3C7B8, dark: 0x5B3A31)
+
+    static let coverPalette: [Color] = [
+        coverBlue, coverBlueLight, coverCream, coverSand, coverSage, coverCoral
+    ]
 
     // MARK: - 卡片(白面 + 轻描边 + 极轻阴影;卡片几乎无阴影,靠底色分层)
 
@@ -126,12 +167,37 @@ enum DS {
                 .background(
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(DS.background2)
-                        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 3)
+                        .shadow(color: Color.black.opacity(0.045), radius: 14, x: 0, y: 5)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(DS.foreground1.opacity(0.06), lineWidth: 0.8)
+                        .strokeBorder(DS.foreground1.opacity(0.065), lineWidth: 0.8)
                 )
+        }
+    }
+
+    /// v0.16.0:悬浮面板 —— 工具托盘 / 阅读页顶栏 / 底部动作条共用。
+    /// 白面 + 细边 + 一层柔和阴影;不靠重投影制造层级。
+    struct FloatingPanel: ViewModifier {
+        var radius: CGFloat = DS.Radius.comfy
+        var padding: CGFloat = 0
+
+        func body(content: Content) -> some View {
+            content
+                .padding(padding)
+                .background(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                .fill(DS.background3.opacity(0.78))
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(DS.foreground1.opacity(0.08), lineWidth: 0.8)
+                )
+                .shadow(color: Color.black.opacity(0.14), radius: 22, x: 0, y: 10)
         }
     }
 
@@ -148,6 +214,139 @@ extension View {
     /// 卡片:用于文档卡、提示块、浮层内容。
     func dsCard(radius: CGFloat = DS.Radius.comfy, padding: CGFloat = DS.Space.m) -> some View {
         modifier(DS.PaperCard(radius: radius, padding: padding))
+    }
+
+    /// 悬浮面板:阅读页顶栏、工具托盘、底部动作条。
+    func dsFloatingPanel(radius: CGFloat = DS.Radius.comfy, padding: CGFloat = 0) -> some View {
+        modifier(DS.FloatingPanel(radius: radius, padding: padding))
+    }
+
+    /// 统一的卡片按压缩放(不带系统高亮)。
+    func dsPressable() -> some View {
+        buttonStyle(DSPressableButtonStyle())
+    }
+}
+
+// MARK: - v0.16.0 通用组件
+
+/// 静音按压:轻微缩放到 0.985,不改变内容颜色。
+struct DSPressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.86 : 1)
+            .animation(DS.Motion.quickSpring, value: configuration.isPressed)
+    }
+}
+
+/// 主 / 次按钮胶囊样式,替代系统 bordered 的冷硬边线。
+struct DSPillButtonStyle: ButtonStyle {
+    var prominent = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(DS.Fonts.headline)
+            .padding(.horizontal, DS.Space.m)
+            .frame(minHeight: 42)
+            .background(
+                Capsule().fill(prominent ? DS.accent : DS.background2)
+            )
+            .overlay(
+                Capsule().strokeBorder(
+                    prominent ? Color.clear : DS.foreground1.opacity(0.09),
+                    lineWidth: 0.8
+                )
+            )
+            .foregroundStyle(prominent ? DS.onAccent : DS.foreground1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(DS.Motion.quickSpring, value: configuration.isPressed)
+    }
+}
+
+/// 圆形图标按钮:阅读页顶栏 / 工具条。
+struct DSIconButton: View {
+    let systemImage: String
+    var size: CGFloat = 40
+    var iconSize: CGFloat = 16
+    var foreground: Color = DS.foreground2
+    var background: Color = Color.clear
+    var accessibility: String? = nil
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: iconSize, weight: .semibold))
+                .foregroundStyle(foreground)
+                .frame(width: size, height: size)
+                .background(background, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityLabel(accessibility ?? systemImage)
+    }
+}
+
+/// 语义胶囊标签(替代零散 Capsule().fill(...)).
+struct DSChip: View {
+    let title: String
+    var icon: String? = nil
+    var selected = false
+    var tint: Color = DS.accent
+
+    var body: some View {
+        HStack(spacing: DS.Space.x2s) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Text(title)
+                .font(DS.Fonts.caption2)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, DS.Space.s)
+        .frame(height: 30)
+        .foregroundStyle(selected ? tint : DS.foreground2)
+        .background(
+            Capsule().fill(selected ? tint.opacity(0.12) : DS.background2)
+        )
+        .overlay(
+            Capsule().strokeBorder(
+                selected ? tint.opacity(0.24) : DS.foreground1.opacity(0.07),
+                lineWidth: 0.8
+            )
+        )
+    }
+}
+
+/// 分区标题:标题 + 可选计数/动作。
+struct DSSectionHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(DS.Fonts.title2)
+                    .foregroundStyle(DS.foreground1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(DS.Fonts.caption)
+                        .foregroundStyle(DS.foreground3)
+                }
+            }
+            Spacer(minLength: DS.Space.xs)
+            trailing()
+        }
+    }
+}
+
+extension DSSectionHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
     }
 }
 
