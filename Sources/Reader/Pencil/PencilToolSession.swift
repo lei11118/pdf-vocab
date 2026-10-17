@@ -132,6 +132,11 @@ final class PencilToolSession: ObservableObject {
 
     func select(kind newKind: PencilToolKind) {
         guard kind != newKind else { return }
+        // v0.16.1:直尺只对墨迹笔有意义;套索/橡皮下保留直尺会让 PencilKit 处于
+        // 少见的工具组合(实测易卡),切到这两个工具时顺手关掉。
+        if newKind == .lasso || newKind == .eraser, rulerActive {
+            rulerActive = false
+        }
         kind = newKind
     }
 

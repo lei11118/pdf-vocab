@@ -60,6 +60,10 @@ final class ReaderCoordinator: NSObject {
     var onFocusToggle: (() -> Void)?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
+    /// v0.16.1:上次已套用的工具签名 —— SwiftUI 每帧 updateUIView 都会尝试同步工具,
+    /// 无脑 `canvas.tool = ...` 会让 PencilKit 反复重建工具状态,严重时主线程卡死。
+    private var appliedToolSignature: String?
+    private var toolApplyScheduled = false
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
     private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
     private var appliedKey: String?
@@ -385,9 +389,14 @@ final class ReaderCoordinator: NSObject {
         )
         overlayProvider = provider
         provider.onStrokeEnded = { [weak self] in
-            guard let self, self.markMode, let session = self.toolSession else { return }
-            session.returnFromEraserIfNeeded()
-            self.applyToolSession()
+            // v0.16.1:不要在 PencilKit 的 delegate 回调里同步改工具(会锁死主线程);
+            // 下一轮 runloop 再切回上一支笔。
+            DispatchQueue.main.async {
+                guard let self, self.markMode, let session = self.toolSession else { return }
+                guard session.kind == .eraser, session.autoReturnFromEraser else { return }
+                session.returnFromEraserIfNeeded()
+                self.applyToolSession()
+            }
         }
         view.pageOverlayViewProvider = provider
 
@@ -1268,10 +1277,31 @@ final class ReaderCoordinator: NSObject {
     // MARK: - v0.14.0:手写工具 / 撤销重做
 
     /// 把工具会话当前笔具套到所有页画布(调色盘 / 笔宽变化时由 SwiftUI onChange 调用;幂等)。
-    func applyToolSession() {
-        guard let provider = overlayProvider, let session = toolSession else { return }
-        provider.setTool(session.makeTool())
-        provider.setRulerActive(session.rulerActive)
+    /// v0.16.1(卡死修复):
+    /// ① **签名去重**——工具没变就完全不碰 PencilKit(此前 `updateUIView` 每帧都重建工具);
+    /// ② **延迟到下一个 runloop**——绝不在 SwiftUI 更新/手势回调里同步改 `PKCanvasView.tool`
+    ///    (在 PencilKit 自己的回调里改工具、或在布局过程中改,都可能把主线程锁死)。
+    func applyToolSession(force: Bool = false) {
+        guard let session = toolSession else { return }
+        let signature = Self.toolSignature(session)
+        if !force, signature == appliedToolSignature { return }
+        appliedToolSignature = signature
+        guard !toolApplyScheduled else { return }
+        toolApplyScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.toolApplyScheduled = false
+            guard let provider = self.overlayProvider, let session = self.toolSession else { return }
+            let start = CFAbsoluteTimeGetCurrent()
+            provider.setRulerActive(session.rulerActive)
+            provider.setTool(session.makeTool())
+            let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+            DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
+        }
+    }
+
+    private static func toolSignature(_ session: PencilToolSession) -> String {
+        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.rulerActive)"
     }
 
     func undoInk() { overlayProvider?.undo() }

@@ -189,9 +189,11 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     // MARK: - 模式切换
 
     /// v0.16.0:同步直尺辅助层;PencilKit 会在画布上绘制可拖动的直尺。
+    /// v0.16.1:不再在这里抢 first responder —— 多页画布会互相顶掉(卡死风险),
+    /// 标记模式激活时画布本来就会 becomeFirstResponder。
     func setRulerActive(_ active: Bool) {
+        guard canvas.isRulerActive != active else { return }
         canvas.isRulerActive = active
-        if active, marking { canvas.becomeFirstResponder() }
     }
 
     func setMarking(_ on: Bool) {

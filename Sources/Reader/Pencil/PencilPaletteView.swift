@@ -16,6 +16,7 @@ struct PencilPaletteView: View {
     var onExitWriting: (() -> Void)? = nil
 
     @State private var expanded = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         VStack(spacing: DS.Space.xs) {
@@ -32,14 +33,16 @@ struct PencilPaletteView: View {
     // MARK: - 常驻胶囊
 
     private var compactBar: some View {
-        // v0.16.0:工具条按内容收成一颗胶囊(Notability 的 toolbox 是“浮在纸上的小条”,
-        // 不是固定宽的栏);窄分屏时才退化为横向滚动。
-        ViewThatFits(in: .horizontal) {
-            barContent
-            ScrollView(.horizontal, showsIndicators: false) {
+        // v0.16.1:去掉 ViewThatFits(测量不确定,曾怀疑与选工具卡死有关);
+        // 常规宽度直接用 HStack 收成一颗胶囊,窄分屏(compact)才横向滚动。
+        Group {
+            if sizeClass == .compact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    barContent
+                }
+            } else {
                 barContent
             }
-            .frame(maxWidth: 520)
         }
         .dsFloatingPanel(radius: DS.Radius.pill)
     }

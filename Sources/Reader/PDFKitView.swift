@@ -106,7 +106,9 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.toolSession = toolSession
         context.coordinator.onPencilSqueeze = onPencilSqueeze
         context.coordinator.onFocusToggle = onFocusToggle
-        context.coordinator.applyToolSession()
+        // v0.16.1:不在每次 updateUIView 里套用工具 —— SwiftUI 每帧更新都重建
+        // PKCanvasView.tool 会让 PencilKit 反复重建状态(选工具卡死的根因)。
+        // 工具变化由 ReaderView 的 onChange → applyToolSession(带签名去重)驱动。
         context.coordinator.onVocabWordTap = onVocabWordTap
     }
 
