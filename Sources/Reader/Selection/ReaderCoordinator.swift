@@ -52,6 +52,8 @@ final class ReaderCoordinator: NSObject {
 
     // v0.9.0(M4):Pencil 标记层(按页 PKCanvasView 叠加);v0.10.0:挤压交给原生、触型还原账本
     var inkStore: PencilInkStore?
+    /// v0.14.0:手写工具会话(浮动工具带 → 各页画布)
+    var toolSession: PencilToolSession?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
@@ -366,13 +368,18 @@ final class ReaderCoordinator: NSObject {
         }
 
         // v0.9.0(M4):Pencil 标记层(PDFPageOverlayViewProvider 按页叠 PKCanvasView;不改动原 PDF)
-        let provider = PencilOverlayProvider(pdfView: view, docSha: docSha, inkStore: inkStore, markMode: markMode)
+        let provider = PencilOverlayProvider(
+            pdfView: view, docSha: docSha, inkStore: inkStore, markMode: markMode,
+            tool: toolSession?.makeTool()
+        )
         overlayProvider = provider
         view.pageOverlayViewProvider = provider
 
-        // v0.10.0(Bug 1.3):**不再拦截挤压**——让 PKToolPicker 原生接管
-        // (Pencil Pro 挤压自动呼出系统工具面板;轻点两下切换工具也是原生行为。
-        //  自装 UIPencilInteraction 反而会把这两个系统行为顶掉,故整体移除。)
+        // v0.14.0:自绘浮动工具带取代系统 PKToolPicker —— Pencil 系统手势回到自定义映射:
+        // 挤压 = 切换标记/选词模式;轻点两下 = 橡皮 ⇄ 上一支笔(Notability 式手写体验)。
+        let pencilInteraction = UIPencilInteraction()
+        pencilInteraction.delegate = self
+        view.addInteraction(pencilInteraction)
 
         // 编辑菜单(系统组件)
         menu.onTranslate = { [weak self] text in
@@ -1217,6 +1224,7 @@ final class ReaderCoordinator: NSObject {
         }
         clearHover()
         overlayProvider?.setMarkMode(on)
+        if on { applyToolSession() }   // v0.14.0:进入标记模式即套用当前笔具
         pencilPressRef?.isEnabled = !on
         let types: [NSNumber] = on
             ? [NSNumber(value: UITouch.TouchType.direct.rawValue)]
@@ -1232,6 +1240,17 @@ final class ReaderCoordinator: NSObject {
         }
         DiagLog.log("pencil: markMode=\(on)")
     }
+
+    // MARK: - v0.14.0:手写工具 / 撤销重做
+
+    /// 把工具会话当前笔具套到所有页画布(调色盘 / 笔宽变化时由 SwiftUI onChange 调用;幂等)。
+    func applyToolSession() {
+        guard let provider = overlayProvider, let session = toolSession else { return }
+        provider.setTool(session.makeTool())
+    }
+
+    func undoInk() { overlayProvider?.undo() }
+    func redoInk() { overlayProvider?.redo() }
 
     /// 生词本 → 出处跳转:跳页 + 橙色临时高亮(约 2.5s 自动消失;点空白/清选区也会清掉)。
     func jumpToVocab(target: VocabJumpTarget) {
@@ -1834,5 +1853,25 @@ enum PencilTouchIsolation {
         }
         visit(root)
         return result
+    }
+}
+
+// MARK: - v0.14.0:Apple Pencil 系统手势映射
+
+extension ReaderCoordinator: UIPencilInteractionDelegate {
+    /// Pencil 轻点两下:橡皮 ⇄ 上一支笔(仅标记模式有意义)
+    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        guard markMode, let session = toolSession else { return }
+        session.toggleEraser()
+        applyToolSession()
+        DiagLog.log("pencil: double-tap tool=\(session.kind.rawValue)")
+    }
+
+    /// Pencil Pro 挤压:切换标记 / 选词模式
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        let entering = !markMode
+        setMarkMode(entering)
+        if entering { applyToolSession() }
+        DiagLog.log("pencil: squeeze -> markMode=\(entering)")
     }
 }

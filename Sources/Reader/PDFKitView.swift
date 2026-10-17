@@ -29,6 +29,8 @@ struct PDFKitView: UIViewRepresentable {
     var onHoverUpdate: ((String, String, CGPoint) -> Void)? = nil
     var onHoverEnd: (() -> Void)? = nil
     var markMode: Bool = false
+    /// v0.14.0:手写工具会话(浮动工具带驱动各页画布)
+    var toolSession: PencilToolSession? = nil
     var jumpTarget: VocabJumpTarget? = nil
     var onVocabJumpPerformed: () -> Void = {}
     var onVocabWordTap: (String) -> Void = { _ in }
@@ -53,6 +55,7 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.onHoverUpdate = onHoverUpdate
         coordinator.onHoverEnd = onHoverEnd
         coordinator.markMode = markMode
+        coordinator.toolSession = toolSession
         coordinator.pendingVocabJump = jumpTarget
         coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         coordinator.onVocabWordTap = onVocabWordTap
@@ -64,8 +67,8 @@ struct PDFKitView: UIViewRepresentable {
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
-        view.pageShadowsEnabled = false
-        view.backgroundColor = .systemGroupedBackground
+        view.pageShadowsEnabled = true   // v0.14.0:纸页轻阴影(纸感叠层)
+        view.backgroundColor = DS.uiBackground1
 
         context.coordinator.pdfView = view
         context.coordinator.docLabel = url.deletingPathExtension().lastPathComponent
@@ -94,6 +97,8 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onHoverEnd = onHoverEnd
         context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         context.coordinator.setMarkMode(markMode)
+        context.coordinator.toolSession = toolSession
+        context.coordinator.applyToolSession()
         context.coordinator.onVocabWordTap = onVocabWordTap
     }
 
