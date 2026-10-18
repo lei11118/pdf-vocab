@@ -59,11 +59,10 @@ struct PencilInkStore: Sendable {
 /// 对策:**超采样画布** —— 画布 bounds = 页面点 × `scale`,再用 1/scale 的变换压回页面大小。
 /// 栅格化密度提高到 scale 倍(默认 2),笔宽/橡皮宽同步乘 scale,视觉尺寸不变。
 enum InkGeometry {
-    /// 超采样倍数:2 → 页面 433pt 宽时画布 866pt,屏幕栅格约 1732px,
-    /// 可保证 pdfView.scaleFactor ≤ 2 时笔迹 1:1 清晰(再高会按比例略软)。
-    /// 注:PKEraserTool 在 iOS 26 SDK 里没有宽度参数,倍数越高橡皮视觉尺寸越小,
-    /// 因此先取 2 倍(橡皮缩小一半仍可用);后续若做自定义橡皮再提到 3 倍。
-    static let scale: CGFloat = 2
+    /// 超采样倍数:3 → 页面 433pt 宽时画布 1299pt,屏幕栅格约 2598px,
+    /// 可保证 pdfView.scaleFactor ≤ 3 时笔迹 1:1 清晰。
+    /// 注:v0.22.0 起配自研橡皮(半径可调、按画布坐标缩放),不再受 SDK 橡皮无宽度参数的限制。
+    static let scale: CGFloat = 3
 
     /// 画布坐标系(页面点 × scale)下的尺寸
     static func canvasSize(for pageSize: CGSize) -> CGSize {

@@ -88,6 +88,8 @@ struct ReaderView: View {
             .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.eraserWhole) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.eraserSizeIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.useCustomEraser) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
     }
 

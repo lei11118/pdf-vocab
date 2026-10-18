@@ -310,12 +310,54 @@ struct PencilPaletteView: View {
                 }
             }
 
+            // v0.22.0:自研橡皮大小(五档)
+            HStack(spacing: DS.Space.xs) {
+                Text("大小")
+                    .font(DS.Fonts.caption2)
+                    .foregroundStyle(DS.foreground3)
+                HStack(spacing: 4) {
+                    ForEach(0..<5, id: \.self) { index in
+                        let selected = session.eraserSizeIndex == index
+                        let diameter = CGFloat(6 + index * 4)
+                        Button {
+                            session.setEraserSize(index)
+                        } label: {
+                            Circle()
+                                .fill(selected ? DS.accent : DS.foreground4)
+                                .frame(width: diameter, height: diameter)
+                                .frame(width: 24, height: 26)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(DSPressableButtonStyle())
+                        .accessibilityLabel("橡皮大小 \(index + 1)")
+                        .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+                    }
+                }
+                Spacer(minLength: 0)
+                Text("\(Int(session.eraserRadius)) pt")
+                    .font(DS.Fonts.micro.monospacedDigit())
+                    .foregroundStyle(DS.foreground3)
+            }
+
             Toggle(isOn: $session.autoReturnFromEraser) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("擦完回到上一支笔")
                         .font(DS.Fonts.caption)
                         .foregroundStyle(DS.foreground1)
                     Text("适合快速改一笔就继续写")
+                        .font(DS.Fonts.micro)
+                        .foregroundStyle(DS.foreground3)
+                }
+            }
+            .tint(DS.accent)
+
+            // v0.22.0:自研橡皮开关(关掉退回 PencilKit 原生橡皮,超采样下会变小)
+            Toggle(isOn: $session.useCustomEraser) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("可调大小(自研橡皮)")
+                        .font(DS.Fonts.caption)
+                        .foregroundStyle(DS.foreground1)
+                    Text("关掉则用系统橡皮,圆圈会随高清画布变小")
                         .font(DS.Fonts.micro)
                         .foregroundStyle(DS.foreground3)
                 }

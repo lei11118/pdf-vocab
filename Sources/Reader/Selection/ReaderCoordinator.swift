@@ -1314,13 +1314,18 @@ final class ReaderCoordinator: NSObject {
             let start = CFAbsoluteTimeGetCurrent()
             provider.setRulerActive(session.rulerActive)
             provider.setTool(session.makeTool(scale: InkGeometry.scale))
+            provider.setEraserMode(
+                active: session.kind == .eraser && session.useCustomEraser,
+                whole: session.eraserWhole,
+                radius: session.eraserRadius * InkGeometry.scale
+            )
             let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
             DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
         }
     }
 
     private static func toolSignature(_ session: PencilToolSession) -> String {
-        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.rulerActive)"
+        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)"
     }
 
     // MARK: - v0.18.0 书写贴边自动滚动(连续书写第一步)

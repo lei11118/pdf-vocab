@@ -48,6 +48,10 @@ final class PencilToolSession: ObservableObject {
     @Published var widthIndex: Int = 2 { didSet { persist() } }
     /// 橡皮:false = 局部(bitmap,擦过即擦),true = 整笔(vector,整条笔迹消失)
     @Published var eraserWhole: Bool = false { didSet { persist() } }
+    /// v0.22.0:自研橡皮半径档位(页面点;画布坐标里会 ×超采样倍数)
+    @Published var eraserSizeIndex: Int = 2 { didSet { persist() } }
+    /// v0.22.0:自研橡皮开关(关掉则退回 PencilKit 原生橡皮,视觉尺寸随超采样缩小)
+    @Published var useCustomEraser: Bool = true { didSet { persist() } }
     /// Notability 式细节:擦除一笔后自动回到上一支笔(可在工具托盘右键菜单开关)。
     @Published var autoReturnFromEraser: Bool = true { didSet { persist() } }
     /// PencilKit 原生直尺:开启后沿直尺边画线,适合画表格/下划线;不改动笔具。
@@ -83,6 +87,12 @@ final class PencilToolSession: ObservableObject {
         if defaults.object(forKey: "pencilCustomMarkerRGBA") != nil {
             customMarkerRGBA = defaults.integer(forKey: "pencilCustomMarkerRGBA")
         }
+        eraserSizeIndex = defaults.object(forKey: "pencilEraserSize") == nil
+            ? 2
+            : defaults.integer(forKey: "pencilEraserSize")
+        useCustomEraser = defaults.object(forKey: "pencilCustomEraser") == nil
+            ? true
+            : defaults.bool(forKey: "pencilCustomEraser")
         widthIndex = defaults.object(forKey: "pencilWidthIndex") == nil
             ? 2
             : defaults.integer(forKey: "pencilWidthIndex")
@@ -145,6 +155,11 @@ final class PencilToolSession: ObservableObject {
         case .lasso, .eraser: return 0
         }
     }
+
+    /// v0.22.0:橡皮半径五档(页面点)
+    static let eraserRadii: [CGFloat] = [4, 7, 11, 16, 24]
+    var eraserRadius: CGFloat { Self.eraserRadii[clamped(eraserSizeIndex, 0, 4)] }
+    func setEraserSize(_ index: Int) { eraserSizeIndex = clamped(index, 0, 4) }
 
     /// v0.17.0:`scale` = 画布超采样倍数 —— 工具宽度按画布坐标放大,视觉宽度不变。
     func makeTool(scale: CGFloat = 1) -> PKTool {
@@ -256,6 +271,12 @@ final class PencilToolSession: ObservableObject {
         if defaults.object(forKey: prefix + "ruler") != nil {
             rulerActive = defaults.bool(forKey: prefix + "ruler")
         }
+        if defaults.object(forKey: prefix + "eraserSize") != nil {
+            eraserSizeIndex = defaults.integer(forKey: prefix + "eraserSize")
+        }
+        if defaults.object(forKey: prefix + "customEraser") != nil {
+            useCustomEraser = defaults.bool(forKey: prefix + "customEraser")
+        }
         DiagLog.log("pencil: doc tools loaded kind=\(kind.rawValue) width=\(widthIndex)")
     }
 
@@ -267,6 +288,8 @@ final class PencilToolSession: ObservableObject {
         defaults.set(markerColorIndex, forKey: prefix + "markerColor")
         defaults.set(widthIndex, forKey: prefix + "width")
         defaults.set(eraserWhole, forKey: prefix + "eraserWhole")
+        defaults.set(eraserSizeIndex, forKey: prefix + "eraserSize")
+        defaults.set(useCustomEraser, forKey: prefix + "customEraser")
         defaults.set(rulerActive, forKey: prefix + "ruler")
     }
 
@@ -307,6 +330,8 @@ final class PencilToolSession: ObservableObject {
         defaults.set(customMarkerRGBA, forKey: "pencilCustomMarkerRGBA")
         defaults.set(widthIndex, forKey: "pencilWidthIndex")
         defaults.set(eraserWhole, forKey: "pencilEraserWhole")
+        defaults.set(eraserSizeIndex, forKey: "pencilEraserSize")
+        defaults.set(useCustomEraser, forKey: "pencilCustomEraser")
         defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
         defaults.set(rulerActive, forKey: "pencilRulerActive")
         persistDoc(defaults)

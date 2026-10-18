@@ -22,6 +22,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     var currentTool: PKTool?
     /// v0.16.0:直尺辅助层状态(对所有页同一口径)
     private(set) var rulerActive = false
+    /// v0.22.0:自研橡皮配置(active / 整笔 / 半径[画布坐标])
+    private var eraserConfig: (active: Bool, whole: Bool, radius: CGFloat) = (false, false, 33)
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
     /// v0.16.0:一次书写/擦除手势结束(用于“擦完回到上一支笔”)
@@ -58,6 +60,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlay.onOverflow = { [weak self] index, stroke in
                 self?.moveOverflow(from: index, stroke: stroke) ?? false
             }
+            // v0.22.0:新页画布继承当前橡皮配置
+            overlay.setEraserMode(active: eraserConfig.active, whole: eraserConfig.whole, radius: eraserConfig.radius)
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
             // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
@@ -87,6 +91,14 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         rulerActive = active
         for (_, overlay) in overlays {
             overlay.setRulerActive(active)
+        }
+    }
+
+    /// v0.22.0:自研橡皮配置同步到所有页画布(半径单位 = 画布坐标)
+    func setEraserMode(active: Bool, whole: Bool, radius: CGFloat) {
+        eraserConfig = (active, whole, radius)
+        for (_, overlay) in overlays {
+            overlay.setEraserMode(active: active, whole: whole, radius: radius)
         }
     }
 
@@ -159,6 +171,16 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     /// v0.20.0:笔迹越过页底 → 把溢出段交给 provider 搬到下一页(返回是否搬成功)
     var onOverflow: ((Int, PKStroke) -> Bool)?
 
+    // MARK: - v0.22.0 自研橡皮(可调大小 / 局部擦除)
+
+    private let eraserPan = UIPanGestureRecognizer()
+    private var eraserActive = false
+    private var eraserWhole = false
+    private var eraserRadiusCanvas: CGFloat = 33
+    private var eraseUndoSnapshot: PKDrawing?
+    private var lastErasePoint: CGPoint?
+    private var lastEraseAt: CFAbsoluteTime = 0
+
     private var marking = false
     private var loaded = false
     private var saveWork: DispatchWorkItem?
@@ -191,6 +213,14 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.transform = InkGeometry.inverseTransform
         canvas.bounds = CGRect(origin: .zero, size: InkGeometry.canvasSize(for: CGSize(width: 1, height: 1)))
         addSubview(canvas)
+
+        // v0.22.0:自研橡皮手势(只收 Pencil;橡皮激活时接管绘制手势)
+        eraserPan.addTarget(self, action: #selector(handleErasePan(_:)))
+        eraserPan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        eraserPan.maximumNumberOfTouches = 1
+        eraserPan.isEnabled = false
+        canvas.addGestureRecognizer(eraserPan)
+
         loadInk()
         marking = markMode
     }
@@ -234,6 +264,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     func setMarking(_ on: Bool) {
         guard marking != on else { return }
         marking = on
+        applyEraserGestureState()
         if on {
             activateMarking()
         } else {
@@ -242,6 +273,137 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
         DiagLog.log("pencil: page \(pageIndex) marking=\(on)")
         NSLog("[yuewen/pencil] overlay page=%d marking=%d", pageIndex, on ? 1 : 0)
+    }
+
+    /// v0.22.0:自研橡皮开关 —— 橡皮激活时关掉 PencilKit 的绘制手势,交给 eraserPan
+    func setEraserMode(active: Bool, whole: Bool, radius: CGFloat) {
+        eraserActive = active
+        eraserWhole = whole
+        eraserRadiusCanvas = max(radius, 2)
+        applyEraserGestureState()
+        DiagLog.log("pencil: page \(pageIndex) eraser=\(active ? 1 : 0) whole=\(whole ? 1 : 0) r=\(Int(radius))")
+    }
+
+    private func applyEraserGestureState() {
+        let active = eraserActive && marking
+        canvas.drawingGestureRecognizer.isEnabled = !active
+        eraserPan.isEnabled = active
+        if !active {
+            lastErasePoint = nil
+            eraseUndoSnapshot = nil
+        }
+    }
+
+    // MARK: - 自研橡皮:按点擦除 / 整笔擦除
+
+    @objc private func handleErasePan(_ gesture: UIPanGestureRecognizer) {
+        guard eraserActive, marking else { return }
+        let point = gesture.location(in: canvas)
+        switch gesture.state {
+        case .began:
+            eraseUndoSnapshot = canvas.drawing
+            lastErasePoint = point
+            lastEraseAt = 0
+            eraseSegment(from: point, to: point)
+            if let undo = canvas.undoManager, let snapshot = eraseUndoSnapshot {
+                undo.registerUndo(withTarget: self) { target in
+                    target.canvas.drawing = snapshot
+                }
+            }
+        case .changed:
+            let now = CFAbsoluteTimeGetCurrent()
+            guard now - lastEraseAt >= 0.012 else { return }
+            lastEraseAt = now
+            let from = lastErasePoint ?? point
+            eraseSegment(from: from, to: point)
+            lastErasePoint = point
+        case .ended, .cancelled, .failed:
+            if let from = lastErasePoint {
+                eraseSegment(from: from, to: point)
+            }
+            lastErasePoint = nil
+            eraseUndoSnapshot = nil
+            flushSave()
+        default:
+            break
+        }
+    }
+
+    private func eraseSegment(from: CGPoint, to: CGPoint) {
+        let radius = eraserRadiusCanvas
+        let box = CGRect(
+            x: min(from.x, to.x) - radius,
+            y: min(from.y, to.y) - radius,
+            width: abs(to.x - from.x) + radius * 2,
+            height: abs(to.y - from.y) + radius * 2
+        )
+        var changed = false
+        var result: [PKStroke] = []
+        result.reserveCapacity(canvas.drawing.strokes.count)
+        for stroke in canvas.drawing.strokes {
+            guard stroke.renderBounds.insetBy(dx: -radius, dy: -radius).intersects(box) else {
+                result.append(stroke)
+                continue
+            }
+            if eraserWhole {
+                if strokeIntersects(stroke, from: from, to: to, radius: radius) {
+                    changed = true
+                } else {
+                    result.append(stroke)
+                }
+            } else {
+                let runs = remainingRuns(of: stroke, from: from, to: to, radius: radius)
+                if runs.isEmpty {
+                    changed = true
+                } else if runs.count == 1, runs[0].count == stroke.path.count {
+                    result.append(stroke)
+                } else {
+                    changed = true
+                    for run in runs where run.count >= 2 {
+                        if let piece = PencilStrokeTools.makeStroke(points: run, template: stroke) {
+                            result.append(piece)
+                        }
+                    }
+                }
+            }
+        }
+        guard changed else { return }
+        canvas.drawing = PKDrawing(strokes: result)
+    }
+
+    private func strokeIntersects(_ stroke: PKStroke, from: CGPoint, to: CGPoint, radius: CGFloat) -> Bool {
+        for point in stroke.path where distanceToSegment(point.location, from, to) < radius {
+            return true
+        }
+        return false
+    }
+
+    /// 返回未被擦到的连续点段(每段 ≥ 2 点才能重建一笔)
+    private func remainingRuns(of stroke: PKStroke, from: CGPoint, to: CGPoint, radius: CGFloat) -> [[PKStrokePoint]] {
+        var runs: [[PKStrokePoint]] = []
+        var current: [PKStrokePoint] = []
+        for point in stroke.path {
+            if distanceToSegment(point.location, from, to) < radius {
+                if current.count >= 2 { runs.append(current) }
+                current = []
+            } else {
+                current.append(point)
+            }
+        }
+        if current.count >= 2 { runs.append(current) }
+        return runs
+    }
+
+    private func distanceToSegment(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let lengthSquared = dx * dx + dy * dy
+        if lengthSquared < 0.0001 {
+            return hypot(p.x - a.x, p.y - a.y)
+        }
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+        let projected = CGPoint(x: a.x + t * dx, y: a.y + t * dy)
+        return hypot(p.x - projected.x, p.y - projected.y)
     }
 
     private func activateMarking() {
