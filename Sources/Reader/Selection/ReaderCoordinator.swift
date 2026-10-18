@@ -1922,6 +1922,11 @@ final class ReaderCoordinator: NSObject {
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .vertical
         }
+        // v0.26.0:切 displayMode 后 PDFKit 会把页影/分隔线/边距恢复默认 —— 每次切完都重新钉住,
+        // 保证「所有页 = 一张长纸」这件事在任何排布下都成立。
+        pdfView.pageShadowsEnabled = false
+        pdfView.displaysPageBreaks = false
+        pdfView.pageBreakMargins = .zero
         applyZoomLimits(pdfView)
         if !auto { pdfView.scaleFactor = scale }
         DiagLog.log("display: layout=\(raw)")

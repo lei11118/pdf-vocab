@@ -340,6 +340,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
+        // v0.26.0:允许画布把「出血区」里的墨迹画到页面之外 —— 跨页书写时笔迹不会在
+        // 页边突然消失再跳到下一页,而是连续地越过页缝。命中判定仍按本页 bounds,
+        // 所以不会抢走邻页的触摸。
+        clipsToBounds = false
 
         canvas.drawingPolicy = .pencilOnly
         canvas.isScrollEnabled = false

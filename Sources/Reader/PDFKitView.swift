@@ -73,7 +73,11 @@ struct PDFKitView: UIViewRepresentable {
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
-        view.pageShadowsEnabled = true   // v0.14.0:纸页轻阴影(纸感叠层)
+        // v0.26.0:**每一页与下一页合并成一张长纸** —— 关掉页影与页间分隔线。
+        // 以前 pageShadowsEnabled = true,每页都像独立的一张纸,页缝处有一道阴影+分隔线,
+        // 书写跨过去时视觉上就是"断开"的。关掉这两项后,0 边距的页在视觉上完全连成一张。
+        view.pageShadowsEnabled = false
+        view.displaysPageBreaks = false
         // v0.19.0:大幅放大到 1500%(读小字/扫描书);PDFKit 默认上限只有 4 倍
         view.minScaleFactor = 0.2
         // v0.23.0:最大 4000%(看清扫描件的像素点);实际清晰度取决于 PDF 自身栅格

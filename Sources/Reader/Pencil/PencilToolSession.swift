@@ -62,12 +62,27 @@ enum PencilShapeKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// v0.26.0:**每支笔自己的状态**。以前墨色/笔宽是全局一份 —— 用过荧光笔(24pt)再切回钢笔,
+/// 钢笔也跟着变成 24pt;铅笔的粗细也被钢笔的档位带走。现在每支笔各自记住
+/// 墨色 / 自定义色 / 笔宽 / 笔锋角度 / 稳定化 / 橡皮模式与大小,互不影响。
+struct PencilToolPrefs: Codable, Equatable {
+    var colorIndex: Int = 0
+    var customRGBA: Int = 0
+    var widthIndex: Int = 2
+    var nibAngleIndex: Int = 2
+    var smoothing: Bool = true
+    var eraserWhole: Bool = false
+    var eraserSizeIndex: Int = 2
+}
+
 /// v0.15.0:手写工具会话 —— 工具 + 墨色/荧光色 + **5 档笔宽** + **橡皮双模式**,持久记忆。
 /// 由双列浮动工具托盘(PencilPaletteView)与挤压弧形工具盘(PencilArcMenu)共同驱动。
 final class PencilToolSession: ObservableObject {
     @Published var kind: PencilToolKind = .pen {
         didSet {
             if kind != .eraser, kind != .lasso, kind != oldValue { lastInkKind = kind }
+            // v0.26.0:切到哪支笔,就装回哪支笔自己的状态(笔宽/墨色/笔锋…),互不污染。
+            if !applying, kind != oldValue { applyPrefs(for: kind) }
             persist()
         }
     }
@@ -101,6 +116,13 @@ final class PencilToolSession: ObservableObject {
 
     /// 橡皮切换前的上一支笔(双击手势回退用)
     private(set) var lastInkKind: PencilToolKind = .pen
+
+    // MARK: - v0.26.0 每支笔的状态表(按书持久化)
+
+    /// kind.rawValue → 该笔的状态
+    private var prefs: [String: PencilToolPrefs] = [:]
+    /// 正在装填状态时,`didSet` 只做 UI 同步,不回写状态表
+    private var applying = false
 
     /// 墨色:近黑 / 主操作蓝 / 录音红 / 绿 / 橙 / 紫
     static let inkHex: [UInt32] = [0x0A0A0A, 0x4377FF, 0xED5279, 0x2E9E63, 0xF08C33, 0x9B6BD6]
@@ -146,6 +168,13 @@ final class PencilToolSession: ObservableObject {
             ? true
             : defaults.bool(forKey: "pencilCalliSmooth")
         // v0.25.0:不再把橡皮重置成钢笔 —— 上次选的是橡皮、是"整笔"擦,就该原样恢复。
+        // v0.26.0:每支笔的状态表(全局快照)优先;有它就以它为准,然后装回当前笔。
+        if let saved = Self.loadPrefs(from: defaults, key: Self.globalStateKey), !saved.isEmpty {
+            prefs = saved
+            applyPrefs(for: kind)
+        } else {
+            captureCurrentPrefs()
+        }
     }
 
     // MARK: - 展示 / 当前值
@@ -304,8 +333,21 @@ final class PencilToolSession: ObservableObject {
         docKey = sha
         let defaults = UserDefaults.standard
         let prefix = "pencil.doc.\(sha)."
+        // v0.26.0:优先用整份状态快照(每支笔各自的墨色/笔宽/笔锋角度/稳定化/橡皮)
+        if let saved = Self.loadPrefs(from: defaults, key: Self.stateKey(sha)), !saved.isEmpty {
+            prefs = saved
+            if let raw = defaults.string(forKey: prefix + "kind"),
+               let savedKind = PencilToolKind(rawValue: raw) {
+                kind = savedKind
+                if savedKind == .eraser { lastInkKind = .pen }
+            }
+            applyPrefs(for: kind)
+            DiagLog.log("pencil: doc state loaded tools=\(prefs.count) kind=\(kind.rawValue) width=\(widthIndex)")
+            return
+        }
         guard defaults.object(forKey: prefix + "width") != nil else {
             DiagLog.log("pencil: doc tools default (no saved state)")
+            captureCurrentPrefs()
             return
         }
         if let raw = defaults.string(forKey: prefix + "kind"),
@@ -345,6 +387,9 @@ final class PencilToolSession: ObservableObject {
             calligraphySmoothing = defaults.bool(forKey: prefix + "calliSmooth")
         }
         DiagLog.log("pencil: doc tools loaded kind=\(kind.rawValue) width=\(widthIndex)")
+        // v0.26.0:老记录(逐键存)先升级成状态快照,之后切工具就能各自记各自的值。
+        captureCurrentPrefs()
+        saveState(defaults)
     }
 
     private func persistDoc(_ defaults: UserDefaults) {
@@ -387,6 +432,62 @@ final class PencilToolSession: ObservableObject {
 
     // MARK: - 私有
 
+    // MARK: v0.26.0 每支笔的状态
+
+    static let globalStateKey = "pencil.state.global"
+
+    static func stateKey(_ sha: String) -> String { "pencil.state.\(sha)" }
+
+    static func loadPrefs(from defaults: UserDefaults, key: String) -> [String: PencilToolPrefs]? {
+        guard let data = defaults.data(forKey: key),
+              let dict = try? JSONDecoder().decode([String: PencilToolPrefs].self, from: data) else { return nil }
+        return dict
+    }
+
+    /// 把当前 UI 上的值写回"当前这支笔"的状态槽
+    private func captureCurrentPrefs() {
+        guard !applying else { return }
+        let isMarker = kind == .marker
+        prefs[kind.rawValue] = PencilToolPrefs(
+            colorIndex: isMarker ? markerColorIndex : colorIndex,
+            customRGBA: isMarker ? customMarkerRGBA : customInkRGBA,
+            widthIndex: widthIndex,
+            nibAngleIndex: nibAngleIndex,
+            smoothing: calligraphySmoothing,
+            eraserWhole: eraserWhole,
+            eraserSizeIndex: eraserSizeIndex
+        )
+    }
+
+    /// 装回某支笔自己的状态(apply 期间 forbear 回写,避免把新笔的值写到别的槽里)
+    private func applyPrefs(for tool: PencilToolKind) {
+        guard let p = prefs[tool.rawValue] else { return }
+        applying = true
+        if tool == .marker {
+            markerColorIndex = p.colorIndex
+            customMarkerRGBA = p.customRGBA
+        } else {
+            colorIndex = p.colorIndex
+            customInkRGBA = p.customRGBA
+        }
+        widthIndex = p.widthIndex
+        nibAngleIndex = p.nibAngleIndex
+        calligraphySmoothing = p.smoothing
+        eraserWhole = p.eraserWhole
+        eraserSizeIndex = p.eraserSizeIndex
+        applying = false
+    }
+
+    /// v0.26.0:写入状态表(全局 + 当前书)。只由「显式开关/选值」触发,别处一律不改。
+    private func saveState(_ defaults: UserDefaults) {
+        captureCurrentPrefs()
+        guard let data = try? JSONEncoder().encode(prefs) else { return }
+        defaults.set(data, forKey: Self.globalStateKey)
+        if let docKey {
+            defaults.set(data, forKey: Self.stateKey(docKey))
+        }
+    }
+
     private func clamped(_ value: Int, _ low: Int, _ high: Int) -> Int {
         min(max(value, low), high)
     }
@@ -407,5 +508,6 @@ final class PencilToolSession: ObservableObject {
         defaults.set(nibAngleIndex, forKey: "pencilNibAngle")
         defaults.set(calligraphySmoothing, forKey: "pencilCalliSmooth")
         persistDoc(defaults)
+        saveState(defaults)
     }
 }
