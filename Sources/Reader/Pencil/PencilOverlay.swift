@@ -307,7 +307,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     // MARK: - v0.24.0 书法笔(自研可变笔宽;笔锋角度 + 稳定化)
 
-    private let inkSampler = InkSamplePanRecognizer()
+    private let inkSampler = InkSampleGestureRecognizer()
     private var calligraphyActive = false
     private var calliColor: UIColor = .label
     private var calliWidth: CGFloat = 4
@@ -364,7 +364,6 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         // v0.24.0:书法笔采样手势(同样只收 Pencil;激活时接管绘制手势)
         inkSampler.addTarget(self, action: #selector(handleCalligraphyPan(_:)))
         inkSampler.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
-        inkSampler.maximumNumberOfTouches = 1
         inkSampler.isEnabled = false
         canvas.addGestureRecognizer(inkSampler)
 
@@ -487,7 +486,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     // MARK: - 书法笔手势
 
-    @objc private func handleCalligraphyPan(_ gesture: InkSamplePanRecognizer) {
+    @objc private func handleCalligraphyPan(_ gesture: InkSampleGestureRecognizer) {
         guard marking, calligraphyActive else { return }
         switch gesture.state {
         case .began:
@@ -520,7 +519,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
     }
 
-    private func renderCalligraphy(_ gesture: InkSamplePanRecognizer) {
+    private func renderCalligraphy(_ gesture: InkSampleGestureRecognizer) {
         guard let stroke = CalligraphyInkBuilder.stroke(
             samples: gesture.samples,
             color: calliColor,

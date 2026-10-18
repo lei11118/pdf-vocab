@@ -17,9 +17,23 @@ struct InkSample {
     var time: TimeInterval
 }
 
-/// 只读采样的 pan 手势(与 `PencilTouchObserver` 同思路:不替换任何系统 delegate,
+/// 只读采样的手势(与 `PencilTouchObserver` 同思路:不替换任何系统 delegate,
 /// 只在 touches 回调里抄一份原始数据)。
-final class InkSamplePanRecognizer: UIPanGestureRecognizer {
+///
+/// 为什么用"零时长长按"而不是 `UIPanGestureRecognizer`:pan 要移动 ~10pt 才进入 `.began`,
+/// **点一下(书法里的"点"、i 上那一点)根本不会开始**,那一笔就整个丢了。
+/// 长按把 `minimumPressDuration` 设 0、允许移动放到极大,等价于"从落笔到抬笔全程跟踪",
+/// 点、短撇、长捺都能收全;状态机仍是 `.began / .changed / .ended`。
+final class InkSampleGestureRecognizer: UILongPressGestureRecognizer {
+
+    init() {
+        super.init(target: nil, action: nil)
+        minimumPressDuration = 0
+        allowableMovement = 10_000
+        numberOfTouchesRequired = 1
+        cancelsTouchesInView = false
+    }
+
     private(set) var samples: [InkSample] = []
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
