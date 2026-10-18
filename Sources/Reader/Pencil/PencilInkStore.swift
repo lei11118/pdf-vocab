@@ -74,4 +74,8 @@ enum InkGeometry {
     static var inverseTransform: CGAffineTransform {
         CGAffineTransform(scaleX: 1 / scale, y: 1 / scale)
     }
+
+    /// v0.20.0:跨页书写 —— 画布向下多留的"出血区"(页面点)。
+    /// 笔尖越过页底后可继续写,抬笔时超出的部分切到下一页。
+    static let bleed: CGFloat = 240
 }

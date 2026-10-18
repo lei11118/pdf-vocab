@@ -54,6 +54,10 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlay.onToolEnded = { [weak self] in
                 self?.onStrokeEnded?()
             }
+            // v0.20.0:跨页书写 —— 上一页切下来的溢出段搬到下一页
+            overlay.onOverflow = { [weak self] index, stroke in
+                self?.moveOverflow(from: index, stroke: stroke) ?? false
+            }
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
             // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
@@ -84,6 +88,23 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         for (_, overlay) in overlays {
             overlay.setRulerActive(active)
         }
+    }
+
+    /// v0.20.0:把上一页切下来的溢出段平移到下一页画布顶部。
+    /// 页面已设为无缝(pageBreakMargins = .zero),页底到下一页页顶的距离就是 0,
+    /// 所以只需减去「页高 × 超采样倍数」。
+    private func moveOverflow(from index: Int, stroke: PKStroke) -> Bool {
+        guard let current = overlays[index] else { return false }
+        guard let next = overlays[index + 1] else {
+            DiagLog.log("pencil: overflow dropped (page \(index + 1) overlay not ready)")
+            return false
+        }
+        let shift = current.bounds.height * InkGeometry.scale
+        guard let moved = PencilStrokeTools.shifted(stroke, dy: -shift) else { return false }
+        let drawing = PKDrawing(strokes: next.canvas.drawing.strokes + [moved])
+        next.canvas.drawing = drawing
+        DiagLog.log("pencil: overflow moved page \(index) -> \(index + 1)")
+        return true
     }
 
     /// v0.14.0:撤销 / 重做(目标 = 最近落笔画布;PencilKit 自带 undo 栈)。
@@ -135,6 +156,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     var onCanvasBecameActive: ((PKCanvasView) -> Void)?
     /// v0.16.0:一次工具手势结束通知
     var onToolEnded: (() -> Void)?
+    /// v0.20.0:笔迹越过页底 → 把溢出段交给 provider 搬到下一页(返回是否搬成功)
+    var onOverflow: ((Int, PKStroke) -> Bool)?
 
     private var marking = false
     private var loaded = false
@@ -238,7 +261,11 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         // v0.17.0:画布始终是页面 ×InkGeometry.scale,再压回页面大小
-        let target = InkGeometry.canvasSize(for: bounds.size)
+        // v0.20.0:高度额外加 bleed,让笔尖可以越过页底继续写(抬笔后切到下一页)
+        let target = CGSize(
+            width: bounds.width * InkGeometry.scale,
+            height: (bounds.height + InkGeometry.bleed) * InkGeometry.scale
+        )
         if target.width > 1, canvas.bounds.size != target {
             canvas.bounds = CGRect(origin: .zero, size: target)
             canvas.layer.position = .zero
@@ -289,7 +316,35 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         DiagLog.log("pencil: tool END page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
         NSLog("[yuewen/pencil] tool end page=%d strokes=%d", pageIndex, canvasView.drawing.strokes.count)
+        // v0.20.0:跨页书写 —— 抬笔后检查最后一笔是否越过页底
+        DispatchQueue.main.async { [weak self] in self?.transferOverflowIfNeeded() }
         onToolEnded?()
+    }
+
+    /// v0.20.0:把越过页底的那一段切下来交给下一页。
+    /// 只处理"刚刚画完"的一笔(creationDate 3 秒内),避免误切历史笔迹;
+    /// 页内段保留、溢出段交给 provider 平移写入下一页。
+    private func transferOverflowIfNeeded() {
+        guard bounds.height > 1, let last = canvas.drawing.strokes.last else { return }
+        let age = Date().timeIntervalSince(last.path.creationDate)
+        guard age < 3 else { return }
+        let threshold = bounds.height * InkGeometry.scale
+        let parts = PencilStrokeTools.split(last, atY: threshold)
+        guard parts.outside.count >= 2,
+              let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: last) else { return }
+
+        // 先确认下一页能接收,再裁掉本页的溢出段 —— 否则宁可保留整笔,不丢墨
+        guard onOverflow?(pageIndex, outside) == true else { return }
+
+        var strokes = canvas.drawing.strokes
+        if parts.inside.count >= 2,
+           let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: last) {
+            strokes[strokes.count - 1] = inside
+        } else {
+            strokes.removeLast()
+        }
+        canvas.drawing = PKDrawing(strokes: strokes)
+        DiagLog.log("pencil: page \(pageIndex) overflow \(parts.outside.count)pts trimmed")
     }
 
     private func scheduleSave() {
