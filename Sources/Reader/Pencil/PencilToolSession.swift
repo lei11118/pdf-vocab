@@ -160,9 +160,9 @@ final class PencilToolSession: ObservableObject {
         case .lasso:
             return PKLassoTool()
         case .eraser:
-            let type: PKEraserTool.EraserType = eraserWhole ? .vector : .bitmap
-            // v0.17.0:橡皮宽度同样按画布坐标放大,否则超采样后视觉上会缩成 1/3
-            return PKEraserTool(eraserType: type, width: PKEraserTool.defaultWidth(for: type) * scale)
+            // v0.17.0:SDK 的 PKEraserTool 没有宽度参数,超采样后视觉尺寸会缩小 1/scale;
+            // 2 倍下仍可用(整笔擦除不受尺寸影响)。
+            return PKEraserTool(eraserWhole ? .vector : .bitmap)
         }
     }
 
