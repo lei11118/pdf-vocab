@@ -24,6 +24,16 @@ enum PencilStrokeTools {
         return (Array(points[..<firstOutside]), Array(points[firstOutside...]))
     }
 
+    /// v0.23.2:向上越界专用 —— 笔从页内往上写,先遇到 y ≤ 阈值。
+    /// 返回 (above: 页顶以上的段, below: 页内段)。
+    static func splitUpward(_ stroke: PKStroke, atY threshold: CGFloat) -> (above: [PKStrokePoint], below: [PKStrokePoint]) {
+        let points = Array(stroke.path)
+        guard let firstAbove = points.firstIndex(where: { $0.location.y <= threshold }) else {
+            return ([], points)
+        }
+        return (Array(points[firstAbove...]), Array(points[..<firstAbove]))
+    }
+
     /// 整笔沿 y 平移(用于把溢出段搬到下一页)
     static func shifted(_ stroke: PKStroke, dy: CGFloat) -> PKStroke? {
         let points = stroke.path.map { point in

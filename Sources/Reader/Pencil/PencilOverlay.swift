@@ -859,19 +859,19 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
         // 向上:y < 页顶 的段交给上一页底部
         if points.contains(where: { $0.location.y < top }) {
-            let parts = PencilStrokeTools.split(last, atY: top)   // inside = 页顶以上(溢出), outside = 页内
-            guard parts.inside.count >= 2,
-                  let above = PencilStrokeTools.makeStroke(points: parts.inside, template: last) else { return }
+            let parts = PencilStrokeTools.splitUpward(last, atY: top)   // above = 页顶以上(溢出), below = 页内
+            guard parts.above.count >= 2,
+                  let above = PencilStrokeTools.makeStroke(points: parts.above, template: last) else { return }
             guard onOverflowUp?(pageIndex, above) == true else { return }
             var strokes = canvas.drawing.strokes
-            if parts.outside.count >= 2,
-               let inside = PencilStrokeTools.makeStroke(points: parts.outside, template: last) {
+            if parts.below.count >= 2,
+               let inside = PencilStrokeTools.makeStroke(points: parts.below, template: last) {
                 strokes[strokes.count - 1] = inside
             } else {
                 strokes.removeLast()
             }
             canvas.drawing = PKDrawing(strokes: strokes)
-            DiagLog.log("pencil: page \(pageIndex) top overflow \(parts.inside.count)pts trimmed")
+            DiagLog.log("pencil: page \(pageIndex) top overflow \(parts.above.count)pts trimmed")
         }
     }
 
