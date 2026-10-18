@@ -408,17 +408,8 @@ final class ReaderCoordinator: NSObject {
             tool: toolSession?.makeTool(scale: InkGeometry.scale), rulerActive: toolSession?.rulerActive ?? false
         )
         overlayProvider = provider
-        provider.onStrokeEnded = { [weak self] in
-            // v0.16.1:不要在 PencilKit 的 delegate 回调里同步改工具(会锁死主线程);
-            // 下一轮 runloop 再切回上一支笔。
-            DispatchQueue.main.async {
-                guard let self, self.markMode, let session = self.toolSession else { return }
-                self.lastInkActivityAt = CFAbsoluteTimeGetCurrent()
-                guard session.kind == .eraser, session.autoReturnFromEraser else { return }
-                session.returnFromEraserIfNeeded()
-                self.applyToolSession()
-            }
-        }
+        // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
+        // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
 
         // v0.14.0:自绘浮动工具带取代系统 PKToolPicker —— Pencil 系统手势回到自定义映射:

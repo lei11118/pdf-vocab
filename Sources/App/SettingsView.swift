@@ -11,7 +11,6 @@ struct SettingsView: View {
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
-    @AppStorage("pencilAutoReturnEraser") private var pencilAutoReturnEraser = true
     /// v0.18.0:书写贴边自动滚动 + Pencil 手势映射
     @AppStorage("writingAutoScroll") private var writingAutoScroll = true
     @AppStorage("pencilLineSnap") private var pencilLineSnap = true
@@ -53,7 +52,6 @@ struct SettingsView: View {
                 Section {
                     Toggle("Pencil 悬停预览", isOn: $pencilHoverPreview)
                     Toggle("触觉反馈", isOn: $pencilHaptics)
-                    Toggle("橡皮擦完自动回到上一支笔", isOn: $pencilAutoReturnEraser)
                     Toggle("书写时贴边自动滚动", isOn: $writingAutoScroll)
                     Toggle("画完自动拉直线", isOn: $pencilLineSnap)
                     Toggle("进入文档时恢复上次的书写状态", isOn: $restoreWritingState)
@@ -70,7 +68,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Pencil")
                 } footer: {
-                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。「贴边自动滚动」:写字靠近屏幕上下边缘时自动滚页,写满一页可继续往下写。「擦完自动回笔」可在工具条右键菜单或这里切换。")
+                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。「贴边自动滚动」:写字靠近屏幕上下边缘时自动滚页,写满一页可继续往下写。")
                 }
                 Section {
                     Button {

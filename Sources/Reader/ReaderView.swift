@@ -28,7 +28,6 @@ struct ReaderView: View {
     /// v0.11.0(M4-B):Pencil 悬停预览 / 触觉开关
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
-    @AppStorage("pencilAutoReturnEraser") private var pencilAutoReturnEraser = true
     /// v0.11.0(M4-B):悬停预览(迷你释义气泡)
     @State private var hoverTerm: String?
     @State private var hoverPoint: CGPoint = .zero
@@ -89,9 +88,6 @@ struct ReaderView: View {
     // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
     private var lifecycleContent: some View {
         pencilSyncContent
-            .onChange(of: pencilAutoReturnEraser) { _, value in
-                pencilTools.autoReturnFromEraser = value
-            }
             .onChange(of: markMode) { _, on in
                 // v0.24.0:按书记住「选词 / 书写」状态,退出再进来不再被重置
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
@@ -109,7 +105,6 @@ struct ReaderView: View {
             }
             .onAppear {
                 pencilTools.attachDocument(doc.sha256)
-                pencilTools.autoReturnFromEraser = pencilAutoReturnEraser
             }
     }
 
@@ -280,7 +275,7 @@ struct ReaderView: View {
                 )
             }
         }
-        .background(DS.paperWhite.ignoresSafeArea())
+        .background(DS.paperFixed.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
     }

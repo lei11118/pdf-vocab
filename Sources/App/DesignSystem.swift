@@ -25,6 +25,11 @@ enum DS {
     static let recordRed = dynamic(light: 0xED5279, dark: 0xFF6E8C)
     /// 暖白纸面(画布外沿)
     static let paperWhite = dynamic(light: 0xFBF8F3, dark: 0x14161A)
+    /// v0.25.0:固定纸面 —— 阅读区永远是白纸,不随系统深浅色变化。
+    /// 深色模式下 PencilKit 会按外观"适配"墨色(黑笔发灰、看不清),所以纸面固定 + 画布钉在浅色外观,
+    /// 墨色才是所见即所得的黑;要暗读用「夜间模式」(只压纸面,不改墨色)。
+    static let paperFixed = Color(red: 0xFB / 255.0, green: 0xF8 / 255.0, blue: 0xF3 / 255.0)
+    static let uiPaperFixed = UIColor(hex: 0xFBF8F3)
     /// 内容色(采样自荧光笔调色盘)
     static let inkYellow = dynamic(light: 0xFDFD01, dark: 0xFDFD01)
     static let inkLime = dynamic(light: 0xA9FD1B, dark: 0xA9FD1B)
@@ -117,8 +122,12 @@ enum DS {
 
         /// 学习内容的“纸媒”声部:英文词条、例句、阅读摘要用衬线字体。
         static let wordTitle = Font.system(size: 34, weight: .bold, design: .serif)
+        /// v0.25.0:生词卡上的词条(网格卡片用,比 wordTitle 小一档,一屏能放三四个)
+        static let wordCard = Font.system(size: 25, weight: .bold, design: .serif)
         static let wordBody = Font.system(size: 17, weight: .regular, design: .serif)
         static let wordQuote = Font.system(size: 16, weight: .regular, design: .serif).italic()
+        /// v0.25.0:卡片里的小号衬线(词汇释义的第二行,避免和正文抢注意力)
+        static let wordMeta = Font.system(size: 14, weight: .regular, design: .serif)
 
         /// 元数据 / 页码 / 数量使用等宽数字,避免跳动。
         static let monoCaption = Font.system(size: 12, weight: .semibold, design: .monospaced)

@@ -94,51 +94,22 @@ enum CalligraphyInkBuilder {
         nibDegrees: CGFloat,
         smoothing: Bool
     ) -> PKStroke? {
-        guard var points = stabilized(samples, smoothing: smoothing) else { return nil }
-        if points.count == 1 {
-            // 点一下 = 一个墨点:复制一个微偏移点让 PencilKit 能画出圆头
-            var dot = points[0]
-            dot.location.x += 0.35
-            points.append(dot)
-        }
-        guard points.count >= 2 else { return nil }
-
-        let nib = nibDegrees * .pi / 180
-        let count = points.count
+        guard let points = prepared(samples, smoothing: smoothing) else { return nil }
+        let sizes = widths(for: points, baseWidth: baseWidth, nibDegrees: nibDegrees)
         let startTime = points[0].time
         var strokePoints: [PKStrokePoint] = []
-        strokePoints.reserveCapacity(count)
+        strokePoints.reserveCapacity(points.count)
 
-        for i in 0..<count {
-            let prev = points[max(i - 1, 0)]
-            let next = points[min(i + 1, count - 1)]
-            let dx = next.location.x - prev.location.x
-            let dy = next.location.y - prev.location.y
-            let theta = atan2(dy, dx)
-
-            // ① 笔锋:方向与笔尖夹角越大越粗(横细竖粗)
-            let chisel = CGFloat(abs(sin(Double(theta) - Double(nib))))
-            // ② 压力:轻轻落笔细,压下去粗
-            let pressure = 0.55 + 0.85 * points[i].force
-            // ③ 速度:快写收锋(用相邻点位移/时间估,时间戳异常时按 1 处理)
-            let dt = max(next.time - prev.time, 0.0001)
-            let speed = Double(hypot(dx, dy)) / dt          // 画布点/秒
-            let speedFactor = 1.0 - min(speed / 5200.0, 1.0) * 0.18
-            // ④ 起收笔收锋:两端各 3 点做平滑锥形,写出来的字才有笔锋
-            let edge = min(CGFloat(i), CGFloat(count - 1 - i))
-            let taper = 0.42 + 0.58 * min(edge / 3, 1)
-
-            var width = baseWidth * (0.18 + 0.82 * chisel) * pressure * CGFloat(speedFactor) * taper
-            width = max(width, baseWidth * 0.16)
-
+        for (i, point) in points.enumerated() {
+            let width = sizes[i]
             strokePoints.append(PKStrokePoint(
-                location: points[i].location,
-                timeOffset: TimeInterval(points[i].time - startTime),
+                location: point.location,
+                timeOffset: TimeInterval(point.time - startTime),
                 size: CGSize(width: width, height: width),
                 opacity: 1,
-                force: points[i].force,
-                azimuth: points[i].azimuth,
-                altitude: points[i].altitude,
+                force: point.force,
+                azimuth: point.azimuth,
+                altitude: point.altitude,
                 secondaryScale: 1
             ))
         }
@@ -146,6 +117,109 @@ enum CalligraphyInkBuilder {
         guard strokePoints.count >= 2 else { return nil }
         let path = PKStrokePath(controlPoints: strokePoints, creationDate: Date())
         return PKStroke(ink: PKInk(.pen, color: color), path: path, transform: .identity, mask: nil)
+    }
+
+    /// v0.25.0:书写过程中的实时轮廓(画布坐标,交给 overlay 转成页面坐标)。
+    /// 用"左右两侧偏移点 + 两端圆帽"围成一个填充多边形 —— 与最终笔迹同宽同形。
+    static func previewPath(
+        samples: [InkSample],
+        baseWidth: CGFloat,
+        nibDegrees: CGFloat,
+        smoothing: Bool
+    ) -> UIBezierPath? {
+        guard let points = prepared(samples, smoothing: smoothing), points.count >= 2 else { return nil }
+        let sizes = widths(for: points, baseWidth: baseWidth, nibDegrees: nibDegrees)
+
+        var lefts: [CGPoint] = []
+        var rights: [CGPoint] = []
+        lefts.reserveCapacity(points.count)
+        rights.reserveCapacity(points.count)
+        for (i, point) in points.enumerated() {
+            let prev = points[max(i - 1, 0)]
+            let next = points[min(i + 1, points.count - 1)]
+            let theta = atan2(next.location.y - prev.location.y, next.location.x - prev.location.x)
+            let half = sizes[i] / 2
+            let nx = sin(theta) * half      // 法线方向
+            let ny = -cos(theta) * half
+            lefts.append(CGPoint(x: point.location.x + nx, y: point.location.y + ny))
+            rights.append(CGPoint(x: point.location.x - nx, y: point.location.y - ny))
+        }
+
+        let last = points.count - 1
+        let path = UIBezierPath()
+        path.move(to: lefts[0])
+        for i in 1...last { path.addLine(to: lefts[i]) }
+        // 收笔圆帽
+        let endAngle = atan2(points[last].location.y - points[last - 1].location.y,
+                             points[last].location.x - points[last - 1].location.x)
+        path.addArc(
+            withCenter: points[last].location,
+            radius: sizes[last] / 2,
+            startAngle: endAngle + .pi / 2,
+            endAngle: endAngle - .pi / 2,
+            clockwise: true
+        )
+        for i in stride(from: last, through: 0, by: -1) {
+            path.addLine(to: rights[i])
+        }
+        // 起笔圆帽
+        let startAngle = atan2(points[1].location.y - points[0].location.y,
+                               points[1].location.x - points[0].location.x)
+        path.addArc(
+            withCenter: points[0].location,
+            radius: sizes[0] / 2,
+            startAngle: startAngle - .pi / 2,
+            endAngle: startAngle + .pi / 2,
+            clockwise: true
+        )
+        path.close()
+        return path
+    }
+
+    // MARK: - 共用几何
+
+    /// 稳定化 + 去重 + 单点补齐(点一下 = 一个墨点)。
+    private static func prepared(_ samples: [InkSample], smoothing: Bool) -> [InkSample]? {
+        guard var points = stabilized(samples, smoothing: smoothing) else { return nil }
+        if points.count == 1 {
+            // 复制一个微偏移点让笔迹有长度(直径 = 一个墨点)
+            var dot = points[0]
+            dot.location.x += 0.35
+            points.append(dot)
+        }
+        return points.count >= 2 ? points : nil
+    }
+
+    /// 逐点笔宽(画布坐标):
+    /// ① 笔锋:书写方向与笔尖夹角越大越粗(横细竖粗);
+    /// ② 压力:轻轻落笔细,压下去粗;
+    /// ③ 速度:快写收锋;
+    /// ④ 起收笔:两端各 3 点做平滑锥形。
+    private static func widths(for points: [InkSample], baseWidth: CGFloat, nibDegrees: CGFloat) -> [CGFloat] {
+        let nib = nibDegrees * .pi / 180
+        let count = points.count
+        var sizes: [CGFloat] = []
+        sizes.reserveCapacity(count)
+        for i in 0..<count {
+            let prev = points[max(i - 1, 0)]
+            let next = points[min(i + 1, count - 1)]
+            let dx = next.location.x - prev.location.x
+            let dy = next.location.y - prev.location.y
+            let theta = atan2(dy, dx)
+
+            let chisel = CGFloat(abs(sin(Double(theta) - Double(nib))))
+            let pressure = 0.55 + 0.85 * points[i].force
+            let dt = max(next.time - prev.time, 0.0001)
+            let speed = Double(hypot(dx, dy)) / dt          // 画布点/秒
+            let speedFactor = 1.0 - min(speed / 5200.0, 1.0) * 0.18
+            let edge = min(CGFloat(i), CGFloat(count - 1 - i))
+            let taper = 0.42 + 0.58 * min(edge / 3, 1)
+
+            var width = baseWidth * (0.18 + 0.82 * chisel) * pressure * CGFloat(speedFactor) * taper
+            width = max(width, baseWidth * 0.16)
+            sizes.append(width)
+        }
+        return sizes
     }
 
     /// 稳定化 + 去重:低通让抖动收敛(慢写更稳),但保留原始点顺序与压力。

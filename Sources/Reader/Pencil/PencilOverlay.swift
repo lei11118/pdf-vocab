@@ -31,8 +31,6 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var calligraphyConfig: (active: Bool, color: UIColor, width: CGFloat, nib: CGFloat, smooth: Bool) = (false, .label, 4, 45, true)
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
-    /// v0.16.0:一次书写/擦除手势结束(用于“擦完回到上一支笔”)
-    var onStrokeEnded: (() -> Void)?
 
     init(pdfView: PDFView?, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool? = nil, rulerActive: Bool = false) {
         self.pdfView = pdfView
@@ -57,9 +55,6 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.onCanvasBecameActive = { [weak self] canvas in
                 self?.activeCanvas = canvas
-            }
-            overlay.onToolEnded = { [weak self] in
-                self?.onStrokeEnded?()
             }
             // v0.20.0:跨页书写 —— 上一页切下来的溢出段搬到下一页
             overlay.onOverflow = { [weak self] index, stroke in
@@ -186,7 +181,10 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         guard let current = overlays[index] else { return false }
         let pageHeight = current.bounds.height
         guard pageHeight > 1 else { return false }
-        let shift = pageHeight * InkGeometry.scale
+        // v0.25.0:向上搬运的位移要用**上一页**的页高(以前用当前页的页高,
+        // 遇到两页尺寸不同——封面/插页——就会错位,看起来像在页缝处被截断)。
+        let prevHeight = overlays[index - 1]?.bounds.height ?? pageHeight
+        let shift = prevHeight * InkGeometry.scale
         guard let moved = PencilStrokeTools.shifted(stroke, dy: shift) else { return false }
 
         if let prev = overlays[index - 1] {
@@ -275,8 +273,6 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     let canvas = PKCanvasView()
     /// v0.14.0:落笔通知(协调器记录撤销目标)
     var onCanvasBecameActive: ((PKCanvasView) -> Void)?
-    /// v0.16.0:一次工具手势结束通知
-    var onToolEnded: (() -> Void)?
     /// v0.20.0:笔迹越过页底 → 把溢出段交给 provider 搬到下一页(返回是否搬成功)
     var onOverflow: ((Int, PKStroke) -> Bool)?
     /// v0.23.2:笔迹越过页顶 → 搬到上一页底部
@@ -316,6 +312,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private var calliBaseStrokes: [PKStroke] = []
     private var calliUndoSnapshot: PKDrawing?
     private var lastLiveRender: CFAbsoluteTime = 0
+    /// v0.25.0:本次书法落笔在 drawing 里的下标(抬笔后跨页切分用)
+    private var calliBeginIndex = 0
+    /// v0.25.0:书写过程中的实时轮廓层(画在页面坐标里,抬笔后移除并提交成 PKStroke)
+    private var calliPreviewLayer: CAShapeLayer?
 
     private var marking = false
     private var loaded = false
@@ -340,6 +340,9 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.isScrollEnabled = false
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
+        // v0.25.0:纸面永远是白纸,墨水就永远是真正的黑 —— 深色模式下 PencilKit 会按
+        // 外观给墨色做"适配"(黑笔看起来发灰、看不清)。把画布钉在浅色外观里,墨色不再漂移。
+        canvas.overrideUserInterfaceStyle = .light
         canvas.delegate = self
         // v0.14.0:工具由外部会话驱动(保底黑笔);绘制手势只收 Pencil(公开属性第二道闸)
         canvas.tool = tool ?? PKInkingTool(.pen, color: .black, width: 2.5 * InkGeometry.scale)
@@ -469,6 +472,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         if !active {
             calliBaseStrokes = []
             calliUndoSnapshot = nil
+            removeCalligraphyPreview()
         }
         DiagLog.log("pencil: page \(pageIndex) calligraphy=\(active ? 1 : 0) nib=\(Int(nib))° w=\(String(format: "%.1f", width))")
     }
@@ -493,41 +497,81 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             onCanvasBecameActive?(canvas)   // 撤销目标 = 这一页(自研手势不走 PencilKit 的回调)
             calliUndoSnapshot = canvas.drawing
             calliBaseStrokes = canvas.drawing.strokes
+            calliBeginIndex = calliBaseStrokes.count
             lastLiveRender = 0
-            renderCalligraphy(gesture)
+            updateCalligraphyPreview(gesture.samples)
         case .changed:
             let now = CFAbsoluteTimeGetCurrent()
-            guard now - lastLiveRender >= 0.03 else { return }   // ~33Hz 实时预览
+            guard now - lastLiveRender >= 0.012 else { return }   // ~60Hz 实时轮廓
             lastLiveRender = now
-            renderCalligraphy(gesture)
+            updateCalligraphyPreview(gesture.samples)
         case .ended, .cancelled, .failed:
-            renderCalligraphy(gesture)
-            if let undo = canvas.undoManager, let snapshot = calliUndoSnapshot {
-                undo.registerUndo(withTarget: self) { target in
-                    target.canvas.drawing = snapshot
-                }
-            }
-            calliUndoSnapshot = nil
-            calliBaseStrokes = []
-            flushSave()
-            // 书法笔走的是自研手势,不会触发 canvasViewDidEndUsingTool —— 跨页切分要自己收尾
-            DispatchQueue.main.async { [weak self] in
-                self?.transferOverflowIfNeeded(preferredIndex: nil)
-            }
+            updateCalligraphyPreview(gesture.samples)
+            removeCalligraphyPreview()
+            commitCalligraphy(gesture.samples)
         default:
             break
         }
     }
 
-    private func renderCalligraphy(_ gesture: InkSampleGestureRecognizer) {
+    /// v0.25.0:书写过程中的实时轮廓 —— 把采样点围成填充多边形直接画在页面上。
+    /// 以前是每 30ms 把半成品 PKStroke 塞回 `canvas.drawing`,而 PencilKit 在手势进行中
+    /// 不保证重绘这个赋值,真机表现就是"写字过程没有笔迹,抬笔才整条出现"。
+    private func updateCalligraphyPreview(_ samples: [InkSample]) {
+        guard let path = CalligraphyInkBuilder.previewPath(
+            samples: samples,
+            baseWidth: calliWidth * InkGeometry.scale,
+            nibDegrees: calliNibDegrees,
+            smoothing: calliSmoothing
+        ) else { return }
+        let layer = calliPreviewLayer ?? makeCalligraphyPreviewLayer()
+        // 画布坐标 → 页面坐标(与 pagePoint(fromCanvas:) 同一口径)
+        var t = CGAffineTransform(scaleX: 1 / InkGeometry.scale, y: 1 / InkGeometry.scale)
+        t = t.concatenating(CGAffineTransform(translationX: 0, y: -InkGeometry.bleedTop))
+        path.apply(t)
+        layer.path = path.cgPath
+    }
+
+    private func makeCalligraphyPreviewLayer() -> CAShapeLayer {
+        let layer = CAShapeLayer()
+        layer.fillColor = calliColor.cgColor
+        layer.strokeColor = UIColor.clear.cgColor
+        layer.fillRule = .nonZero
+        self.layer.addSublayer(layer)
+        calliPreviewLayer = layer
+        return layer
+    }
+
+    private func removeCalligraphyPreview() {
+        calliPreviewLayer?.removeFromSuperlayer()
+        calliPreviewLayer = nil
+    }
+
+    /// 抬笔:把整笔提交成真正的 PKStroke(与预览同宽同形),登记撤销,落盘,再处理跨页切分。
+    private func commitCalligraphy(_ samples: [InkSample]) {
+        defer {
+            calliUndoSnapshot = nil
+            calliBaseStrokes = []
+        }
         guard let stroke = CalligraphyInkBuilder.stroke(
-            samples: gesture.samples,
+            samples: samples,
             color: calliColor,
             baseWidth: calliWidth * InkGeometry.scale,
             nibDegrees: calliNibDegrees,
             smoothing: calliSmoothing
         ) else { return }
         canvas.drawing = PKDrawing(strokes: calliBaseStrokes + [stroke])
+        if let undo = canvas.undoManager, let snapshot = calliUndoSnapshot {
+            undo.registerUndo(withTarget: self) { target in
+                target.canvas.drawing = snapshot
+            }
+        }
+        flushSave()
+        let idx = calliBeginIndex
+        // 书法笔走的是自研手势,不会触发 canvasViewDidEndUsingTool —— 跨页切分要自己收尾
+        DispatchQueue.main.async { [weak self] in
+            self?.transferOverflowIfNeeded(preferredIndex: idx)
+        }
     }
 
     // MARK: - 自研工具手势(橡皮 / 激光笔 / 形状共用一个 pan)
@@ -944,7 +988,6 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             self.snapStraightIfNeeded(at: beginIndex)
             self.transferOverflowIfNeeded(preferredIndex: beginIndex)
         }
-        onToolEnded?()
     }
 
     /// v0.21.0:直线吸附 —— 一笔画得足够直(长 > 60 页面点、最大偏差 < 2%)时拉成直线。
@@ -993,6 +1036,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         let top = InkGeometry.pageTopY()
         let bottom = top + bounds.height * InkGeometry.scale
         let points = Array(last.path)
+        // v0.25.0:真机"截断"复现时用来分辨是画布边界裁掉、还是切分/搬运出错
+        if InkGeometry.touchesCanvasEdge(last, pageHeight: bounds.height) {
+            DiagLog.log("pencil: page \(pageIndex) stroke hit canvas edge (bleed exhausted) — 墨迹已被画布边界裁掉")
+        }
 
         // 向下:页内段保留,溢出段交给下一页
         if points.contains(where: { $0.location.y > bottom }) {

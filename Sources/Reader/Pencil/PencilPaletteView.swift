@@ -155,14 +155,6 @@ struct PencilPaletteView: View {
                     Label("隐藏\(tool.label)", systemImage: "eye.slash")
                 }
             }
-            Button {
-                session.autoReturnFromEraser.toggle()
-            } label: {
-                Label(
-                    session.autoReturnFromEraser ? "关闭「擦完回到上一支笔」" : "开启「擦完回到上一支笔」",
-                    systemImage: "arrow.uturn.backward.circle"
-                )
-            }
         }
         .accessibilityLabel(tool.label)
         .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
@@ -375,19 +367,6 @@ struct PencilPaletteView: View {
                     .foregroundStyle(DS.foreground3)
             }
 
-            Toggle(isOn: $session.autoReturnFromEraser) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("擦完回到上一支笔")
-                        .font(DS.Fonts.caption)
-                        .foregroundStyle(DS.foreground1)
-                    Text("适合快速改一笔就继续写")
-                        .font(DS.Fonts.micro)
-                        .foregroundStyle(DS.foreground3)
-                }
-            }
-            .tint(DS.accent)
-
-            // v0.22.0:自研橡皮开关(关掉退回 PencilKit 原生橡皮,超采样下会变小)
             Toggle(isOn: $session.useCustomEraser) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("可调大小(自研橡皮)")

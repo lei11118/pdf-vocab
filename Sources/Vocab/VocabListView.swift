@@ -1,16 +1,18 @@
 import SwiftUI
+import Foundation
 
-/// 生词本列表(v0.10.0,Task 2.2/2.3 重构):
-/// - **文件夹拖动条**:全部 / 未分组 / 各分组(点=筛选;**把单词拖到分组文件夹上=移动分组**;长按分组=重命名/删除);
-/// - 行:[单词][发音][跳转至原文] + 释义预览 + 备注 + 出处/语境;点行=词卡详情;长按=快捷菜单;左滑删除;
-/// - 多选批量删除(自绘勾选,不走 List selection,避免和拖动排序抢编辑态)。
+/// 生词本(v0.10.0 起;v0.25.0 按用户要求"和主页一样的样式,大刀阔斧地改"整页重做)。
 ///
-/// v0.24.0(用户反馈「生词本 UI 和整体不匹配」「生词无法拖动换位置」)重做:
-/// - 视觉全面对齐 DS 与文档库:中性底 + 白卡 + 细边 + 一个强调蓝,英文词条走衬线声部;
-/// - 顶部加「总览卡」:词数 / 分组数 / 当前排序,排序可切(手动 / 最近 / 字母);
-/// - **手动排序**:⋯ → 调整顺序 → 拖动右侧手柄改顺序,落库 `vocab_word.sortOrder`(v11 迁移),
-///   在任何筛选(全部/分组/未分组)下拖动都会正确合并回全表顺序;
-/// - 空态、语境面板、批量条统一 DS 样式。
+/// 视觉语言**完全复用文档库**:同一套中性底(`DS.background1`)+ 白卡 + 细边 + 一个强调蓝,
+/// 同样的页头(标题 + 小徽标 + 副标题 + 右上菜单)、同样的胶囊搜索框、同样的 DSChip 过滤条、
+/// 同样的 `DSSectionHeader` + `LazyVGrid` 卡片网格、同样的悬浮底部动作条。
+///
+/// 交互:
+/// - 点卡片 = 生词详情;卡片上的圆形按钮 = 发音 / 跳回原文;底部一行 = 出处 · 语境数。
+/// - **拖动换位置**(v0.25.0):「⋯ → 调整顺序」后,把一张卡拖到另一张卡上即插入到它的位置;
+///   平时的拖动仍可把词拖到上方的分组胶囊里换分组。菜单里另有 上移 / 下移 / 置顶 兜底。
+/// - 手动顺序落库 `vocab_word.sortOrder`,在「全部 / 分组 / 未分组」任一筛选下拖动
+///   都通过槽位回填合并,不会打乱其他词。
 struct VocabListView: View {
     let store: VocabStore
     var scopeDocSha: String? = nil
@@ -46,7 +48,9 @@ struct VocabListView: View {
     @State private var noteWord: VocabStore.WordSummary?
     @State private var noteText = ""
     @State private var showExport = false
-    /// v0.24.0:排序方式(持久化);手动排序才允许拖动
+    /// v0.25.0:正在被拖动的卡片(用于抬起时轻微放大,给"拿起来了"的手感)
+    @State private var draggingId: Int64?
+    /// 手动排序才允许拖动换位
     @AppStorage("vocabSortMode") private var sortRaw = "manual"
 
     private var sortMode: VocabStore.SortMode {
@@ -57,204 +61,6 @@ struct VocabListView: View {
         }
     }
 
-    private var isSearching: Bool {
-        !searchText.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    var body: some View {
-        NavigationStack {
-            libraryContent
-                .navigationTitle(scopeDocSha == nil ? "生词本" : "生词本(本文档)")
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $searchText, prompt: "搜索生词")
-                .toolbar { toolbarContent }
-                .safeAreaInset(edge: .bottom) { bottomBar }
-                .task { reload() }
-                .onChange(of: searchText) { _, _ in reload() }
-        }
-    }
-
-    // MARK: - 骨架
-
-    private var libraryContent: some View {
-        VStack(spacing: 0) {
-            summaryCard
-            folderStrip
-            if words.isEmpty {
-                emptyHint
-            } else {
-                wordList
-            }
-        }
-        .background(DS.background1.ignoresSafeArea())
-        .sheet(item: $contextWord) { word in contextSheet(word) }
-        .sheet(item: $detailWord) { word in
-            VocabularyDetailView(store: store, word: word, onJump: onJump)
-        }
-        .sheet(isPresented: $showExport) {
-            AnkiExportSheet(store: store, words: words, docStore: docStore)
-        }
-        .alert("新建分组", isPresented: $showNewGroup) {
-            TextField("分组名(如:雅思 / 论文)", text: $newGroupName)
-            Button("创建") {
-                if let id = store.createGroup(name: newGroupName) {
-                    filter = .group(id)
-                    reload()
-                }
-            }
-            Button("取消", role: .cancel) {}
-        }
-        .alert("重命名分组", isPresented: $showRename) {
-            TextField("新名称", text: $renameText)
-            Button("保存") {
-                if let gid = renameGroupId {
-                    store.renameGroup(id: gid, name: renameText)
-                    reload()
-                }
-            }
-            Button("取消", role: .cancel) {}
-        }
-        .alert("备注", isPresented: Binding(
-            get: { noteWord != nil },
-            set: { if !$0 { noteWord = nil } }
-        )) {
-            TextField("备注(词根/记忆法/出处…)", text: $noteText, axis: .vertical)
-                .lineLimit(2...5)
-            Button("保存") {
-                if let w = noteWord { store.setNote(forLemma: w.lemma, note: noteText) }
-                noteWord = nil
-            }
-            Button("取消", role: .cancel) { noteWord = nil }
-        }
-        .confirmationDialog(
-            "删除选中的 \(selectedIds.count) 个生词?",
-            isPresented: $showBatchDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("删除", role: .destructive) { batchDelete() }
-        }
-    }
-
-    // MARK: - 工具条
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {
-                showExport = true
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .accessibilityLabel("导出到 Anki")
-            .disabled(words.isEmpty || listMode == .reorder)
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                if listMode == .browse {
-                    Button {
-                        listMode = .select
-                    } label: {
-                        Label("选择单词", systemImage: "checkmark.circle")
-                    }
-                    Button {
-                        if sortRaw != "manual" {
-                            sortRaw = "manual"
-                            reload()
-                        }
-                        withAnimation(DS.Motion.spring) { listMode = .reorder }
-                    } label: {
-                        Label("调整顺序", systemImage: "arrow.up.arrow.down")
-                    }
-                } else {
-                    Button {
-                        withAnimation(DS.Motion.spring) { exitSpecialMode() }
-                    } label: {
-                        Label("结束\(listMode == .select ? "选择" : "排序")", systemImage: "checkmark")
-                    }
-                }
-                Divider()
-                Button {
-                    sortRaw = "manual"
-                    reload()
-                } label: {
-                    Label("手动顺序", systemImage: sortRaw == "manual" ? "checkmark" : "hand.draw")
-                }
-                Button {
-                    sortRaw = "recent"
-                    listMode = .browse
-                    reload()
-                } label: {
-                    Label("最近添加", systemImage: sortRaw == "recent" ? "checkmark" : "clock")
-                }
-                Button {
-                    sortRaw = "alpha"
-                    listMode = .browse
-                    reload()
-                } label: {
-                    Label("字母顺序", systemImage: sortRaw == "alpha" ? "checkmark" : "textformat.abc")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .accessibilityLabel("更多")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button("完成") { dismiss() }
-        }
-    }
-
-    private func exitSpecialMode() {
-        listMode = .browse
-        selectedIds.removeAll()
-    }
-
-    // MARK: - 总览卡
-
-    private var summaryCard: some View {
-        HStack(alignment: .center, spacing: DS.Space.s) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(isSearching ? "找到 \(words.count) 个" : "共 \(words.count) 词")
-                    .font(DS.Fonts.monoCaption)
-                    .foregroundStyle(DS.foreground1)
-                Text(summarySubtitle)
-                    .font(DS.Fonts.micro)
-                    .foregroundStyle(DS.foreground3)
-            }
-            Spacer(minLength: DS.Space.xs)
-            Menu {
-                Button("手动顺序") { sortRaw = "manual"; reload() }
-                Button("最近添加") { sortRaw = "recent"; listMode = .browse; reload() }
-                Button("字母顺序") { sortRaw = "alpha"; listMode = .browse; reload() }
-            } label: {
-                HStack(spacing: DS.Space.x3s) {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.system(size: 10, weight: .bold))
-                    Text(sortTitle)
-                        .font(DS.Fonts.caption2)
-                }
-                .foregroundStyle(DS.foreground2)
-                .padding(.horizontal, DS.Space.s)
-                .frame(height: 30)
-                .background(DS.background1, in: Capsule())
-                .overlay(Capsule().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
-            }
-            .accessibilityLabel("排序方式:\(sortTitle)")
-        }
-        .padding(.horizontal, DS.Space.s)
-        .padding(.vertical, DS.Space.xs)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .fill(DS.background2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .strokeBorder(DS.foreground1.opacity(0.065), lineWidth: 0.8)
-        )
-        .padding(.horizontal, DS.Layout.pageMargin)
-        .padding(.top, DS.Space.xs)
-        .padding(.bottom, DS.Space.x2s)
-    }
-
     private var sortTitle: String {
         switch sortMode {
         case .manual: return "手动"
@@ -263,67 +69,301 @@ struct VocabListView: View {
         }
     }
 
-    private var summarySubtitle: String {
-        let groupPart = groups.isEmpty ? "暂无分组" : "\(groups.count) 个分组"
-        switch filter {
-        case .all: return "\(groupPart) · \(sortTitle)排序"
-        case .ungrouped: return "未分组 · \(groupPart)"
-        case .group(let id):
-            let name = groups.first(where: { $0.id == id })?.name ?? "分组"
-            return "\(name) · \(groupPart)"
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .bottom) {
+                DS.background1.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DS.Space.l) {
+                        header
+                        searchField
+                        groupStrip
+
+                        if words.isEmpty {
+                            emptyState
+                                .padding(.top, DS.Space.xxl)
+                        } else {
+                            gridSection
+                        }
+                    }
+                    .padding(.horizontal, DS.Layout.pageMargin)
+                    .padding(.top, DS.Space.xs)
+                    .padding(.bottom, 128)
+                }
+                .scrollIndicators(.hidden)
+
+                dockLayer
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .task { reload() }
+            .onChange(of: searchText) { _, _ in reload() }
+            .sheet(item: $contextWord) { word in contextSheet(word) }
+            .sheet(item: $detailWord) { word in
+                VocabularyDetailView(store: store, word: word, onJump: onJump)
+            }
+            .sheet(isPresented: $showExport) {
+                AnkiExportSheet(store: store, words: words, docStore: docStore)
+            }
+            .alert("新建分组", isPresented: $showNewGroup) {
+                TextField("分组名(如:雅思 / 论文)", text: $newGroupName)
+                Button("创建") {
+                    if let id = store.createGroup(name: newGroupName) {
+                        filter = .group(id)
+                        reload()
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            }
+            .alert("重命名分组", isPresented: $showRename) {
+                TextField("新名称", text: $renameText)
+                Button("保存") {
+                    if let gid = renameGroupId {
+                        store.renameGroup(id: gid, name: renameText)
+                        reload()
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            }
+            .alert("备注", isPresented: Binding(
+                get: { noteWord != nil },
+                set: { if !$0 { noteWord = nil } }
+            )) {
+                TextField("备注(词根/记忆法/出处…)", text: $noteText, axis: .vertical)
+                    .lineLimit(2...5)
+                Button("保存") {
+                    if let w = noteWord { store.setNote(forLemma: w.lemma, note: noteText) }
+                    noteWord = nil
+                    reload()
+                }
+                Button("取消", role: .cancel) { noteWord = nil }
+            }
+            .confirmationDialog(
+                "删除选中的 \(selectedIds.count) 个生词?",
+                isPresented: $showBatchDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) { batchDelete() }
+            }
         }
     }
 
-    // MARK: - 文件夹拖动条(v0.10.0,Task 2.3)
+    // MARK: - 页头(与文档库同一套版式)
 
-    private var folderStrip: some View {
+    private var header: some View {
+        HStack(alignment: .center, spacing: DS.Space.m) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
+                    Text("生词本")
+                        .font(DS.Fonts.display3)
+                        .foregroundStyle(DS.foreground1)
+                    Text("VOCAB")
+                        .font(DS.Fonts.micro)
+                        .tracking(1.4)
+                        .foregroundStyle(DS.accent)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(DS.accentContainer, in: Capsule())
+                }
+                Text(headerSubtitle)
+                    .font(DS.Fonts.subhead)
+                    .foregroundStyle(DS.foreground3)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: DS.Space.s)
+
+            HStack(spacing: DS.Space.x2s) {
+                moreMenu
+                DSIconButton(
+                    systemImage: "xmark",
+                    size: 40,
+                    iconSize: 14,
+                    foreground: DS.foreground2,
+                    background: DS.background2,
+                    accessibility: "关闭生词本"
+                ) {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private var headerSubtitle: String {
+        let scope = scopeDocSha == nil ? "" : "本文档 · "
+        if isSearching { return "\(scope)找到 \(words.count) 个词" }
+        let groupPart = groups.isEmpty ? "暂无分组" : "\(groups.count) 个分组"
+        return "\(scope)\(words.count) 词 · \(groupPart) · \(sortTitle)顺序"
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if listMode == .browse {
+                Button {
+                    withAnimation(DS.Motion.spring) { listMode = .select }
+                } label: {
+                    Label("选择单词", systemImage: "checkmark.circle")
+                }
+                Button {
+                    if sortRaw != "manual" {
+                        sortRaw = "manual"
+                        reload()
+                    }
+                    withAnimation(DS.Motion.spring) { listMode = .reorder }
+                } label: {
+                    Label("调整顺序", systemImage: "arrow.up.arrow.down")
+                }
+            } else {
+                Button {
+                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                } label: {
+                    Label(listMode == .select ? "结束选择" : "结束排序", systemImage: "checkmark")
+                }
+            }
+
+            Divider()
+
+            Button {
+                sortRaw = "manual"
+                listMode = .browse
+                reload()
+            } label: {
+                Label("手动顺序", systemImage: sortRaw == "manual" ? "checkmark" : "hand.draw")
+            }
+            Button {
+                sortRaw = "recent"
+                listMode = .browse
+                reload()
+            } label: {
+                Label("最近添加", systemImage: sortRaw == "recent" ? "checkmark" : "clock")
+            }
+            Button {
+                sortRaw = "alpha"
+                listMode = .browse
+                reload()
+            } label: {
+                Label("字母顺序", systemImage: sortRaw == "alpha" ? "checkmark" : "textformat.abc")
+            }
+
+            Divider()
+
+            Button {
+                showExport = true
+            } label: {
+                Label("导出到 Anki", systemImage: "square.and.arrow.up")
+            }
+            .disabled(words.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(DS.foreground2)
+                .frame(width: 40, height: 40)
+                .background(DS.background2, in: Circle())
+                .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+        }
+        .accessibilityLabel("更多")
+    }
+
+    // MARK: - 搜索框(与文档库同一个胶囊)
+
+    private var searchField: some View {
+        HStack(spacing: DS.Space.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(DS.foreground3)
+            TextField("搜索生词", text: $searchText)
+                .font(DS.Fonts.subhead)
+                .foregroundStyle(DS.foreground1)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(DS.foreground4)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除搜索")
+            }
+        }
+        .padding(.horizontal, DS.Space.m)
+        .frame(height: 46)
+        .background(DS.background2, in: Capsule())
+        .overlay(Capsule().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+    }
+
+    // MARK: - 分组过滤条(拖动单词到这里 = 换分组)
+
+    private var groupStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: DS.Space.x2s) {
-                FolderChip(title: "全部", icon: "square.grid.2x2", active: filter == .all) {
+                chip(title: "全部", icon: "square.grid.2x2", active: filter == .all) {
                     filter = .all
                     reload()
                 }
-                FolderChip(title: "未分组", icon: "tray", active: filter == .ungrouped) {
+                chip(title: "未分组", icon: "tray", active: filter == .ungrouped) {
                     filter = .ungrouped
                     reload()
                 }
                 .dropDestination(for: String.self) { items, _ in
                     moveWords(items, toGroup: nil)
                 }
-                ForEach(groups) { g in
-                    FolderChip(title: g.name, icon: "folder", active: filter == .group(g.id), count: g.count) {
-                        filter = .group(g.id)
+
+                ForEach(groups) { group in
+                    chip(
+                        title: group.count > 0 ? "\(group.name) \(group.count)" : group.name,
+                        icon: "folder",
+                        active: filter == .group(group.id)
+                    ) {
+                        filter = .group(group.id)
                         reload()
                     }
                     .dropDestination(for: String.self) { items, _ in
-                        moveWords(items, toGroup: g.id)
+                        moveWords(items, toGroup: group.id)
                     }
                     .contextMenu {
                         Button {
-                            renameGroupId = g.id
-                            renameText = g.name
+                            renameGroupId = group.id
+                            renameText = group.name
                             showRename = true
                         } label: {
                             Label("重命名", systemImage: "pencil")
                         }
                         Button(role: .destructive) {
-                            store.deleteGroup(id: g.id)
-                            if filter == .group(g.id) { filter = .all }
+                            store.deleteGroup(id: group.id)
+                            if filter == .group(group.id) { filter = .all }
                             reload()
                         } label: {
                             Label("删除分组", systemImage: "trash")
                         }
                     }
                 }
-                FolderChip(title: "新建分组", icon: "plus", active: false) {
+
+                chip(title: "新建分组", icon: "plus", active: false) {
                     newGroupName = ""
                     showNewGroup = true
                 }
             }
-            .padding(.horizontal, DS.Layout.pageMargin)
-            .padding(.vertical, DS.Space.xs)
+            .padding(.vertical, 2)
         }
-        .background(DS.background1)
+    }
+
+    private func chip(
+        title: String,
+        icon: String,
+        active: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            DSChip(title: title, icon: icon, selected: active)
+        }
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
     }
 
     /// 拖放落地:groupId = nil → 移出所有分组(「未分组」)。
@@ -345,36 +385,48 @@ struct VocabListView: View {
         return moved > 0
     }
 
-    // MARK: - 列表
+    // MARK: - 网格
 
-    private var wordList: some View {
-        List {
-            ForEach(words) { word in
-                row(for: word)
-                    .listRowInsets(EdgeInsets(top: 4, leading: DS.Layout.pageMargin, bottom: 4, trailing: DS.Layout.pageMargin))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            store.deleteWord(id: word.id)
-                            reload()
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                    .contextMenu { rowMenu(word) }
+    private var gridSection: some View {
+        VStack(alignment: .leading, spacing: DS.Space.m) {
+            DSSectionHeader(
+                title: sectionTitle,
+                subtitle: "\(words.count) 词 · \(sortTitle)顺序" + (listMode == .reorder ? " · 拖到另一张卡上换位" : "")
+            )
+
+            LazyVGrid(
+                columns: [
+                    GridItem(
+                        .adaptive(minimum: 250, maximum: 380),
+                        spacing: DS.Layout.cardGap,
+                        alignment: .top
+                    )
+                ],
+                alignment: .leading,
+                spacing: DS.Layout.cardGap
+            ) {
+                ForEach(words) { word in
+                    card(word)
+                }
             }
-            .onMove(perform: moveRows)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.editMode, .constant(listMode == .reorder ? .active : .inactive))
+    }
+
+    private var sectionTitle: String {
+        if isSearching { return "搜索结果" }
+        switch filter {
+        case .all: return "全部生词"
+        case .ungrouped: return "未分组"
+        case .group(let id): return groups.first(where: { $0.id == id })?.name ?? "分组"
+        }
     }
 
     @ViewBuilder
-    private func row(for word: VocabStore.WordSummary) -> some View {
-        let index = (words.firstIndex(where: { $0.id == word.id }) ?? 0) + 1
+    private func card(_ word: VocabStore.WordSummary) -> some View {
         let selected = selectedIds.contains(word.id)
+        let ordinal = words.firstIndex(where: { $0.id == word.id }).map { $0 + 1 }
+        let canReorder = sortMode == .manual && listMode != .select && !isSearching
+
         Button {
             switch listMode {
             case .browse:
@@ -385,13 +437,13 @@ struct VocabListView: View {
                 break
             }
         } label: {
-            VocabRowView(
+            VocabCardView(
                 word: word,
-                ordinal: index,
-                showOrdinal: sortMode == .manual && !isSearching,
+                store: store,
+                ordinal: (sortMode == .manual && !isSearching) ? ordinal : nil,
                 selecting: listMode == .select,
                 selected: selected,
-                store: store,
+                dragging: draggingId == word.id,
                 onAudio: {
                     SpeechService.shared.speak(word.surface, language: SpeechService.usVoice)
                 },
@@ -399,8 +451,14 @@ struct VocabListView: View {
                 onContexts: word.occurrenceCount > 0 ? { contextWord = word } : nil
             )
         }
-        .buttonStyle(.plain)
-        .modifier(RowDragModifier(enabled: listMode != .reorder, payload: String(word.id)))
+        .buttonStyle(DSPressableButtonStyle())
+        .contextMenu { rowMenu(word) }
+        .modifier(CardDragModifier(enabled: listMode != .select, payload: String(word.id)))
+        .modifier(CardDropModifier(enabled: canReorder) { items in
+            guard let raw = items.first, let id = Int64(raw) else { return false }
+            move(id: id, before: word.id)
+            return true
+        })
         .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
     }
 
@@ -412,16 +470,51 @@ struct VocabListView: View {
         }
     }
 
-    /// v0.24.0:拖动排序落地 —— 可见子集的新顺序合并回"同文档范围"的全表顺序。
-    private func moveRows(from source: IndexSet, to destination: Int) {
-        guard sortMode == .manual, !isSearching else { return }
-        var moved = words.map(\.id)
-        moved.move(fromOffsets: source, toOffset: destination)
+    // MARK: - 顺序
+
+    /// 把 id 插到 targetId 的位置(卡片拖到卡片上)。
+    private func move(id: Int64, before targetId: Int64) {
+        guard id != targetId, sortMode == .manual else { return }
+        var visible = words.map(\.id)
+        guard let from = visible.firstIndex(of: id), let to = visible.firstIndex(of: targetId) else { return }
+        visible.remove(at: from)
+        let insert = from < to ? to - 1 : to
+        visible.insert(id, at: max(0, min(insert, visible.count)))
+        commitOrder(visible, reason: "drag \(id) -> \(targetId)")
+    }
+
+    private func nudge(_ word: VocabStore.WordSummary, by delta: Int) {
+        guard sortMode == .manual else { return }
+        var visible = words.map(\.id)
+        guard let index = visible.firstIndex(of: word.id) else { return }
+        let target = index + delta
+        guard target >= 0, target < visible.count else { return }
+        visible.swapAt(index, target)
+        commitOrder(visible, reason: "nudge \(word.id) \(delta > 0 ? "down" : "up")")
+    }
+
+    private func moveToEdge(_ word: VocabStore.WordSummary, front: Bool) {
+        guard sortMode == .manual else { return }
+        var visible = words.map(\.id)
+        guard let index = visible.firstIndex(of: word.id) else { return }
+        visible.remove(at: index)
+        if front {
+            visible.insert(word.id, at: 0)
+        } else {
+            visible.append(word.id)
+        }
+        commitOrder(visible, reason: "edge \(word.id) \(front ? "top" : "bottom")")
+    }
+
+    private func commitOrder(_ visible: [Int64], reason: String) {
+        let before = words.map(\.id)
         let full = store.listWords(docSha: scopeDocSha).map(\.id)
-        store.applyManualOrder(fullOrder: full, visible: words.map(\.id), moved: moved)
-        DiagLog.log("vocab: move \(source) -> \(destination)")
+        store.applyManualOrder(fullOrder: full, visible: before, moved: visible)
+        DiagLog.log("vocab: \(reason)")
         reload()
     }
+
+    // MARK: - 卡片菜单
 
     @ViewBuilder
     private func rowMenu(_ word: VocabStore.WordSummary) -> some View {
@@ -440,12 +533,12 @@ struct VocabListView: View {
             if groups.isEmpty {
                 Text("暂无分组(上方「新建分组」)")
             } else {
-                ForEach(groups) { g in
+                ForEach(groups) { group in
                     Button {
-                        store.setMembership(wordId: word.id, groupId: g.id, member: true)
+                        store.setMembership(wordId: word.id, groupId: group.id, member: true)
                         reload()
                     } label: {
-                        Label(g.name, systemImage: "folder")
+                        Label(group.name, systemImage: "folder")
                     }
                 }
             }
@@ -459,7 +552,31 @@ struct VocabListView: View {
         } label: {
             Label("移动到分组", systemImage: "folder.badge.plus")
         }
+        if sortMode == .manual {
+            Divider()
+            Button {
+                nudge(word, by: -1)
+            } label: {
+                Label("上移一位", systemImage: "arrow.up")
+            }
+            Button {
+                nudge(word, by: 1)
+            } label: {
+                Label("下移一位", systemImage: "arrow.down")
+            }
+            Button {
+                moveToEdge(word, front: true)
+            } label: {
+                Label("移到最前", systemImage: "arrow.up.to.line")
+            }
+            Button {
+                moveToEdge(word, front: false)
+            } label: {
+                Label("移到最后", systemImage: "arrow.down.to.line")
+            }
+        }
         if word.sourceDocSha != nil {
+            Divider()
             Button {
                 jumpToSource(word)
             } label: {
@@ -488,39 +605,33 @@ struct VocabListView: View {
 
     // MARK: - 空态
 
-    private var emptyHint: some View {
+    private var emptyState: some View {
         VStack(spacing: DS.Space.s) {
-            Spacer(minLength: 0)
-            VStack(spacing: DS.Space.s) {
-                Image(systemName: emptyIcon)
-                    .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(DS.accent)
-                    .frame(width: 64, height: 64)
-                    .background(DS.accentContainer, in: Circle())
-                Text(emptyTitle)
-                    .font(DS.Fonts.headline)
-                    .foregroundStyle(DS.foreground1)
-                Text(emptyHintText)
-                    .font(DS.Fonts.caption)
-                    .foregroundStyle(DS.foreground3)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(DS.Space.l)
-            .frame(maxWidth: 420)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                    .fill(DS.background2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                    .strokeBorder(DS.foreground1.opacity(0.065), lineWidth: 0.8)
-            )
-            Spacer(minLength: 0)
+            Image(systemName: emptyIcon)
+                .font(.system(size: 30, weight: .medium))
+                .foregroundStyle(DS.accent)
+                .frame(width: 64, height: 64)
+                .background(DS.accentContainer, in: Circle())
+            Text(emptyTitle)
+                .font(DS.Fonts.title2)
+                .foregroundStyle(DS.foreground1)
+            Text(emptyHintText)
+                .font(DS.Fonts.subhead)
+                .foregroundStyle(DS.foreground3)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(DS.Space.l)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, DS.Layout.pageMargin)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
+                .fill(DS.background2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
+                .strokeBorder(DS.foreground1.opacity(0.065), lineWidth: 0.8)
+        )
     }
 
     private var emptyIcon: String {
@@ -551,11 +662,11 @@ struct VocabListView: View {
         case .ungrouped:
             return "在「全部」里长按单词 → 移出所有分组"
         case .group:
-            return "长按单词拖到上方的分组文件夹即可加入"
+            return "长按单词拖到上方的分组胶囊即可加入"
         }
     }
 
-    // MARK: - 语境列表(点「N 处语境」)
+    // MARK: - 语境面板
 
     private func contextSheet(_ word: VocabStore.WordSummary) -> some View {
         let rows = store.occurrences(forLemma: word.lemma)
@@ -620,56 +731,103 @@ struct VocabListView: View {
         }
     }
 
-    // MARK: - 底部条(批量 / 排序提示)
+    // MARK: - 底部动作条(与文档库同一个悬浮胶囊)
 
-    @ViewBuilder
-    private var bottomBar: some View {
-        if listMode == .select {
-            batchBar
-        } else if listMode == .reorder {
-            reorderHint
-        }
+    private var dockLayer: some View {
+        dockContent
+            .padding(5)
+            .dsFloatingPanel(radius: DS.Radius.pill)
+            .padding(.bottom, DS.Space.m)
     }
 
-    private var batchBar: some View {
-        HStack(spacing: DS.Space.m) {
-            Text("已选 \(selectedIds.count) 项")
-                .font(DS.Fonts.caption)
-                .foregroundStyle(DS.foreground2)
-            Spacer()
-            Button(role: .destructive) {
-                showBatchDeleteConfirm = true
-            } label: {
-                Label("删除", systemImage: "trash")
+    private var dockContent: some View {
+        HStack(spacing: DS.Space.x3s) {
+            HStack(spacing: DS.Space.x2s) {
+                Image(systemName: listMode == .select ? "checkmark.circle.fill" : "text.book.closed.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(listMode == .select ? "已选 \(selectedIds.count)" : "\(words.count) 词")
                     .font(DS.Fonts.caption2)
             }
-            .disabled(selectedIds.isEmpty)
+            .foregroundStyle(DS.foreground2)
+            .padding(.horizontal, DS.Space.s)
+            .frame(height: 42)
+
+            Rectangle()
+                .fill(DS.foreground1.opacity(0.09))
+                .frame(width: 1, height: 22)
+
+            switch listMode {
+            case .browse:
+                dockGhost(title: "选择", icon: "checkmark.circle") {
+                    withAnimation(DS.Motion.spring) { listMode = .select }
+                }
+                dockGhost(title: "排序", icon: "arrow.up.arrow.down") {
+                    if sortRaw != "manual" { sortRaw = "manual" }
+                    withAnimation(DS.Motion.spring) { listMode = .reorder }
+                }
+                dockAccent(title: "导出 Anki", icon: "square.and.arrow.up") {
+                    showExport = true
+                }
+                .disabled(words.isEmpty)
+
+            case .select:
+                dockGhost(title: "删除", icon: "trash") {
+                    showBatchDeleteConfirm = true
+                }
+                .disabled(selectedIds.isEmpty)
+                dockAccent(title: "完成", icon: "checkmark") {
+                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                }
+
+            case .reorder:
+                Text("把卡片拖到另一张卡上换位")
+                    .font(DS.Fonts.caption2)
+                    .foregroundStyle(DS.foreground3)
+                    .padding(.horizontal, DS.Space.xs)
+                dockAccent(title: "完成", icon: "checkmark") {
+                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                }
+            }
         }
-        .padding(.horizontal, DS.Space.m)
-        .frame(height: 52)
-        .dsFloatingPanel(radius: DS.Radius.pill)
-        .padding(.horizontal, DS.Space.m)
-        .padding(.bottom, DS.Space.xs)
     }
 
-    private var reorderHint: some View {
-        HStack(spacing: DS.Space.xs) {
-            Image(systemName: "hand.draw")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(DS.accent)
-            Text("拖动右侧手柄调整顺序")
-                .font(DS.Fonts.caption2)
-                .foregroundStyle(DS.foreground2)
-            Spacer(minLength: 0)
-            Button("完成") { withAnimation(DS.Motion.spring) { exitSpecialMode() } }
-                .font(DS.Fonts.caption2)
-                .foregroundStyle(DS.accent)
+    private func dockGhost(title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.x2s) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(DS.Fonts.caption2)
+            }
+            .foregroundStyle(DS.foreground2)
+            .padding(.horizontal, DS.Space.s)
+            .frame(height: 42)
+            .contentShape(Capsule())
         }
-        .padding(.horizontal, DS.Space.m)
-        .frame(height: 44)
-        .dsFloatingPanel(radius: DS.Radius.pill)
-        .padding(.horizontal, DS.Space.m)
-        .padding(.bottom, DS.Space.xs)
+        .buttonStyle(DSPressableButtonStyle())
+    }
+
+    private func dockAccent(title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: DS.Space.x2s) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .bold))
+                Text(title)
+                    .font(DS.Fonts.caption2)
+            }
+            .foregroundStyle(DS.onAccent)
+            .padding(.horizontal, DS.Space.m)
+            .frame(height: 42)
+            .background(DS.accent, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(DSPressableButtonStyle())
+    }
+
+    private func exitSpecialMode() {
+        listMode = .browse
+        selectedIds.removeAll()
+        draggingId = nil
     }
 
     private func batchDelete() {
@@ -706,8 +864,10 @@ struct VocabListView: View {
     }
 }
 
-/// v0.24.0:排序模式下关掉 `.draggable` —— 否则长按拖拽会和列表的"拖动排序手柄"抢手势。
-private struct RowDragModifier: ViewModifier {
+// MARK: - 拖动(卡片之间换位)
+
+/// 排序/浏览模式下都可拖:浏览时拖到分组胶囊 = 换分组。
+private struct CardDragModifier: ViewModifier {
     let enabled: Bool
     let payload: String
 
@@ -721,57 +881,32 @@ private struct RowDragModifier: ViewModifier {
     }
 }
 
-// MARK: - 文件夹标签(v0.10.0;v0.24.0 对齐 DSChip 视觉)
+/// 只有手动排序且不在选择态时,卡片才是拖放目标(放到谁身上 = 插到谁的位置)。
+private struct CardDropModifier: ViewModifier {
+    let enabled: Bool
+    let onDrop: ([String]) -> Bool
 
-private struct FolderChip: View {
-    let title: String
-    let icon: String
-    let active: Bool
-    var count: Int? = nil
-    let tap: () -> Void
-
-    var body: some View {
-        Button(action: tap) {
-            HStack(spacing: DS.Space.x2s) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(title)
-                    .font(DS.Fonts.caption2)
-                    .lineLimit(1)
-                if let count {
-                    Text("\(count)")
-                        .font(DS.Fonts.micro.monospacedDigit())
-                        .foregroundStyle(active ? DS.accent.opacity(0.72) : DS.foreground3)
-                }
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.dropDestination(for: String.self) { items, _ in
+                onDrop(items)
             }
-            .padding(.horizontal, DS.Space.s)
-            .frame(height: 30)
-            .foregroundStyle(active ? DS.accent : DS.foreground2)
-            .background(
-                Capsule().fill(active ? DS.accentContainer : DS.background2)
-            )
-            .overlay(
-                Capsule().strokeBorder(
-                    active ? DS.accent.opacity(0.22) : DS.foreground1.opacity(0.07),
-                    lineWidth: 0.8
-                )
-            )
-            .contentShape(Capsule())
+        } else {
+            content
         }
-        .buttonStyle(DSPressableButtonStyle())
-        .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
     }
 }
 
-// MARK: - 行(v0.24.0:白卡 + 衬线词条 + 序号 + 备注 + 出处)
+// MARK: - 生词卡(与文档库的卡片同一套:白面 + 细边 + 轻阴影)
 
-private struct VocabRowView: View {
+private struct VocabCardView: View {
     let word: VocabStore.WordSummary
-    let ordinal: Int
-    let showOrdinal: Bool
+    let store: VocabStore
+    let ordinal: Int?
     let selecting: Bool
     let selected: Bool
-    let store: VocabStore
+    let dragging: Bool
     var onAudio: () -> Void
     var onJump: (() -> Void)?
     var onContexts: (() -> Void)?
@@ -780,35 +915,67 @@ private struct VocabRowView: View {
     @State private var note: String = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: DS.Space.s) {
-            if selecting {
-                selectionMark
-            } else if showOrdinal {
-                Text("\(ordinal)")
-                    .font(DS.Fonts.micro.monospacedDigit())
-                    .foregroundStyle(DS.foreground4)
-                    .frame(width: 22, alignment: .trailing)
-                    .padding(.top, 5)
-            }
-            VStack(alignment: .leading, spacing: DS.Space.x2s) {
-                titleRow
-                if let translation, !translation.isEmpty {
-                    Text(translation)
-                        .font(DS.Fonts.wordBody)
-                        .foregroundStyle(DS.foreground2)
-                        .lineLimit(2)
-                        .lineSpacing(2)
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            HStack(alignment: .top, spacing: DS.Space.xs) {
+                if selecting {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(selected ? DS.accent : DS.foreground4)
+                        .padding(.top, 2)
                 }
-                if !note.isEmpty {
-                    Text(note)
-                        .font(DS.Fonts.wordQuote)
-                        .foregroundStyle(DS.foreground3)
-                        .lineLimit(2)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: DS.Space.x2s) {
+                        Text(word.surface)
+                            .font(DS.Fonts.wordCard)
+                            .foregroundStyle(DS.foreground1)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                        if word.occurrenceCount > 1 {
+                            Text("×\(word.occurrenceCount)")
+                                .font(DS.Fonts.micro.monospacedDigit())
+                                .foregroundStyle(DS.foreground3)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    if let ordinal {
+                        Text(String(format: "%02d", ordinal))
+                            .font(DS.Fonts.micro.monospacedDigit())
+                            .foregroundStyle(DS.foreground4)
+                    }
                 }
-                metaRow
+                Button(action: onAudio) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DS.accent)
+                        .frame(width: 30, height: 30)
+                        .background(DS.accentContainer, in: Circle())
+                }
+                .buttonStyle(DSPressableButtonStyle())
+                .accessibilityLabel("发音")
             }
+
+            if let translation, !translation.isEmpty {
+                Text(translation)
+                    .font(DS.Fonts.wordBody)
+                    .foregroundStyle(DS.foreground2)
+                    .lineLimit(3)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !note.isEmpty {
+                Text(note)
+                    .font(DS.Fonts.wordQuote)
+                    .foregroundStyle(DS.foreground3)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: DS.Space.x2s)
+
+            footer
         }
-        .padding(DS.Space.s)
+        .padding(DS.Space.m)
+        .frame(maxWidth: .infinity, minHeight: 176, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                 .fill(selected ? DS.accentContainer : DS.background2)
@@ -816,85 +983,64 @@ private struct VocabRowView: View {
         .overlay(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                 .strokeBorder(
-                    selected ? DS.accent.opacity(0.24) : DS.foreground1.opacity(0.065),
+                    selected ? DS.accent.opacity(0.24) : DS.foreground1.opacity(0.07),
                     lineWidth: 0.8
                 )
         )
+        .shadow(color: .black.opacity(dragging ? 0.14 : 0.05), radius: dragging ? 18 : 12, x: 0, y: dragging ? 9 : 4)
+        .scaleEffect(dragging ? 1.02 : 1)
+        .contentShape(Rectangle())
         .task(id: word.id) { await loadPreview() }
     }
 
-    private var selectionMark: some View {
-        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(selected ? DS.accent : DS.foreground4)
-            .padding(.top, 3)
-    }
-
-    private var titleRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
-            Text(word.surface)
-                .font(DS.Fonts.title2)
-                .foregroundStyle(DS.foreground1)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            if word.occurrenceCount > 1 {
-                Text("×\(word.occurrenceCount)")
-                    .font(DS.Fonts.micro.monospacedDigit())
-                    .foregroundStyle(DS.foreground3)
-            }
-            Spacer(minLength: 0)
-            circleAction("speaker.wave.2.fill", label: "发音", tint: DS.accent, background: DS.accentContainer, action: onAudio)
-            if let onJump {
-                circleAction("arrow.up.right", label: "跳转至原文", tint: DS.foreground2, background: DS.background1, action: onJump)
-            }
-        }
-    }
-
     @ViewBuilder
-    private var metaRow: some View {
-        if let onContexts, let title = word.sourceDocTitle, let page = word.sourcePage {
-            Button(action: onContexts) {
-                HStack(spacing: DS.Space.x3s) {
-                    Text("\(title) · 第 \(page + 1) 页 · \(word.occurrenceCount) 处语境")
-                        .font(DS.Fonts.caption2)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
+    private var footer: some View {
+        HStack(spacing: DS.Space.x2s) {
+            if let onContexts, let page = word.sourcePage {
+                Button(action: onContexts) {
+                    HStack(spacing: 3) {
+                        Text("第 \(page + 1) 页 · \(word.occurrenceCount) 处语境")
+                            .font(DS.Fonts.micro)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                    }
+                    .foregroundStyle(DS.foreground3)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(DS.foreground3)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+            } else if let title = word.sourceDocTitle {
+                Text(title)
+                    .font(DS.Fonts.micro)
+                    .foregroundStyle(DS.foreground3)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-        }
-    }
 
-    private func circleAction(
-        _ systemImage: String,
-        label: String,
-        tint: Color,
-        background: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
-                .background(background, in: Circle())
+            Spacer(minLength: 0)
+
+            if let onJump {
+                Button(action: onJump) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(DS.foreground2)
+                        .frame(width: 24, height: 24)
+                        .background(DS.background1, in: Circle())
+                }
+                .buttonStyle(DSPressableButtonStyle())
+                .accessibilityLabel("跳转至原文")
+            }
         }
-        .buttonStyle(DSPressableButtonStyle())
-        .accessibilityLabel(label)
     }
 
     /// 释义 + 备注一次异步取(别在主线程查 ECDICT,2000 词会卡)
     private func loadPreview() async {
         let lemma = word.lemma
+        let storeRef = store
         let translation = await Task.detached(priority: .utility) { () -> String? in
             let outcome = DictionaryService.lookup(lemma)
             guard case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty else { return nil }
             return raw.split(separator: "\n").first.map(String.init)
         }.value
-        let storeRef = store
         let storedNote = await Task.detached(priority: .utility) { storeRef.note(forLemma: lemma) }.value
         guard !Task.isCancelled else { return }
         self.translation = translation

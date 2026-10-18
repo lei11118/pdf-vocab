@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import PencilKit
 
 /// 一页手写的二进制 + 它的坐标放大倍数(scale)。
 /// v0.17.0 起画布按页面 ×`InkGeometry.scale` 超采样(高清书写),
@@ -76,11 +77,16 @@ enum InkGeometry {
 
     /// v0.20.0:跨页书写 —— 画布向下多留的"出血区"(页面点)。
     /// 笔尖越过页底后可继续写,抬笔时超出的部分切到下一页。
-    static let bleed: CGFloat = 240
+    ///
+    /// v0.25.0:200/240 太短了 —— `PKCanvasView` 是 UIScrollView,`clipsToBounds` 默认为真,
+    /// **超出画布 bounds 的墨迹会被裁掉**。真机反馈"从下一页往回画到上一页会被截断",
+    /// 根因就是这一点:笔往上走 200pt 以后就不再显示,抬笔时也只能切走这 200pt。
+    /// 现在上下都给足到 620pt(≈22cm,A4 页高的 3/4),一支跨页长笔几乎不可能写穿。
+    static let bleed: CGFloat = 620
 
     /// v0.23.2:向上的出血区 —— 从下一页往回写到上一页时,笔尖越过页顶也能继续。
     /// 抬笔时把 y<0 的部分切到上一页底部。
-    static let bleedTop: CGFloat = 200
+    static let bleedTop: CGFloat = 620
 
     /// v0.23.2:带上下出血的画布 bounds(原点 0;页面顶部在 y = bleedTop×scale 处)
     static func canvasBounds(for pageSize: CGSize) -> CGRect {
@@ -99,4 +105,17 @@ enum InkGeometry {
 
     /// 页面顶部/底部在画布坐标里的 y
     static func pageTopY() -> CGFloat { bleedTop * scale }
+
+    /// v0.25.0:一笔是否已经顶到画布的上下沿(说明被裁了,需要更大的出血区)。
+    /// 只用于诊断日志 —— 真机上再出现"截断"时,能一眼看出是不是又被画布边界裁掉。
+    static func touchesCanvasEdge(_ stroke: PKStroke, pageHeight: CGFloat) -> Bool {
+        let top = pageTopY()
+        let bottom = top + pageHeight * scale
+        for point in stroke.path {
+            if point.location.y <= 1 || point.location.y >= bottom + bleed * scale - 1 {
+                return true
+            }
+        }
+        return false
+    }
 }

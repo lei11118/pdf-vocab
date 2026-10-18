@@ -80,7 +80,9 @@ struct PDFKitView: UIViewRepresentable {
         view.maxScaleFactor = 40
         // v0.19.0:页面之间不留缝,视觉上连成一张长纸(配合书写贴边滚动)
         view.pageBreakMargins = .zero
-        view.backgroundColor = DS.uiBackground1
+        // v0.25.0:纸面固定为暖白(不随深色模式变黑),墨色才不会"发灰看不清"。
+        view.backgroundColor = DS.uiPaperFixed
+        view.overrideUserInterfaceStyle = .light
 
         context.coordinator.pdfView = view
         context.coordinator.docLabel = url.deletingPathExtension().lastPathComponent

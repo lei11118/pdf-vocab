@@ -91,8 +91,6 @@ final class PencilToolSession: ObservableObject {
     @Published var nibAngleIndex: Int = 2 { didSet { persist() } }
     /// v0.24.0:书法笔**稳定化** —— 一阶低通平滑,慢写更稳、快写更顺(Notability 的 calligraphy stabilization)。
     @Published var calligraphySmoothing: Bool = true { didSet { persist() } }
-    /// Notability 式细节:擦除一笔后自动回到上一支笔(可在工具托盘右键菜单开关)。
-    @Published var autoReturnFromEraser: Bool = true { didSet { persist() } }
     /// PencilKit 原生直尺:开启后沿直尺边画线,适合画表格/下划线;不改动笔具。
     @Published var rulerActive: Bool = false { didSet { persist() } }
 
@@ -135,10 +133,7 @@ final class PencilToolSession: ObservableObject {
         widthIndex = defaults.object(forKey: "pencilWidthIndex") == nil
             ? 2
             : defaults.integer(forKey: "pencilWidthIndex")
-        eraserWhole = defaults.bool(forKey: "pencilEraserWhole")
-        autoReturnFromEraser = defaults.object(forKey: "pencilAutoReturnEraser") == nil
-            ? true
-            : defaults.bool(forKey: "pencilAutoReturnEraser")
+        eraserWhole = defaults.object(forKey: "pencilEraserWhole") as? Bool ?? false
         rulerActive = defaults.bool(forKey: "pencilRulerActive")
         if let raw = defaults.string(forKey: "pencilShapeKind"),
            let saved = PencilShapeKind(rawValue: raw) {
@@ -150,7 +145,7 @@ final class PencilToolSession: ObservableObject {
         calligraphySmoothing = defaults.object(forKey: "pencilCalliSmooth") == nil
             ? true
             : defaults.bool(forKey: "pencilCalliSmooth")
-        if kind == .eraser { kind = .pen }
+        // v0.25.0:不再把橡皮重置成钢笔 —— 上次选的是橡皮、是"整笔"擦,就该原样恢复。
     }
 
     // MARK: - 展示 / 当前值
@@ -297,12 +292,6 @@ final class PencilToolSession: ObservableObject {
         }
     }
 
-    /// 完成一次擦除后回到上一支笔(Notability 的可选“用完即回”行为)。
-    func returnFromEraserIfNeeded() {
-        guard kind == .eraser, autoReturnFromEraser else { return }
-        kind = lastInkKind
-    }
-
     // MARK: - v0.18.0:每个 PDF 记忆自己的工具
 
     private var docKey: String?
@@ -319,9 +308,11 @@ final class PencilToolSession: ObservableObject {
             return
         }
         if let raw = defaults.string(forKey: prefix + "kind"),
-           let saved = PencilToolKind(rawValue: raw),
-           saved != .eraser {
+           let saved = PencilToolKind(rawValue: raw) {
+            // v0.25.0:橡皮也要恢复(以前这里把 .eraser 排除掉,用户选好的橡皮/整笔模式
+            // 一回主页再进来就变回钢笔 —— 这正是"工具记忆没生效"的真凶)。
             kind = saved
+            if saved == .eraser { lastInkKind = .pen }
         }
         if defaults.object(forKey: prefix + "color") != nil {
             colorIndex = defaults.integer(forKey: prefix + "color")
@@ -410,7 +401,6 @@ final class PencilToolSession: ObservableObject {
         defaults.set(eraserWhole, forKey: "pencilEraserWhole")
         defaults.set(eraserSizeIndex, forKey: "pencilEraserSize")
         defaults.set(useCustomEraser, forKey: "pencilCustomEraser")
-        defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
         defaults.set(rulerActive, forKey: "pencilRulerActive")
         defaults.set(shapeKind.rawValue, forKey: "pencilShapeKind")
         defaults.set(nibAngleIndex, forKey: "pencilNibAngle")
