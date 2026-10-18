@@ -317,8 +317,41 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         DiagLog.log("pencil: tool END page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
         NSLog("[yuewen/pencil] tool end page=%d strokes=%d", pageIndex, canvasView.drawing.strokes.count)
         // v0.20.0:跨页书写 —— 抬笔后检查最后一笔是否越过页底
-        DispatchQueue.main.async { [weak self] in self?.transferOverflowIfNeeded() }
+        // v0.21.0:先做直线吸附,再做跨页切分
+        DispatchQueue.main.async { [weak self] in
+            self?.snapStraightIfNeeded()
+            self?.transferOverflowIfNeeded()
+        }
         onToolEnded?()
+    }
+
+    /// v0.21.0:直线吸附 —— 一笔画得足够直(长 > 60 页面点、最大偏差 < 2%)时拉成直线。
+    /// 只处理刚刚画完的一笔;手写字母通常长度不够,不会被误伤。
+    private func snapStraightIfNeeded() {
+        let enabled = (UserDefaults.standard.object(forKey: "pencilLineSnap") as? Bool) ?? true
+        guard enabled, let last = canvas.drawing.strokes.last else { return }
+        let age = Date().timeIntervalSince(last.path.creationDate)
+        guard age < 3 else { return }
+        let points = Array(last.path)
+        guard points.count >= 4, let first = points.first, let lastPoint = points.last else { return }
+        let start = first.location
+        let end = lastPoint.location
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let length = hypot(dx, dy)
+        guard length > 60 * InkGeometry.scale else { return }
+        var maxDeviation: CGFloat = 0
+        for point in points {
+            let deviation = abs(dy * (point.location.x - start.x) - dx * (point.location.y - start.y)) / length
+            maxDeviation = max(maxDeviation, deviation)
+        }
+        let tolerance = max(1.2 * InkGeometry.scale, length * 0.02)
+        guard maxDeviation < tolerance else { return }
+        guard let snapped = PencilStrokeTools.makeStroke(points: [first, lastPoint], template: last) else { return }
+        var strokes = canvas.drawing.strokes
+        strokes[strokes.count - 1] = snapped
+        canvas.drawing = PKDrawing(strokes: strokes)
+        DiagLog.log("pencil: line snap page \(pageIndex) len=\(Int(length / InkGeometry.scale))pt dev=\(String(format: "%.1f", maxDeviation / InkGeometry.scale))pt")
     }
 
     /// v0.20.0:把越过页底的那一段切下来交给下一页。
