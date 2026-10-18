@@ -1,6 +1,6 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
-> 交接时间:2026-10-18 · 当前版本:**v0.16.2(build 52)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
+> 交接时间:2026-10-18 · 当前版本:**v0.17.0(build 53)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 
 ---
@@ -209,6 +209,7 @@ Sources/
 | v7.ocr | `ocr_word`, `ocr_status` | 扫版词级框(PK = docSha,page,idx) |
 | v8.bookmark | `bookmark` | 每页书签(PK = docSha,page) |
 | v9.vocabSense | `vocab_sense` | 只存"被排除"的义项下标 |
+| v10.inkScale | `pencil_ink.scale` | v0.17.0 高清书写:手写坐标放大倍数(老数据 1,新数据 2)|
 
 **约定**:
 - 高亮矩形存的是**显示矩形**(已含 `HandleMetrics.selectionPadX/Y` 扩边),渲染与跳转都直接用,不要再二次扩边。
@@ -228,7 +229,8 @@ Sources/
 - 扫版兜底:`isScanned` → `OCRService` → `ocrDrag` 独立状态 → 词粒度跨行并集 → 同一套 `applyHighlightDesired`。
 
 ### 6.2 Pencil 手写(`Pencil/`)
-- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。
+- **高清书写(v0.17.0)**:PDF 的页叠层会被 PDFView 的缩放变换放大,`PKCanvasView` 只按屏幕 scale 栅格化一次 → 笔迹被拉伸变糊(Apple 论坛确认 `contentScaleFactor` 无效)。对策 = **超采样画布**:`InkGeometry.scale = 2`,画布 bounds = 页面点 ×2,再套 `1/2` 变换压回页面;笔宽 ×2 保持视觉粗细;**老笔迹在加载时 `PKDrawing.transform` 放大并回写**(`pencil_ink.scale` v10 记录倍数);批注导出按倍数归一化。代价:SDK 的 `PKEraserTool` 没有宽度参数,橡皮视觉半径缩为 1/2。
+- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。**画布是容器 ×2 大小 + 1/2 变换**,容器保持页面尺寸给 PDFKit。
 - 模式切换:`select` 模式 `hitTest` 返回 nil(全穿透);`mark` 模式**无条件返回画布**(不判触摸类型)。
 - 让 Pencil 绘制不被滚动抢:遍历 PDFView 内所有 `UIScrollView`,把 `panGestureRecognizer.allowedTouchTypes = [.direct]` + `delaysContentTouches = false`,账本记原值,退出还原;**幂等重臂**(文档加载/变更/翻页/每次 updateUIView 都要重做,因为 PDFKit 会重建内部层级)。
 - 工具:**不用 PKToolPicker**(v0.14 起移除),自绘 `PencilPaletteView` + 自装 `UIPencilInteraction`:
@@ -288,6 +290,7 @@ v0.15 起对齐逆向资料采样值(不是自创暖色):
 | **0.16.0** | **50** | Notability 式重构:封面书架/继续阅读卡/悬浮导入坞;阅读页浮动顶栏+底部模式条+专注模式(四指);工具条状态机(点当前工具展开样式)、套索、直尺、擦后回笔、工具隐藏;词卡/词表衬线排版 |
 | **0.16.1** | **51** | 修复选工具卡死:工具应用签名去重+下一轮 runloop 应用;`updateUIView` 不再每帧重建 `PKCanvasView.tool`;橡皮回笔异步;直尺不抢 first responder;套索/橡皮自动关直尺 |
 | **0.16.2** | **52** | 按真机日志修复:挤压 0.6s 节流(0.7s 20 次回调)+ 弧盘移除撤销扇区(30 笔一次回退到 10 笔)+ 撤销/重做/工具点击日志 + 双指撤销落笔冷却 |
+| **0.17.0** | **53** | 高清书写:画布 2× 超采样 + 笔宽补偿 + 老笔迹自动迁移(`pencil_ink.scale` v10);新增蜡笔与自定义取色器;橡皮视觉半径减半(SDK 无宽度 API) |
 
 更早细节(v0.1–v0.6.8)以 tag 与 `docs/PLAN.md` 为准。远端 48 个 tag,本地已 `git fetch --tags` 同步。
 
@@ -313,8 +316,8 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 9. 当前待办
 
-### 9.1 v0.16.2 真机验收(最优先,用户还没给反馈)
-0. **先确认「选工具卡死」是否消失**:逐个切换 钢笔 / 铅笔 / 荧光笔 / 套索 / 橡皮 / 直尺,每种停留 2 秒再画一笔;挤压一次看弧盘是否只弹一次(不再连弹)。若仍卡,回报是哪几个工具 + 诊断日志(最后一行是 `palette: tap tool=` / `arc: tool=` / `pencil: apply tool=` 之一就能定位阶段)。
+### 9.1 v0.17.0 真机验收(最优先)
+0. **先看高清书写**:打开旧笔记,确认老笔迹位置/粗细正常(`pencil: page N ink migrated 1x -> 2x`);再「适应宽度」与放大 2 倍看笔迹清晰度;最后试橡皮(半径减半)与套索手柄(可能变小)。
 1. **工具条状态机**:点其他工具是否立即能写;点当前工具是否展开样式层;样式层是否挡住正在写的位置;工具条在横竖屏、分屏下是否仍是一颗胶囊(不拉满全宽)。
 2. **橡皮**:局部/整笔切换是否即时生效(本轮修了 `eraserWhole` 未同步的 bug);「擦完回到上一支笔」是否太急(想连擦多笔时会不会烦)——若烦,默认关掉。
 3. **直尺**:开启后直尺是否出现、可拖动、沿尺边画直线是否顺手;退出书写模式后直尺状态是否残留。
@@ -405,6 +408,6 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 12. 给下一个 agent 的开场提示(可直接粘贴)
 
-> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。当前版本 v0.16.2(52)。
+> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。当前版本 v0.17.0(53)。
 > 先读 `docs/HANDOFF.md`,再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
 > 当前处于"按 Notability 逆向资料重构 UI 与 Pencil 体验"阶段,v0.16.0 的 8 项新交互待用户真机验收(见 HANDOFF §9.1)。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
