@@ -184,6 +184,10 @@ struct PencilPaletteView: View {
                 eraserPanel
             case .lasso:
                 lassoPanel
+            case .shape:
+                shapePanel
+            case .laser:
+                laserPanel
             case .pen, .pencil, .marker, .crayon:
                 inkPanel
             }
@@ -258,6 +262,8 @@ struct PencilPaletteView: View {
         case .crayon: return "蜡质纹理 · 五档宽度"
         case .eraser: return session.eraserWhole ? "整笔擦除" : "局部擦除"
         case .lasso: return "圈选后可移动 / 删除"
+        case .shape: return "拖动生成规整图形"
+        case .laser: return "不落墨 · 抬手淡出"
         }
     }
 
@@ -364,6 +370,46 @@ struct PencilPaletteView: View {
             }
             .tint(DS.accent)
         }
+    }
+
+    /// v0.23.0:形状工具 —— 选形状 + 颜色/笔宽
+    private var shapePanel: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(spacing: 4) {
+                ForEach(PencilShapeKind.allCases) { shape in
+                    let selected = session.shapeKind == shape
+                    Button {
+                        session.shapeKind = shape
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: shape.systemImage)
+                                .font(.system(size: 14, weight: .semibold))
+                            Text(shape.label)
+                                .font(DS.Fonts.micro)
+                        }
+                        .foregroundStyle(selected ? DS.accent : DS.foreground2)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
+                                .fill(selected ? DS.accentContainer : DS.background1)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(DSPressableButtonStyle())
+                    .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+                }
+            }
+            inkPanel
+        }
+    }
+
+    /// v0.23.0:激光笔说明(不留墨,不需要颜色/宽度)
+    private var laserPanel: some View {
+        Text("激光笔不落墨:走过的轨迹是红色光点,抬手后自动淡出。适合讲解时指示,不会写进笔记。")
+            .font(DS.Fonts.caption2)
+            .foregroundStyle(DS.foreground2)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var lassoPanel: some View {

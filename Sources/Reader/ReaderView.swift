@@ -101,6 +101,9 @@ struct ReaderView: View {
                 }
             }
             .onDisappear {
+                // v0.23.0:回主页即退出书写 —— 再进任何书都从「选词阅读」开始
+                markMode = false
+                arcAnchor = nil
                 saveProgressNow()
             }
     }
@@ -280,6 +283,8 @@ struct ReaderView: View {
                         Button("400%") { readerHandle.coordinator?.zoomToPercent(400) }
                         Button("800%") { readerHandle.coordinator?.zoomToPercent(800) }
                         Button("1500%") { readerHandle.coordinator?.zoomToPercent(1500) }
+                        Button("2000%") { readerHandle.coordinator?.zoomToPercent(2000) }
+                        Button("4000%") { readerHandle.coordinator?.zoomToPercent(4000) }
                     } label: {
                         Label("缩放", systemImage: "magnifyingglass.circle")
                     }

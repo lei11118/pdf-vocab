@@ -141,6 +141,9 @@ final class ReaderCoordinator: NSObject {
     private var autoscrollLink: CADisplayLink?
     private var autoscrollSpeed: CGFloat = 0
     private var lastTouchViewPoint: CGPoint = .zero
+    /// v0.23.0:Pencil Pro 悬停位置 —— 挤压时弧形工具盘开在笔尖处
+    private var lastHoverViewPoint: CGPoint = .zero
+    private var lastHoverAt: CFAbsoluteTime = 0
 
     // MARK: - 观察
 
@@ -660,6 +663,11 @@ final class ReaderCoordinator: NSObject {
 
     @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
         guard let pdfView else { return }
+        // v0.23.0:无论选词还是书写模式都记录悬停位置 —— 挤压工具盘据此定位
+        if gesture.state == .began || gesture.state == .changed {
+            lastHoverViewPoint = gesture.location(in: pdfView)
+            lastHoverAt = CFAbsoluteTimeGetCurrent()
+        }
         guard hoverPreviewEnabled, !markMode else {
             clearHover()
             return
@@ -1319,13 +1327,21 @@ final class ReaderCoordinator: NSObject {
                 whole: session.eraserWhole,
                 radius: session.eraserRadius * InkGeometry.scale
             )
+            // v0.23.0:激光笔 / 形状工具(与橡皮共用同一条自研手势通道)
+            provider.setLaserMode(active: session.kind == .laser)
+            provider.setShapeMode(
+                active: session.kind == .shape,
+                kind: session.shapeKind,
+                color: session.currentUIColor,
+                width: session.width
+            )
             let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
             DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
         }
     }
 
     private static func toolSignature(_ session: PencilToolSession) -> String {
-        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)"
+        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)|\(session.shapeKind.rawValue)"
     }
 
     // MARK: - v0.18.0 书写贴边自动滚动(连续书写第一步)
@@ -2081,11 +2097,18 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
             DiagLog.log("pencil: squeeze -> eraser")
             return
         }
-        let point = lastTouchViewPoint == .zero
-            ? CGPoint(x: pdfView?.bounds.midX ?? 0, y: pdfView?.bounds.midY ?? 0)
-            : lastTouchViewPoint
+        // v0.23.0:优先用 Pencil Pro 悬停位置(3 秒内),把工具盘开在笔尖处;否则退回最近触摸点
+        let hoverFresh = CFAbsoluteTimeGetCurrent() - lastHoverAt < 3.0 && lastHoverViewPoint != .zero
+        let point: CGPoint
+        if hoverFresh {
+            point = lastHoverViewPoint
+        } else if lastTouchViewPoint != .zero {
+            point = lastTouchViewPoint
+        } else {
+            point = CGPoint(x: pdfView?.bounds.midX ?? 0, y: pdfView?.bounds.midY ?? 0)
+        }
         PencilHaptics.selectionCompleted(at: point)
-        DiagLog.log("pencil: squeeze -> arc menu at \(Int(point.x)),\(Int(point.y))")
+        DiagLog.log("pencil: squeeze -> arc menu at \(Int(point.x)),\(Int(point.y)) \(hoverFresh ? "hover" : "touch")")
         onPencilSqueeze?(point)
     }
 }

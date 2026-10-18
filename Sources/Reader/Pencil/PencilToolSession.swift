@@ -3,7 +3,7 @@ import PencilKit
 
 /// v0.15.0:手写工具类型(Notability 四件套 + 蜡笔)
 enum PencilToolKind: String, CaseIterable, Identifiable {
-    case pen, pencil, marker, crayon, lasso, eraser
+    case pen, pencil, marker, crayon, lasso, shape, laser, eraser
 
     var id: String { rawValue }
 
@@ -14,6 +14,8 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .marker: return "荧光笔"
         case .crayon: return "蜡笔"
         case .lasso: return "套索"
+        case .shape: return "形状"
+        case .laser: return "激光笔"
         case .eraser: return "橡皮"
         }
     }
@@ -25,7 +27,34 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .marker: return "highlighter"
         case .crayon: return "scribble"
         case .lasso: return "lasso"
+        case .shape: return "square.on.circle"
+        case .laser: return "scope"
         case .eraser: return "eraser"
+        }
+    }
+}
+
+/// v0.23.0:形状工具 —— 拖动即得规整图形(Notability 的 shape 工具)。
+enum PencilShapeKind: String, CaseIterable, Identifiable {
+    case line, rect, ellipse, arrow
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .line: return "直线"
+        case .rect: return "矩形"
+        case .ellipse: return "椭圆"
+        case .arrow: return "箭头"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .line: return "line.diagonal"
+        case .rect: return "rectangle"
+        case .ellipse: return "circle"
+        case .arrow: return "arrow.up.right"
         }
     }
 }
@@ -52,6 +81,8 @@ final class PencilToolSession: ObservableObject {
     @Published var eraserSizeIndex: Int = 2 { didSet { persist() } }
     /// v0.22.0:自研橡皮开关(关掉则退回 PencilKit 原生橡皮,视觉尺寸随超采样缩小)
     @Published var useCustomEraser: Bool = true { didSet { persist() } }
+    /// v0.23.0:形状工具的当前形状
+    @Published var shapeKind: PencilShapeKind = .line { didSet { persist() } }
     /// Notability 式细节:擦除一笔后自动回到上一支笔(可在工具托盘右键菜单开关)。
     @Published var autoReturnFromEraser: Bool = true { didSet { persist() } }
     /// PencilKit 原生直尺:开启后沿直尺边画线,适合画表格/下划线;不改动笔具。
@@ -101,6 +132,10 @@ final class PencilToolSession: ObservableObject {
             ? true
             : defaults.bool(forKey: "pencilAutoReturnEraser")
         rulerActive = defaults.bool(forKey: "pencilRulerActive")
+        if let raw = defaults.string(forKey: "pencilShapeKind"),
+           let saved = PencilShapeKind(rawValue: raw) {
+            shapeKind = saved
+        }
         if kind == .eraser { kind = .pen }
     }
 
@@ -148,11 +183,11 @@ final class PencilToolSession: ObservableObject {
     /// 五档笔宽(按工具分档)
     var width: CGFloat {
         switch kind {
-        case .pen: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
+        case .pen, .shape: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
         case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
         case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
         case .crayon: return [2.5, 4.0, 6.0, 9.0, 13.0][clamped(widthIndex, 0, 4)]
-        case .lasso, .eraser: return 0
+        case .lasso, .laser, .eraser: return 0
         }
     }
 
@@ -172,6 +207,11 @@ final class PencilToolSession: ObservableObject {
             return PKInkingTool(.marker, color: currentUIColor, width: width * scale)
         case .crayon:
             return PKInkingTool(.crayon, color: currentUIColor, width: width * scale)
+        case .shape:
+            // 形状由自研手势生成 PKStroke,这里的工具只作占位(绘制手势会被关闭)
+            return PKInkingTool(.pen, color: currentUIColor, width: max(width, 1) * scale)
+        case .laser:
+            return PKInkingTool(.pen, color: currentUIColor, width: 2 * scale)
         case .lasso:
             return PKLassoTool()
         case .eraser:
@@ -186,8 +226,8 @@ final class PencilToolSession: ObservableObject {
     func select(kind newKind: PencilToolKind) {
         guard kind != newKind else { return }
         // v0.16.1:直尺只对墨迹笔有意义;套索/橡皮下保留直尺会让 PencilKit 处于
-        // 少见的工具组合(实测易卡),切到这两个工具时顺手关掉。
-        if newKind == .lasso || newKind == .eraser, rulerActive {
+        // 少见的工具组合(实测易卡),切到这几个工具时顺手关掉。
+        if newKind == .lasso || newKind == .eraser || newKind == .shape || newKind == .laser, rulerActive {
             rulerActive = false
         }
         kind = newKind
@@ -216,7 +256,7 @@ final class PencilToolSession: ObservableObject {
     /// 直尺是叠加在画布上的辅助层,不改变当前笔具;适合 Notability 式“画直线/表格”。
     /// v0.16.2:直尺只对墨迹笔有意义 —— 套索/橡皮下开启时先切回钢笔,避免 PencilKit 少见组合。
     func toggleRuler() {
-        if !rulerActive, kind == .lasso || kind == .eraser {
+        if !rulerActive, kind == .lasso || kind == .eraser || kind == .shape || kind == .laser {
             kind = .pen
         }
         rulerActive.toggle()
@@ -277,6 +317,10 @@ final class PencilToolSession: ObservableObject {
         if defaults.object(forKey: prefix + "customEraser") != nil {
             useCustomEraser = defaults.bool(forKey: prefix + "customEraser")
         }
+        if let raw = defaults.string(forKey: prefix + "shape"),
+           let saved = PencilShapeKind(rawValue: raw) {
+            shapeKind = saved
+        }
         DiagLog.log("pencil: doc tools loaded kind=\(kind.rawValue) width=\(widthIndex)")
     }
 
@@ -291,6 +335,7 @@ final class PencilToolSession: ObservableObject {
         defaults.set(eraserSizeIndex, forKey: prefix + "eraserSize")
         defaults.set(useCustomEraser, forKey: prefix + "customEraser")
         defaults.set(rulerActive, forKey: prefix + "ruler")
+        defaults.set(shapeKind.rawValue, forKey: prefix + "shape")
     }
 
     // MARK: - 工具隐藏 / 恢复(可定制工具带)
@@ -334,6 +379,7 @@ final class PencilToolSession: ObservableObject {
         defaults.set(useCustomEraser, forKey: "pencilCustomEraser")
         defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
         defaults.set(rulerActive, forKey: "pencilRulerActive")
+        defaults.set(shapeKind.rawValue, forKey: "pencilShapeKind")
         persistDoc(defaults)
     }
 }

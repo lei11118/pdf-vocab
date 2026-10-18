@@ -24,6 +24,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private(set) var rulerActive = false
     /// v0.22.0:自研橡皮配置(active / 整笔 / 半径[画布坐标])
     private var eraserConfig: (active: Bool, whole: Bool, radius: CGFloat) = (false, false, 33)
+    /// v0.23.0:激光笔 / 形状工具配置(新页画布创建时继承)
+    private var laserActive = false
+    private var shapeConfig: (active: Bool, kind: PencilShapeKind, color: UIColor, width: CGFloat) = (false, .line, .label, 2)
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
     /// v0.16.0:一次书写/擦除手势结束(用于“擦完回到上一支笔”)
@@ -62,6 +65,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             }
             // v0.22.0:新页画布继承当前橡皮配置
             overlay.setEraserMode(active: eraserConfig.active, whole: eraserConfig.whole, radius: eraserConfig.radius)
+            // v0.23.0:新页画布继承激光笔 / 形状配置
+            overlay.setLaserMode(laserActive)
+            overlay.setShapeMode(active: shapeConfig.active, kind: shapeConfig.kind, color: shapeConfig.color, width: shapeConfig.width)
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
             // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
@@ -99,6 +105,22 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         eraserConfig = (active, whole, radius)
         for (_, overlay) in overlays {
             overlay.setEraserMode(active: active, whole: whole, radius: radius)
+        }
+    }
+
+    /// v0.23.0:激光笔配置同步到所有页画布(不落墨,只留会淡出的轨迹)
+    func setLaserMode(active: Bool) {
+        laserActive = active
+        for (_, overlay) in overlays {
+            overlay.setLaserMode(active)
+        }
+    }
+
+    /// v0.23.0:形状工具配置同步到所有页画布(颜色/笔宽单位 = 页面点)
+    func setShapeMode(active: Bool, kind: PencilShapeKind, color: UIColor, width: CGFloat) {
+        shapeConfig = (active, kind, color, width)
+        for (_, overlay) in overlays {
+            overlay.setShapeMode(active: active, kind: kind, color: color, width: width)
         }
     }
 
@@ -181,6 +203,19 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private var lastErasePoint: CGPoint?
     private var lastEraseAt: CFAbsoluteTime = 0
 
+    // MARK: - v0.23.0 激光笔 / 形状工具(同一支自研手势,按模式分派)
+
+    private var laserActive = false
+    private var laserLayer: CAShapeLayer?
+    private var laserPoints: [CGPoint] = []
+    private var shapeActive = false
+    private var shapeKind: PencilShapeKind = .line
+    private var shapeColor: UIColor = .label
+    private var shapeWidth: CGFloat = 2.0
+    private var shapePreviewLayer: CAShapeLayer?
+    private var shapeStartCanvas: CGPoint?
+    private var shapeUndoSnapshot: PKDrawing?
+
     private var marking = false
     private var loaded = false
     private var saveWork: DispatchWorkItem?
@@ -215,7 +250,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         addSubview(canvas)
 
         // v0.22.0:自研橡皮手势(只收 Pencil;橡皮激活时接管绘制手势)
-        eraserPan.addTarget(self, action: #selector(handleErasePan(_:)))
+        eraserPan.addTarget(self, action: #selector(handleToolPan(_:)))
         eraserPan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         eraserPan.maximumNumberOfTouches = 1
         eraserPan.isEnabled = false
@@ -264,7 +299,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     func setMarking(_ on: Bool) {
         guard marking != on else { return }
         marking = on
-        applyEraserGestureState()
+        applyToolGestureState()
         if on {
             activateMarking()
         } else {
@@ -280,24 +315,67 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         eraserActive = active
         eraserWhole = whole
         eraserRadiusCanvas = max(radius, 2)
-        applyEraserGestureState()
+        applyToolGestureState()
         DiagLog.log("pencil: page \(pageIndex) eraser=\(active ? 1 : 0) whole=\(whole ? 1 : 0) r=\(Int(radius))")
     }
 
-    private func applyEraserGestureState() {
-        let active = eraserActive && marking
-        canvas.drawingGestureRecognizer.isEnabled = !active
-        eraserPan.isEnabled = active
+    /// v0.23.0:激光笔 —— 不落墨,只在画面上留一条会淡出的红色轨迹
+    func setLaserMode(_ active: Bool) {
+        laserActive = active
+        applyToolGestureState()
         if !active {
+            laserLayer?.removeFromSuperlayer()
+            laserLayer = nil
+            laserPoints = []
+        }
+        DiagLog.log("pencil: page \(pageIndex) laser=\(active ? 1 : 0)")
+    }
+
+    /// v0.23.0:形状工具 —— 拖动生成规整的直线/矩形/椭圆/箭头,写入当前页画布
+    func setShapeMode(active: Bool, kind: PencilShapeKind, color: UIColor, width: CGFloat) {
+        shapeActive = active
+        shapeKind = kind
+        shapeColor = color
+        shapeWidth = max(width, 0.8)
+        applyToolGestureState()
+        if !active {
+            shapePreviewLayer?.removeFromSuperlayer()
+            shapePreviewLayer = nil
+            shapeStartCanvas = nil
+            shapeUndoSnapshot = nil
+        }
+        DiagLog.log("pencil: page \(pageIndex) shape=\(active ? 1 : 0) kind=\(kind.rawValue)")
+    }
+
+    private func applyToolGestureState() {
+        let custom = (eraserActive || laserActive || shapeActive) && marking
+        canvas.drawingGestureRecognizer.isEnabled = !custom
+        eraserPan.isEnabled = custom
+        if !custom {
             lastErasePoint = nil
             eraseUndoSnapshot = nil
         }
     }
 
+    // MARK: - 自研工具手势(橡皮 / 激光笔 / 形状共用一个 pan)
+
+    @objc private func handleToolPan(_ gesture: UIPanGestureRecognizer) {
+        guard marking else { return }
+        if laserActive {
+            handleLaserGesture(gesture)
+            return
+        }
+        if shapeActive {
+            handleShapeGesture(gesture)
+            return
+        }
+        guard eraserActive else { return }
+        handleEraseGesture(gesture)
+    }
+
     // MARK: - 自研橡皮:按点擦除 / 整笔擦除
 
-    @objc private func handleErasePan(_ gesture: UIPanGestureRecognizer) {
-        guard eraserActive, marking else { return }
+    private func handleEraseGesture(_ gesture: UIPanGestureRecognizer) {
         let point = gesture.location(in: canvas)
         switch gesture.state {
         case .began:
@@ -404,6 +482,208 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
         let projected = CGPoint(x: a.x + t * dx, y: a.y + t * dy)
         return hypot(p.x - projected.x, p.y - projected.y)
+    }
+
+    // MARK: - 激光笔
+
+    private func handleLaserGesture(_ gesture: UIPanGestureRecognizer) {
+        let point = gesture.location(in: self)   // 页面坐标(容器)
+        switch gesture.state {
+        case .began:
+            laserPoints = [point]
+            let layer = CAShapeLayer()
+            layer.strokeColor = UIColor.systemRed.cgColor
+            layer.fillColor = UIColor.clear.cgColor
+            layer.lineWidth = 4
+            layer.lineCap = .round
+            layer.lineJoin = .round
+            layer.shadowColor = UIColor.systemRed.cgColor
+            layer.shadowRadius = 5
+            layer.shadowOpacity = 0.7
+            layer.shadowOffset = .zero
+            self.layer.addSublayer(layer)
+            laserLayer = layer
+            updateLaserPath()
+        case .changed:
+            laserPoints.append(point)
+            if laserPoints.count > 256 { laserPoints.removeFirst(laserPoints.count - 256) }
+            updateLaserPath()
+        case .ended, .cancelled, .failed:
+            let layer = laserLayer
+            laserLayer = nil
+            laserPoints = []
+            UIView.animate(withDuration: 0.5, delay: 0.12, options: [.curveEaseOut]) {
+                layer?.opacity = 0
+            } completion: { _ in
+                layer?.removeFromSuperlayer()
+            }
+        default:
+            break
+        }
+    }
+
+    private func updateLaserPath() {
+        guard let layer = laserLayer, let first = laserPoints.first else { return }
+        if laserPoints.count < 2 {
+            layer.path = UIBezierPath(ovalIn: CGRect(x: first.x - 2.5, y: first.y - 2.5, width: 5, height: 5)).cgPath
+            return
+        }
+        let path = UIBezierPath()
+        path.move(to: first)
+        for point in laserPoints.dropFirst() { path.addLine(to: point) }
+        layer.path = path.cgPath
+    }
+
+    // MARK: - 形状工具
+
+    private func handleShapeGesture(_ gesture: UIPanGestureRecognizer) {
+        let point = gesture.location(in: canvas)
+        switch gesture.state {
+        case .began:
+            shapeUndoSnapshot = canvas.drawing
+            shapeStartCanvas = point
+            updateShapePreview(from: point, to: point)
+        case .changed:
+            guard let start = shapeStartCanvas else { return }
+            updateShapePreview(from: start, to: point)
+        case .ended, .cancelled, .failed:
+            let start = shapeStartCanvas
+            shapeStartCanvas = nil
+            shapePreviewLayer?.removeFromSuperlayer()
+            shapePreviewLayer = nil
+            guard let start else { return }
+            commitShape(from: start, to: point)
+        default:
+            break
+        }
+    }
+
+    private func updateShapePreview(from: CGPoint, to: CGPoint) {
+        let layer: CAShapeLayer
+        if let existing = shapePreviewLayer {
+            layer = existing
+        } else {
+            let created = CAShapeLayer()
+            created.strokeColor = UIColor.systemBlue.withAlphaComponent(0.9).cgColor
+            created.fillColor = UIColor.clear.cgColor
+            created.lineWidth = 1.5
+            created.lineDashPattern = [5, 4]
+            self.layer.addSublayer(created)
+            shapePreviewLayer = created
+            layer = created
+        }
+        let path = UIBezierPath()
+        let a = pagePoint(fromCanvas: from)
+        let b = pagePoint(fromCanvas: to)
+        switch shapeKind {
+        case .line:
+            path.move(to: a)
+            path.addLine(to: b)
+        case .rect:
+            path.append(UIBezierPath(rect: CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))))
+        case .ellipse:
+            path.append(UIBezierPath(ovalIn: CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))))
+        case .arrow:
+            path.move(to: a)
+            path.addLine(to: b)
+            for head in arrowHeadPoints(from: a, to: b) {
+                path.move(to: b)
+                path.addLine(to: head)
+            }
+        }
+        layer.path = path.cgPath
+    }
+
+    private func commitShape(from: CGPoint, to: CGPoint) {
+        let points = shapeStrokePoints(from: from, to: to)
+        guard points.count >= 2 else {
+            DiagLog.log("pencil: shape skipped (too small)")
+            return
+        }
+        let ink = PKInk(.pen, color: shapeColor)
+        let path = PKStrokePath(controlPoints: points, creationDate: Date())
+        let stroke = PKStroke(ink: ink, path: path, transform: .identity, mask: nil)
+        canvas.drawing = PKDrawing(strokes: canvas.drawing.strokes + [stroke])
+        if let undo = canvas.undoManager, let snapshot = shapeUndoSnapshot {
+            undo.registerUndo(withTarget: self) { target in
+                target.canvas.drawing = snapshot
+            }
+        }
+        shapeUndoSnapshot = nil
+        flushSave()
+        DiagLog.log("pencil: shape \(shapeKind.rawValue) committed points=\(points.count)")
+    }
+
+    private func pagePoint(fromCanvas p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x / InkGeometry.scale, y: p.y / InkGeometry.scale)
+    }
+
+    private func shapeStrokePoints(from a: CGPoint, to b: CGPoint) -> [PKStrokePoint] {
+        let pageA = pagePoint(fromCanvas: a)
+        let pageB = pagePoint(fromCanvas: b)
+        var locations: [CGPoint] = []
+        let step: CGFloat = 3
+
+        func sample(_ p0: CGPoint, _ p1: CGPoint) {
+            let length = hypot(p1.x - p0.x, p1.y - p0.y)
+            let count = max(Int(length / step), 2)
+            for i in 0...count {
+                let t = CGFloat(i) / CGFloat(count)
+                locations.append(CGPoint(x: p0.x + (p1.x - p0.x) * t, y: p0.y + (p1.y - p0.y) * t))
+            }
+        }
+
+        switch shapeKind {
+        case .line:
+            sample(pageA, pageB)
+        case .rect:
+            let rect = CGRect(x: min(pageA.x, pageB.x), y: min(pageA.y, pageB.y),
+                              width: abs(pageB.x - pageA.x), height: abs(pageB.y - pageA.y))
+            let corners = [
+                CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY),
+                CGPoint(x: rect.minX, y: rect.minY)
+            ]
+            for i in 0..<4 { sample(corners[i], corners[i + 1]) }
+        case .ellipse:
+            let rect = CGRect(x: min(pageA.x, pageB.x), y: min(pageA.y, pageB.y),
+                              width: abs(pageB.x - pageA.x), height: abs(pageB.y - pageA.y))
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let rx = rect.width / 2, ry = rect.height / 2
+            let count = 96
+            for i in 0...count {
+                let angle = CGFloat(i) / CGFloat(count) * .pi * 2
+                locations.append(CGPoint(x: center.x + cos(angle) * rx, y: center.y + sin(angle) * ry))
+            }
+        case .arrow:
+            sample(pageA, pageB)
+            for head in arrowHeadPoints(from: pageA, to: pageB) { sample(pageB, head) }
+        }
+
+        let width = max(shapeWidth, 0.8)
+        return locations.enumerated().map { index, location in
+            PKStrokePoint(
+                location: CGPoint(x: location.x * InkGeometry.scale, y: location.y * InkGeometry.scale),
+                timeOffset: TimeInterval(index) * 0.004,
+                size: CGSize(width: width * InkGeometry.scale, height: width * InkGeometry.scale),
+                opacity: 1,
+                force: 1,
+                azimuth: 0,
+                altitude: .pi / 2,
+                secondaryScale: 1
+            )
+        }
+    }
+
+    private func arrowHeadPoints(from a: CGPoint, to b: CGPoint) -> [CGPoint] {
+        let angle = atan2(b.y - a.y, b.x - a.x)
+        let length = max(hypot(b.x - a.x, b.y - a.y), 1)
+        let headLength = min(max(length * 0.18, 8), 28)
+        let spread = CGFloat.pi / 7
+        return [
+            CGPoint(x: b.x - cos(angle - spread) * headLength, y: b.y - sin(angle - spread) * headLength),
+            CGPoint(x: b.x - cos(angle + spread) * headLength, y: b.y - sin(angle + spread) * headLength)
+        ]
     }
 
     private func activateMarking() {

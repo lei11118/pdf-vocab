@@ -76,7 +76,8 @@ struct PDFKitView: UIViewRepresentable {
         view.pageShadowsEnabled = true   // v0.14.0:纸页轻阴影(纸感叠层)
         // v0.19.0:大幅放大到 1500%(读小字/扫描书);PDFKit 默认上限只有 4 倍
         view.minScaleFactor = 0.2
-        view.maxScaleFactor = 15
+        // v0.23.0:最大 4000%(看清扫描件的像素点);实际清晰度取决于 PDF 自身栅格
+        view.maxScaleFactor = 40
         // v0.19.0:页面之间不留缝,视觉上连成一张长纸(配合书写贴边滚动)
         view.pageBreakMargins = .zero
         view.backgroundColor = DS.uiBackground1

@@ -14,14 +14,15 @@ struct PencilArcMenu: View {
     let bounds: CGSize
     var onDismiss: () -> Void
 
-    private let radius: CGFloat = 132
-    private let thickness: CGFloat = 70
+    private let radius: CGFloat = 150
+    private let thickness: CGFloat = 66
 
     /// 弧盘圆心:略低于笔尖(扇环开口朝下,包住笔尖)
     private var center: CGPoint {
-        CGPoint(
+        let minY = radius + 16
+        return CGPoint(
             x: min(max(anchor.x, 200), max(bounds.width - 200, 200)),
-            y: min(max(anchor.y, 150), max(bounds.height - 20, 150))
+            y: min(max(anchor.y, minY), max(bounds.height - 20, minY))
         )
     }
 
@@ -106,8 +107,8 @@ struct PencilArcMenu: View {
                         .foregroundStyle(DS.foreground3)
                 }
             }
-            .font(.system(size: 21, weight: .medium))
-            .frame(width: 48, height: 48)
+            .font(.system(size: 19, weight: .medium))
+            .frame(width: 44, height: 44)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
