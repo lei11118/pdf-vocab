@@ -2053,13 +2053,13 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
         }
     }
 
-    /// Pencil Pro 挤压:设置里可选「弧形工具盘 / 橡皮 / 关闭」
-    /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(日志显示 0.7s 内 20 次),
-    /// v0.16.0 每次回调都重设所有画布工具并重新弹盘 + 触觉 → 主线程卡死、还可能让工具盘
-    /// 在笔尖下反复重排导致误触撤销。这里做 0.6s 节流,且不在挤压里套用工具。
+    /// Pencil Pro 挤压:一次打开弧形工具盘,再挤一次收起(设置里可改为橡皮/关闭)
+    /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(0.7s 内 20 次)。
+    /// v0.19.0:改为只响应 `.began`(每次挤压一次),再用 0.25s 去重;回调里不做重活。
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard squeeze.phase == .began else { return }
         let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastSqueezeAt > 0.6 else { return }
+        guard now - lastSqueezeAt > 0.25 else { return }
         lastSqueezeAt = now
         let action = UserDefaults.standard.string(forKey: "pencilSqueezeAction") ?? "arc"
         guard action != "off" else {

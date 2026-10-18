@@ -277,6 +277,7 @@ struct ReaderView: View {
                         Button("200%") { readerHandle.coordinator?.zoomToPercent(200) }
                         Button("400%") { readerHandle.coordinator?.zoomToPercent(400) }
                         Button("800%") { readerHandle.coordinator?.zoomToPercent(800) }
+                        Button("1500%") { readerHandle.coordinator?.zoomToPercent(1500) }
                     } label: {
                         Label("缩放", systemImage: "magnifyingglass.circle")
                     }
@@ -566,10 +567,13 @@ struct ReaderView: View {
                     markMode: markMode,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
-                        // v0.16.2:弧盘已弹出时不再重复呈现(挤压是持续事件,重入会让菜单在笔尖下抖)
-                        guard arcAnchor == nil else { return }
+                        // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-                            arcAnchor = point
+                            if arcAnchor == nil {
+                                arcAnchor = point
+                            } else {
+                                arcAnchor = nil
+                            }
                         }
                     },
                     onFocusToggle: {
