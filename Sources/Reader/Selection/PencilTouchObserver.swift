@@ -18,11 +18,7 @@ final class PencilTouchObserver: UIGestureRecognizer {
     }
 
     required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        cancelsTouchesInView = false
-        delaysTouchesBegan = false
-        delaysTouchesEnded = false
-        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        fatalError("init(coder:) has not been implemented")
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
