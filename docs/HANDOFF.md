@@ -20,8 +20,8 @@
 |---|---|
 | 最新版本 | **v0.23.2 / build 61**(`project.yml`) |
 | 最新 Release | https://github.com/lei11118/pdf-vocab/releases/tag/v0.23.2(资产 `PdfVocab-unsigned.ipa`,8.86MB,未签名) |
-| 代码提交 | v0.23.2 代码 = `06730f0`(含向上跨页 `splitUpward` 修复);文档提交 = `1901b017` |
-| 远端 HEAD | `7d07c62`(API 通道推送的文档提交,树与本地 `1901b017` 相同;**哈希不同是正常的**) |
+| 代码提交 | v0.23.2 代码 = `06730f0`(含向上跨页 `splitUpward` 修复);文档更新 = 本节所在提交(HEAD) |
+| 远端 HEAD | 与本地 `main` 一致(文档更新后;先前 API 通道推送的哈希差异已 rebase 对齐) |
 | 新环境第一步 | `git fetch origin && git reset --soft origin/main`(树相同,再提交即可对齐历史) |
 | CI | 全部绿;v0.23.2 的 build 为 run `39113334910` |
 | 待验收 | §9.1 六项(跨页回写 / 词频全本 / 横向排布 / 缩放上限 / 全文搜索 / 退出书写) |
