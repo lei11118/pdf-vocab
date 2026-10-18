@@ -66,6 +66,8 @@ final class ReaderCoordinator: NSObject {
     private var toolApplyScheduled = false
     /// v0.16.2:最近一次落笔/擦除结束时间 —— 双指撤销手势的手掌误触防护
     private var lastInkActivityAt: CFAbsoluteTime = 0
+    /// v0.16.2:挤压节流(挤压是持续事件,按住会连发回调)
+    private var lastSqueezeAt: CFAbsoluteTime = 0
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
     private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
     private var appliedKey: String?
@@ -1958,8 +1960,6 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
     /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(日志显示 0.7s 内 20 次),
     /// v0.16.0 每次回调都重设所有画布工具并重新弹盘 + 触觉 → 主线程卡死、还可能让工具盘
     /// 在笔尖下反复重排导致误触撤销。这里做 0.6s 节流,且不在挤压里套用工具。
-    private var lastSqueezeAt: CFAbsoluteTime = 0
-
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastSqueezeAt > 0.6 else { return }

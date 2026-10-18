@@ -556,6 +556,8 @@ struct ReaderView: View {
                     markMode: markMode,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
+                        // v0.16.2:弧盘已弹出时不再重复呈现(挤压是持续事件,重入会让菜单在笔尖下抖)
+                        guard arcAnchor == nil else { return }
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
                             arcAnchor = point
                         }
