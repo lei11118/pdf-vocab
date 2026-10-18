@@ -11,8 +11,25 @@
 - **形态**:纯本地、无账号、无云同步、无内购、无埋点;免费 Apple ID 自签侧载(AltStore / SideStore / Sideloadly)。
 - **开发机**:Windows,**没有 Mac**。一切编译与打包走 GitHub Actions(`macos-26` + Xcode 26.6),产出未签名 IPA,用户自己侧载。
 - **代码规模**:47 个 Swift 文件 / 10,141 行;2 个第三方依赖(GRDB、ZIPFoundation),其余全 Apple 原生框架。
-- **状态**:M0–M7 全部里程碑主体完成;v0.16.0 已完成"Notability 式 UI 与书写体验"重构(封面书架 / 浮动阅读 chrome / 手写工具条状态机 / 套索 / 直尺 / 擦后回笔 / 专注模式)。
-- **下一步最该做的**:让用户在真机上验收 v0.16.0 的交互项(见 §9.1),再决定是打磨还是开新功能。
+- **状态**:M0–M7 里程碑全部完成。书写/阅读已迭代到 **v0.23.2**:Notability 式工具状态机、2×→3× 超采样、自研橡皮、跨页书写(上下双向)、直线吸附、形状(直线/矩形/椭圆/箭头)、激光笔、4000% 缩放、横向/双页排布、缩略图、每书工具记忆。
+- **下一步最该做的**:让用户真机验收 **v0.23.2 的六项修复**(§9.1),重点确认「跨页回写」「缩放是否真能过 800%」「全文搜索/词频是否覆盖全本」。验收前不要叠新功能。
+
+### 0.1 新窗口速查(2026-10-18 收尾状态)
+
+| 项 | 值 |
+|---|---|
+| 最新版本 | **v0.23.2 / build 61**(`project.yml`) |
+| 最新 Release | https://github.com/lei11118/pdf-vocab/releases/tag/v0.23.2(资产 `PdfVocab-unsigned.ipa`,8.86MB,未签名) |
+| 代码提交 | v0.23.2 代码 = `06730f0`(含向上跨页 `splitUpward` 修复);文档提交 = `1901b017` |
+| 远端 HEAD | `7d07c62`(API 通道推送的文档提交,树与本地 `1901b017` 相同;**哈希不同是正常的**) |
+| 新环境第一步 | `git fetch origin && git reset --soft origin/main`(树相同,再提交即可对齐历史) |
+| CI | 全部绿;v0.23.2 的 build 为 run `39113334910` |
+| 待验收 | §9.1 六项(跨页回写 / 词频全本 / 横向排布 / 缩放上限 / 全文搜索 / 退出书写) |
+
+**v0.23.2 的三条关键实现(改之前先看懂,否则会错位/丢墨)**:
+1. **手写坐标 = 页面坐标,不含出血偏移**。画布 bounds 高 = `(页高 + bleedTop200 + bleed240) × 3`,画布层 `position.y = -200`,所以页面顶部对应画布 y=`200×3`;`loadInk` 平移 `+200×3`、`saveNow` 平移 `-200×3`、导出直接用库里的页面坐标。任何新增的「直接读写 `canvas.drawing`」代码都必须遵守这条。
+2. **向上跨页用 `PencilStrokeTools.splitUpward(atY:)`**,不能用 `split(atY:)`(后者假设起点在阈值上方,反向写时 `firstIndex` 恒为 0);向下仍用 `split`。切完先用 `onOverflow/onOverflowUp` 确认目标页 overlay 就绪,成功才裁本页。
+3. **PDFKit 会重置 `maxScaleFactor`**(设文档/切 `displayMode` 后),所以 `applyZoomLimits + setScale` 要在 `documentDidLoad`、每次缩放、`applyReadingState`、`updateUIView` 都调用;日志 `zoom[tag]: want/got/max` 用于判断是“上限被重置”还是“内部硬限制”。
 
 ---
 
@@ -144,17 +161,19 @@ Sources/
 │  ├─ DocumentCover.swift     146   PDF 首页封面缩略图(内存缓存 + 纸封面回退 + 元数据行)
 │  └─ PDFDocumentPicker.swift  46   UIDocumentPicker 包装(asCopy: true)
 ├─ Reader/
-│  ├─ ReaderView.swift        828   阅读页总装:PDFKitView + 浮卡 + 工具条 + 弧盘 + 各 sheet + 位置记忆 + 夜间罩层 + 专注模式 + 浮动顶栏/底部模式条
-│  ├─ PDFKitView.swift        112   UIViewRepresentable;把 SwiftUI 状态灌给 Coordinator
+│  ├─ ReaderView.swift        907   阅读页总装:PDFKitView + 浮卡 + 工具条 + 弧盘 + 各 sheet + 位置记忆 + 夜间罩层 + 专注模式 + 浮动顶栏/底部模式条
+│  ├─ PDFKitView.swift        115   UIViewRepresentable;把 SwiftUI 状态灌给 Coordinator;每次更新重设缩放上下限
 │  ├─ VocabPDFView.swift       14   PDFView 子类,屏蔽"全选"
+│  ├─ PageThumbnailSheet.swift  86  页面缩略图导航(按需渲染 + 当前页高亮)
 │  ├─ Pencil/
-│  │  ├─ PencilOverlay.swift      254  PDFPageOverlayViewProvider + InkOverlayView(每页 PKCanvasView)
-│  │  ├─ PencilToolSession.swift  217   工具/颜色/5档笔宽/橡皮双模式/擦后回笔/直尺/工具隐藏
-│  │  ├─ PencilPaletteView.swift  420   Notability 式悬浮工具条(点当前工具展开样式层;按内容收成胶囊)
-│  │  ├─ PencilArcMenu.swift      136   挤压弧形工具盘(撤销/直尺/各笔具)
-│  │  └─ PencilInkStore.swift      42  笔迹按页存取(GRDB)
+│  │  ├─ PencilOverlay.swift      914  PDFPageOverlayViewProvider + InkOverlayView(每页 PKCanvasView;上下出血/跨页/自研橡皮/形状/激光笔)
+│  │  ├─ PencilToolSession.swift  385   工具/颜色/5档笔宽/橡皮大小/形状/每书记忆
+│  │  ├─ PencilPaletteView.swift  535   Notability 式悬浮工具条(点当前工具展开样式层;8 工具)
+│  │  ├─ PencilArcMenu.swift      135   挤压弧形工具盘(直尺 + 8 工具,无撤销扇区;半径 150)
+│  │  ├─ PencilInkStore.swift     102  笔迹按页存取(GRDB)+ InkGeometry(scale 3 / bleedTop 200 / bleed 240)
+│  │  └─ PencilStrokeTools.swift   53  按 y 切分(向下 split / 向上 splitUpward)+ 平移重建
 │  ├─ Selection/
-│  │  ├─ ReaderCoordinator.swift 1906  ★核心★ 取词/选区/菜单/手柄/拖选/OCR 兜底/手势隔离/Pencil 模式/工具会话
+│  │  ├─ ReaderCoordinator.swift 2177  ★核心★ 取词/选区/菜单/手柄/拖选/OCR 兜底/手势隔离/Pencil 模式/工具会话/缩放/排布
 │  │  ├─ SelectionKit.swift       185  HandleMetrics(唯一几何口径)+ 选区合法性
 │  │  ├─ SelectionMenu.swift      215  自绘 UIEditMenuInteraction(targetRect 避让)
 │  │  └─ SentenceExtractor.swift   76  纯点坐标扩句(绕开 iOS 18 字符索引回归)
@@ -162,7 +181,7 @@ Sources/
 │  ├─ WordPicker.swift        143   选区 → 词元(首选实词)
 │  ├─ HoverTipView.swift       38   Pencil 悬停迷你释义气泡
 │  ├─ ReaderOutlineSheet.swift 153  目录(PDFOutline 压平)+ 书签
-│  ├─ ReaderSearchSheet.swift  139  全文搜索(文字层;扫版回退 OCR)
+│  ├─ ReaderSearchSheet.swift  147  全文搜索(文字层全量 + 扫描版 OCR 合并去重)
 │  └─ AnnotatedPDFExporter.swift 80 高亮+手写烧录成新 PDF(页面图片化)
 ├─ Card/
 │  ├─ FloatingCardWindow.swift 277  可拖/可缩放/可胶囊的悬浮窗(触摸判定=窗口形状)
@@ -229,17 +248,20 @@ Sources/
 - 扫版兜底:`isScanned` → `OCRService` → `ocrDrag` 独立状态 → 词粒度跨行并集 → 同一套 `applyHighlightDesired`。
 
 ### 6.2 Pencil 手写(`Pencil/`)
-- **高清书写(v0.17.0)**:PDF 的页叠层会被 PDFView 的缩放变换放大,`PKCanvasView` 只按屏幕 scale 栅格化一次 → 笔迹被拉伸变糊(Apple 论坛确认 `contentScaleFactor` 无效)。对策 = **超采样画布**:`InkGeometry.scale = 2`,画布 bounds = 页面点 ×2,再套 `1/2` 变换压回页面;笔宽 ×2 保持视觉粗细;**老笔迹在加载时 `PKDrawing.transform` 放大并回写**(`pencil_ink.scale` v10 记录倍数);批注导出按倍数归一化。代价:SDK 的 `PKEraserTool` 没有宽度参数,橡皮视觉半径缩为 1/2。
-- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。**画布是容器 ×2 大小 + 1/2 变换**,容器保持页面尺寸给 PDFKit。
+- **高清书写(v0.17.0 → v0.22.0)**:PDF 的页叠层会被 PDFView 的缩放变换放大,`PKCanvasView` 只按屏幕 scale 栅格化一次 → 笔迹被拉伸变糊(Apple 论坛确认 `contentScaleFactor` 无效)。对策 = **超采样画布**:`InkGeometry.scale = 3`,画布 bounds = 页面点 ×3(再叠上下出血),套 `1/3` 变换压回页面;笔宽 ×3 保持视觉粗细;**老笔迹加载时 `PKDrawing.transform` 放大并回写**(`pencil_ink.scale` 记录倍数);批注导出按倍数归一化。SDK 的 `PKEraserTool` 没有宽度参数,所以 v0.22 起用自研橡皮(半径按画布坐标 ×3,不受超采样影响)。
+- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。**画布高 = (页高 + 顶部 200 + 底部 240) × 3**,画布层 `position.y = -200`,容器保持页面尺寸给 PDFKit;**存储/导出始终是页面坐标**(loadInk/saveNow 做 ±200×3 平移,见 §0.1)。
 - 模式切换:`select` 模式 `hitTest` 返回 nil(全穿透);`mark` 模式**无条件返回画布**(不判触摸类型)。
 - 让 Pencil 绘制不被滚动抢:遍历 PDFView 内所有 `UIScrollView`,把 `panGestureRecognizer.allowedTouchTypes = [.direct]` + `delaysContentTouches = false`,账本记原值,退出还原;**幂等重臂**(文档加载/变更/翻页/每次 updateUIView 都要重做,因为 PDFKit 会重建内部层级)。
 - 工具:**不用 PKToolPicker**(v0.14 起移除),自绘 `PencilPaletteView` + 自装 `UIPencilInteraction`:
   - **v0.16 工具状态机(Notability 式)**:点**其他**工具 = 立即切换并直接书写;点**当前**工具 = 展开/收起样式层(颜色 / 五档笔宽 / 笔画预览);橡皮的样式层是「局部 ⇄ 整笔」+「擦完回笔」;套索给出圈选说明;
-  - 工具条是一条**按内容宽度收拢的悬浮胶囊**(`ViewThatFits`:宽屏一行,窄分屏退化为横向滚动),不占固定栏位;
-  - 挤压 → 选词模式下先 `setMarkMode(true)`,再呼出 `PencilArcMenu`(围绕笔尖的扇环,半径 132 / 环宽 70;含撤销与直尺);
+  - 工具条是一条**按内容宽度收拢的悬浮胶囊**(常规宽度一行 HStack,`compact` 分屏才横向滚动;不要用 `ViewThatFits`,测量不确定);
+  - 挤压 → 选词模式下先 `setMarkMode(true)`,再呼出 `PencilArcMenu`(围绕**悬停点**的扇环,半径 150 / 环宽 66 / 9 扇区 = 直尺 + 8 工具;**没有撤销扇区**);
   - 轻点两下 → 橡皮 ⇄ 上一支笔;
   - 双指轻点 = 撤销、三指轻点 = 重做(仅 mark 模式;`numberOfTouchesRequired` 2/3);
   - **直尺** = `PKCanvasView.isRulerActive`(拖尺对准边缘画直线,不改笔具);
+  - **v0.23 新工具**:形状(直线/矩形/椭圆/箭头,拖动生成 `PKStroke`)、激光笔(红色轨迹淡出,不落墨);与自研橡皮共用一条 Pencil-only `pan`,激活时关闭 PencilKit 绘制手势;
+  - **v0.22 自研橡皮**:五档半径、局部/整笔、12ms 节流重建 `canvas.drawing`;可回退系统橡皮;
+  - **v0.23 阅读**:4000% 缩放(预设 100/200/400/800/1500/2000/4000%)、页面排布(纵向/横向/双页)、页面缩略图、清空本页手写、双页显示;全文搜索合并 OCR、词频分析全本(OCR 补全);
   - **擦后回笔** = `canvasViewDidEndUsingTool` → `returnFromEraserIfNeeded()`,可在工具条右键菜单/设置页关闭。
 - 阅读 chrome(v0.16):浮动胶囊顶栏(返回 / 标题+页码跳转 / 专注 / ⋯)+ 底部「选词 · 手写」模式条;手写模式下底部换成工具条。**专注模式**隐藏顶栏与模式条,只留纸面与一个「退出专注」胶囊;四指轻点或顶栏按钮切换。
 - 撤销目标 = 最近一次 `canvasViewDidBeginUsingTool` 记下的活跃画布(`canvas.undoManager`)。
@@ -324,44 +346,54 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 9. 当前待办
 
-### 9.1 v0.22.0 真机验收(最优先)
-0. **自研橡皮**:局部擦是否断成两截、整笔擦是否整条消失、快速划动是否跟手;五档圆点大小变化是否明显;关掉「可调大小(自研橡皮)」能否退回系统橡皮。
-1. **3× 清晰度**:放大到 3× 内笔迹是否更锐;2× 时代写的老笔记迁移后位置是否还准。
-2. **撤销**:擦完按撤销是否恢复整页;与 PencilKit 原生撤销是否错乱(错乱请反馈,下一步做统一撤销组)。
-3. **跨页书写**:写到页底继续往下,溢出段是否出现在下一页顶部、位置连续;翻页往返是否重复/丢失。
-4. **挤压开关 / 1500% / 直线吸附 / 贴边自动滚动**(上两版遗留项)。
+### 9.1 v0.23.2 真机验收(最优先,六项)
+
+> 这六项都是用户上一轮明确报的问题;先确认修没修好,再谈新功能。
+
+1. **跨页回写(向上)**:在下一页顶部往上写、越过页缝回到上一页 —— 抬笔后上一页底部应出现那一段;翻走再翻回,两页笔迹都在、不重复。向下的跨页也顺手复测一次(顶部加了出血区,坐标体系改过)。
+2. **缩放 4000%**:⋯ → 缩放 → 1500% / 2000% / 4000%,画面必须比 800% 更大。**若仍封顶在 800%**,让用户把诊断日志里 `zoom[...]: want=? got=? max=?` 那一行发来。
+3. **词频分析全本**:同一本书候选词数应明显变多;扫描版应终于有词(用 OCR 词表补全);列表最多 2000。
+4. **横向排布**:⋯ → 页面排布 → 横向连续,页面应左右排布、横向滚动;双页并排正常;切回纵向不丢缩放。
+5. **全文搜索**:搜一个常见词,结果应覆盖到文档后部;扫描版结果与文字层结果同时出现;OCR 未完成时有提示。
+6. **退出书写**:回主页再进书 → 从「选词阅读」开始;若退出前是套索/橡皮/形状/激光笔,再进书写应是钢笔(钢笔/铅笔/荧光笔/蜡笔按书保留)。
 
 ### 9.2 回归项(工具/橡皮/直尺/套索/手势/书架/chrome)
-1. **工具条状态机**:点其他工具是否立即能写;点当前工具是否展开样式层;样式层是否挡住正在写的位置;工具条在横竖屏、分屏下是否仍是一颗胶囊(不拉满全宽)。
-2. **橡皮**:局部/整笔切换是否即时生效(本轮修了 `eraserWhole` 未同步的 bug);「擦完回到上一支笔」是否太急(想连擦多笔时会不会烦)——若烦,默认关掉。
-3. **直尺**:开启后直尺是否出现、可拖动、沿尺边画直线是否顺手;退出书写模式后直尺状态是否残留。
-4. **套索**:圈选后能否整体移动/删除;与 PDF 滚动是否冲突。
-5. **挤压弧盘**:位置是否落在笔尖附近、扇区点得准不准(圆心钳制写死 200pt 边距,可能需要真机调 `radius`/`center` 偏移);新增「直尺」扇区是否好点。
-6. **双指撤销 / 三指重做**会不会误触;四指轻点进/出专注模式会不会与系统手势打架。
-7. **封面书架**:PDF 首页封面是否正确、滚动是否掉帧、深色模式下封面与标题对比是否够。
-8. **阅读 chrome**:浮动顶栏是否遮住 PDF 页面顶部内容(可滚动让开);底部模式条是否挡住页码/正文。
+
+1. **工具条状态机**:点其他工具是否立即能写;点当前工具是否展开样式层;样式层是否挡住正在写的位置;横竖屏/分屏下是否仍是一颗胶囊。
+2. **橡皮**:局部/整笔切换是否即时生效;五档大小的实际手感;快速划动是否跟手;关掉「可调大小」能否退回系统橡皮。
+3. **形状/激光笔**:形状拖动是否有虚线预览、抬笔是否落成规整图形(直线/矩形/椭圆/箭头);激光笔红色轨迹是否跟手、抬手是否淡出。
+4. **挤压弧盘**:悬停定位是否准(笔悬停后捏,盘应开在笔尖附近);一次开、再捏一次关;9 个扇区是否都点得准(半径 150、按钮 44)。
+5. **直尺/套索**:直尺可拖动、沿尺边画线;套索圈选后可移动/删除;与滚动是否冲突。
+6. **双指撤销 / 三指重做**是否误触;四指专注是否与系统手势打架。
+7. **缩略图**:200+ 页滚动是否流畅、点击是否直达、当前页是否高亮。
+8. **封面书架 / 阅读 chrome**:封面与续读卡、浮动顶栏不遮正文。
 
 ### 9.3 已知缺口 / 未验证(诚实清单)
-- **无自动化测试**;无 UI 测试;CI 绿 ≠ 真机不崩(v0.13.1 已证)。
-- **v0.19–0.22 未做真机验收**:跨页书写、直线吸附、自研橡皮、3× 超采样只过了 CI 编译。
-- **形状识别(矩形/椭圆/箭头)还没做**:直线吸附(v0.21.0)已用「笔画拟合」实现;形状识别可以沿同一路子继续(把最后一笔拟合成矩形/椭圆/箭头再替换)。
-- **程序化改动画布与 PencilKit 撤销栈混用**:跨页切分/直线吸附/自研橡皮都绕过了原生撤销,可能出现撤销顺序不一致;下一步做统一撤销组。
-- **手指不能书写**(`drawingPolicy = .pencilOnly`,保手掌排除);Notability 有「断开 Pencil 后手指书写」开关,本 App 暂无。
-- **工具条不能拖到任意位置**(固定底部居中);Notability 的 toolbox 可拖动。
-- **Anki**:v0.13.4 修了 `dconf.id`,但**反向卡 / 挖空卡 / 页面截图 / 内嵌音频**在 Anki 桌面与 AnkiMobile 的实际导入播放仍缺一次完整真机验收。
-- **OCR**:旋转页/倾斜页未处理;识别质量未做基准;超长文档内存表现未测。
-- **批注导出**:输出是**页面图片化 PDF**(不是矢量叠加),体积会变大,文字不可选——这是已知取舍。
-- **备份恢复**:热替换路径在真机上只做过少量样本;大库(>200MB)未测。
-- **词频批量收录**:全文 ≤2M 字符上限,超长书会截断;性能未在大书上压测。
-- **免费证书 7 天**:每次过期用户需重签,属流程事实,不是 bug。
-- **本地曾缺 tag**:v0.6.9–v0.14.1 的 tag 曾只存在于远端(release 建的),已 `git fetch --tags` 补齐;新环境第一步要 fetch。
 
-### 9.3 可选的下一步方向(按价值/成本排序,均未开工)
-1. **手写体验继续打磨**:弧盘拖拽选择(按住滑到扇区再抬笔)、笔宽长按连续调、荧光笔"直线吸附"、套索(圈选移动/删除笔迹)。
-2. **Pencil 与文本联动**:手写批注与高亮共存时的层级/导出策略;笔迹搜索(手写识别)不在零依赖范围内,慎入。
-3. **生词本 → 复习**:本地间隔重复(FSRS/SM-2 纯 Swift 实现)会比继续堆导出功能更贴"学习"目标。
-4. **性能**:1000+ 页文档的首屏/翻页/高亮 diff 压测;缩略图缓存淘汰策略。
-5. **可访问性**:Dynamic Type、VoiceOver 标签(目前只有部分控件有 `accessibilityLabel`)。
+- **无自动化测试**;CI 绿 ≠ 真机不崩(v0.13.1 已证)。
+- **v0.19–v0.23.2 全部只过了 CI 编译**,跨页(上下)、直线吸附、自研橡皮、3× 超采样、形状/激光笔、悬停弧盘、词频/搜索的改动都**等真机验收**。
+- **v0.23.2 改了手写坐标体系**(画布顶部 200pt 出血,存储仍是页面坐标):老笔记靠 `loadInk` 平移兼容,但**没有真机验证过老笔记的位置精度**;若发现整体上下偏移 200pt 量级,先查 `InkGeometry.pageTopY()` 的加减方向。
+- **程序化改动画布与 PencilKit 撤销栈混用**:跨页切分/直线吸附/自研橡皮/形状/清空本页都绕过原生撤销,可能出现撤销顺序不一致;下一步做**统一撤销组**。
+- **形状只支持直线/矩形/椭圆/箭头**,没有「识别手绘形状」;手绘形状替换需要笔画拟合,未做。
+- **手指不能书写**(`drawingPolicy = .pencilOnly`);Notability 有「断开 Pencil 后手指书写」开关,暂无。
+- **工具条不能拖到任意位置**(固定底部居中)。
+- **4000% 下的手写仍会软**:超采样只有 3×,4× 以上按比例变软;彻底解决要自研墨迹渲染层(或随缩放重建画布),属大工程。
+- **缩放上限是否真的能过 800% 待确认**:v0.23.2 每次重设 `maxScaleFactor` 并对被夹回做了一次重试,但 PDFKit 若存在内部硬上限,需要改走内部 scrollView 方案(见 §10「PDFKit」)。
+- **词频分析**现在全本 + OCR 补全,但 20000 词做 ECDICT 查询会更慢(大书可能数秒);未做大书压测。
+- **Anki**:反向卡/挖空卡/页面截图/内嵌音频仍缺一次完整真机验收。
+- **OCR**:旋转页/倾斜页未处理;识别质量未做基准;超长文档内存表现未测。
+- **批注导出**:输出是页面图片化 PDF,体积会变大、文字不可选(已知取舍)。
+- **备份恢复**:大库(>200MB)未测。
+- **免费证书 7 天**:过期需重签,属流程事实。
+
+### 9.4 可选的下一步方向(按价值/成本排序)
+
+1. **统一撤销组**:把跨页、拉直、橡皮、形状、清空本页收进一条可撤销链(现在是各自 `registerUndo` + 原生栈混用)。
+2. **缩放书写条**(Notability 式 zoom box):高倍率下在底部开一个放大窗口写小字。
+3. **套索操作增强**:改色/复制为贴纸/剪切粘贴(受 PencilKit 公开 API 限制,先做能做的)。
+4. **手写图层性能**:3× 画布内存优化(分页画布/离屏淘汰)、大页笔迹多的擦除压测。
+5. **生词本 → 复习**:本地间隔重复(FSRS/SM-2 纯 Swift),比继续堆导出更贴学习目标。
+6. **可访问性**:Dynamic Type、VoiceOver 标签补全。
 
 ---
 
@@ -377,7 +409,8 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 - 朴素括号平衡检查会被**字符串插值里的引号/花括号**误报(本次 3 个文件虚报 +1~+3),以 CI 为准。
 
 **Pencil / PDFKit**
-- **跨页笔迹** = 画布向下留 `InkGeometry.bleed` 出血区,抬笔时 `PencilStrokeTools.split` 按页底切开;先让下一页确认能接收(`onOverflow` 返回 Bool),再裁本页 —— 否则宁可保留整笔,不丢墨。
+- **跨页笔迹(v0.23.2 起上下双向)**:画布高 = (页高 + `bleedTop 200` + `bleed 240`)×3,画布层 `position.y = -200`,页面顶部对应画布 y=`200×3`;**落库/导出始终是页面坐标**(loadInk +200×3、saveNow −200×3)。向下用 `split(atY:)`、向上用 `splitUpward(atY:)`(方向反了会拿不到段);先让目标页确认能接收(`onOverflow`/`onOverflowUp` 返回 Bool),再裁本页 —— 否则宁可保留整笔,不丢墨。
+- **PDFKit 会重置 `maxScaleFactor`**:设置 `document`、切换 `displayMode` 后都会回到内部默认值(真机现象 = 800% 封顶)。每次改缩放前 `applyZoomLimits(min0.2/max40)`;若 `scaleFactor` 仍被夹回,先把 max 提到目标值再设一次;诊断行 `zoom[tag]: want/got/max` 能区分「上限重置」和「内部硬限制」。
 - **程序化改 `canvas.drawing`**(跨页切分 / 直线吸附)会绕过 PencilKit 的撤销栈;若要严格 undo,需要自定义 undo 组。
 - **直线吸附**只对「抬笔 3 秒内」的最后一笔生效;长度 > 60pt 且偏差 < 2% 才拉直,避免误伤手写字母。
 - **自研橡皮**(v0.22.0)= 橡皮激活时 `canvas.drawingGestureRecognizer.isEnabled = false`,挂自己的 Pencil-only `UIPanGestureRecognizer`;按采样点到橡皮路径的距离切分/删除 `PKStroke`,12ms 节流重建 `canvas.drawing`;撤销用 `undoManager.registerUndo` 存整页快照。**不要**在 PencilKit 绘制手势仍启用时抢 Pencil(会互相打断)。
@@ -417,18 +450,18 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 11. 接手第一小时 checklist
 
-1. `cd D:\codx\pdf-vocab && git fetch --tags && git status`(应为干净;48 个 tag)。
-2. 读 `README.md`(功能全景)+ 本文 §4 架构图。
+1. `cd D:\codx\pdf-vocab && git fetch --tags && git status`。**若本地 HEAD 与远端 main 哈希不同但树相同**(API 通道推送的常见结果):`git reset --soft origin/main` 对齐,不要 rebase 出一堆重复提交。
+2. 读 `README.md`(功能全景)+ 本文 §4 架构图 + **§0.1 新窗口速查**(坐标体系与缩放上限两条必读)。
 3. 打开 `Sources/Reader/Selection/ReaderCoordinator.swift` 与 `Sources/Reader/Pencil/PencilOverlay.swift`,理解两条主线。
 4. 确认 gh 可用:`D:/codx/gh/bin/gh.exe auth status`;确认能列 run:`gh run list --repo lei11118/pdf-vocab -L 3`。
-5. 拿最新 release 的 IPA 解包复核一遍(§3.3 脚本),确认 `跃文 / 0.15.0 / 48 / 0 签名条目`。
-6. 问用户要 **v0.15.0 真机反馈**(§9.1),按反馈定下一版是 0.15.1(修)还是 0.16.0(功能)。
-7. 若用户没反馈:优先做 §9.1 第 2、3 项的可调参数化(弧盘半径/边距、手势启用条件),把"需要真机调"的东西做成设置项或更宽容的判定,而不是猜数值。
+5. 拿最新 release 的 IPA 解包复核一遍(§3.3 脚本),确认 `跃文 / 0.23.2 / 61 / 0 签名条目`。
+6. 问用户要 **v0.23.2 六项修复的真机反馈**(§9.1),按反馈决定下一版是 0.23.3(修)还是 0.24.0(统一撤销组/缩放书写条)。
+7. 若用户没反馈:不要盲叠功能,先把 §9.4 第 1 项「统一撤销组」做掉(它决定后续所有程序化改画布功能的安全边界)。
 
 ---
 
 ## 12. 给下一个 agent 的开场提示(可直接粘贴)
 
-> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。当前版本 v0.21.0(57)。
-> 先读 `docs/HANDOFF.md`,再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
-> 当前处于"按 Notability 逆向资料重构 UI 与 Pencil 体验"阶段,v0.16.0 的 8 项新交互待用户真机验收(见 HANDOFF §9.1)。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
+> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。**当前版本 v0.23.2(61)**,已发布 v0.23.2 Release。
+> 先读 `docs/HANDOFF.md`(尤其 §0.1 新窗口速查:手写坐标含 bleedTop 偏移、PDFKit 会重置 maxScaleFactor),再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
+> 当前在「按 Notability 逆向资料重构 UI 与 Pencil 体验」阶段:**v0.23.2 的六项修复(跨页向上回写 / 词频全本 / 横向排布 / 4000% 缩放 / 全文搜索 / 退出书写)待用户真机验收**(HANDOFF §9.1),验收前不要叠新功能;没反馈就先做 §9.4 第 1 项「统一撤销组」。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
