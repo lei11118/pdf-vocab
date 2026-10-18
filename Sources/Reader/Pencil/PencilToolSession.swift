@@ -2,8 +2,9 @@ import SwiftUI
 import PencilKit
 
 /// v0.15.0:手写工具类型(Notability 四件套 + 蜡笔)
+/// v0.24.0:新增**书法**笔 —— 椭圆/斜切笔尖 + 稳定化,自带可变笔宽(自研绘制)。
 enum PencilToolKind: String, CaseIterable, Identifiable {
-    case pen, pencil, marker, crayon, lasso, shape, laser, eraser
+    case pen, pencil, calligraphy, marker, crayon, lasso, shape, laser, eraser
 
     var id: String { rawValue }
 
@@ -11,6 +12,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         switch self {
         case .pen: return "钢笔"
         case .pencil: return "铅笔"
+        case .calligraphy: return "书法"
         case .marker: return "荧光笔"
         case .crayon: return "蜡笔"
         case .lasso: return "套索"
@@ -24,6 +26,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         switch self {
         case .pen: return "pencil.tip"
         case .pencil: return "pencil"
+        case .calligraphy: return "paintbrush.pointed"
         case .marker: return "highlighter"
         case .crayon: return "scribble"
         case .lasso: return "lasso"
@@ -83,6 +86,11 @@ final class PencilToolSession: ObservableObject {
     @Published var useCustomEraser: Bool = true { didSet { persist() } }
     /// v0.23.0:形状工具的当前形状
     @Published var shapeKind: PencilShapeKind = .line { didSet { persist() } }
+    /// v0.24.0:书法笔的**笔锋角度**档位(0…4 → 0°/30°/45°/60°/90°);
+    /// 角度是相对页面的,笔尖按椭圆投影走,横细竖粗由书写方向决定。
+    @Published var nibAngleIndex: Int = 2 { didSet { persist() } }
+    /// v0.24.0:书法笔**稳定化** —— 一阶低通平滑,慢写更稳、快写更顺(Notability 的 calligraphy stabilization)。
+    @Published var calligraphySmoothing: Bool = true { didSet { persist() } }
     /// Notability 式细节:擦除一笔后自动回到上一支笔(可在工具托盘右键菜单开关)。
     @Published var autoReturnFromEraser: Bool = true { didSet { persist() } }
     /// PencilKit 原生直尺:开启后沿直尺边画线,适合画表格/下划线;不改动笔具。
@@ -136,6 +144,12 @@ final class PencilToolSession: ObservableObject {
            let saved = PencilShapeKind(rawValue: raw) {
             shapeKind = saved
         }
+        if defaults.object(forKey: "pencilNibAngle") != nil {
+            nibAngleIndex = defaults.integer(forKey: "pencilNibAngle")
+        }
+        calligraphySmoothing = defaults.object(forKey: "pencilCalliSmooth") == nil
+            ? true
+            : defaults.bool(forKey: "pencilCalliSmooth")
         if kind == .eraser { kind = .pen }
     }
 
@@ -185,11 +199,17 @@ final class PencilToolSession: ObservableObject {
         switch kind {
         case .pen, .shape: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
         case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
+        // v0.24.0:书法笔的"基准宽度"是笔锋最粗处,细处会按角度与压力自动收窄。
+        case .calligraphy: return [1.8, 2.8, 4.0, 5.6, 8.0][clamped(widthIndex, 0, 4)]
         case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
         case .crayon: return [2.5, 4.0, 6.0, 9.0, 13.0][clamped(widthIndex, 0, 4)]
         case .lasso, .laser, .eraser: return 0
         }
     }
+
+    /// v0.24.0:书法笔锋角度(度)。0° = 笔尖水平,书写方向上的粗细差最大。
+    static let nibAngles: [CGFloat] = [0, 30, 45, 60, 90]
+    var nibAngle: CGFloat { Self.nibAngles[clamped(nibAngleIndex, 0, Self.nibAngles.count - 1)] }
 
     /// v0.22.0:橡皮半径五档(页面点)
     static let eraserRadii: [CGFloat] = [4, 7, 11, 16, 24]
@@ -203,6 +223,10 @@ final class PencilToolSession: ObservableObject {
             return PKInkingTool(.pen, color: currentUIColor, width: width * scale)
         case .pencil:
             return PKInkingTool(.pencil, color: currentUIColor, width: width * scale)
+        case .calligraphy:
+            // v0.24.0:书法笔由自研手势逐点生成 PKStroke(笔锋角度/压力/稳定化),
+            // 这里的 PKInkingTool 只是占位 —— 激活时绘制手势会被关闭。
+            return PKInkingTool(.pen, color: currentUIColor, width: max(width, 1) * scale)
         case .marker:
             return PKInkingTool(.marker, color: currentUIColor, width: width * scale)
         case .crayon:
@@ -227,7 +251,8 @@ final class PencilToolSession: ObservableObject {
         guard kind != newKind else { return }
         // v0.16.1:直尺只对墨迹笔有意义;套索/橡皮下保留直尺会让 PencilKit 处于
         // 少见的工具组合(实测易卡),切到这几个工具时顺手关掉。
-        if newKind == .lasso || newKind == .eraser || newKind == .shape || newKind == .laser, rulerActive {
+        if newKind == .lasso || newKind == .eraser || newKind == .shape || newKind == .laser
+            || newKind == .calligraphy, rulerActive {
             rulerActive = false
         }
         kind = newKind
@@ -256,7 +281,7 @@ final class PencilToolSession: ObservableObject {
     /// 直尺是叠加在画布上的辅助层,不改变当前笔具;适合 Notability 式“画直线/表格”。
     /// v0.16.2:直尺只对墨迹笔有意义 —— 套索/橡皮下开启时先切回钢笔,避免 PencilKit 少见组合。
     func toggleRuler() {
-        if !rulerActive, kind == .lasso || kind == .eraser || kind == .shape || kind == .laser {
+        if !rulerActive, kind == .lasso || kind == .eraser || kind == .shape || kind == .laser || kind == .calligraphy {
             kind = .pen
         }
         rulerActive.toggle()
@@ -321,6 +346,12 @@ final class PencilToolSession: ObservableObject {
            let saved = PencilShapeKind(rawValue: raw) {
             shapeKind = saved
         }
+        if defaults.object(forKey: prefix + "nibAngle") != nil {
+            nibAngleIndex = defaults.integer(forKey: prefix + "nibAngle")
+        }
+        if defaults.object(forKey: prefix + "calliSmooth") != nil {
+            calligraphySmoothing = defaults.bool(forKey: prefix + "calliSmooth")
+        }
         DiagLog.log("pencil: doc tools loaded kind=\(kind.rawValue) width=\(widthIndex)")
     }
 
@@ -336,6 +367,8 @@ final class PencilToolSession: ObservableObject {
         defaults.set(useCustomEraser, forKey: prefix + "customEraser")
         defaults.set(rulerActive, forKey: prefix + "ruler")
         defaults.set(shapeKind.rawValue, forKey: prefix + "shape")
+        defaults.set(nibAngleIndex, forKey: prefix + "nibAngle")
+        defaults.set(calligraphySmoothing, forKey: prefix + "calliSmooth")
     }
 
     // MARK: - 工具隐藏 / 恢复(可定制工具带)
@@ -380,6 +413,8 @@ final class PencilToolSession: ObservableObject {
         defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
         defaults.set(rulerActive, forKey: "pencilRulerActive")
         defaults.set(shapeKind.rawValue, forKey: "pencilShapeKind")
+        defaults.set(nibAngleIndex, forKey: "pencilNibAngle")
+        defaults.set(calligraphySmoothing, forKey: "pencilCalliSmooth")
         persistDoc(defaults)
     }
 }

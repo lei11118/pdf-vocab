@@ -15,6 +15,8 @@ struct SettingsView: View {
     /// v0.18.0:书写贴边自动滚动 + Pencil 手势映射
     @AppStorage("writingAutoScroll") private var writingAutoScroll = true
     @AppStorage("pencilLineSnap") private var pencilLineSnap = true
+    /// v0.24.0:进书是否恢复上次的书写状态(工具条是否展开、用的哪支笔)
+    @AppStorage("restoreWritingState") private var restoreWritingState = true
     @AppStorage("pencilDoubleTapAction") private var pencilDoubleTapAction = "eraser"
     @AppStorage("pencilSqueezeAction") private var pencilSqueezeAction = "arc"
     @Environment(\.dismiss) private var dismiss
@@ -54,6 +56,7 @@ struct SettingsView: View {
                     Toggle("橡皮擦完自动回到上一支笔", isOn: $pencilAutoReturnEraser)
                     Toggle("书写时贴边自动滚动", isOn: $writingAutoScroll)
                     Toggle("画完自动拉直线", isOn: $pencilLineSnap)
+                    Toggle("进入文档时恢复上次的书写状态", isOn: $restoreWritingState)
                     Picker("Pencil 轻点两下", selection: $pencilDoubleTapAction) {
                         Text("橡皮 ⇄ 上一支笔").tag("eraser")
                         Text("撤销").tag("undo")

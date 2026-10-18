@@ -177,6 +177,21 @@ final class AppDatabase: @unchecked Sendable {
                 t.add(column: "scale", .double).notNull().defaults(to: 1)
             }
         }
+        migrator.registerMigration("v11.vocabSortOrder") { db in
+            // v0.24.0:手动排序 —— sortOrder 越小越靠前;首次迁移按「新→旧」回填,
+            // 使新词自然落在最前(与老版 ORDER BY updatedAt DESC 一致)。
+            try db.alter(table: "vocab_word") { t in
+                t.add(column: "sortOrder", .integer).notNull().defaults(to: 0)
+            }
+            try db.execute(sql: """
+                UPDATE vocab_word
+                SET sortOrder = (
+                    SELECT COUNT(*) FROM vocab_word AS w2
+                    WHERE w2.updatedAt > vocab_word.updatedAt
+                       OR (w2.updatedAt = vocab_word.updatedAt AND w2.id > vocab_word.id)
+                )
+                """)
+        }
         return migrator
     }
 }

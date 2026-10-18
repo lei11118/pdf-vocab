@@ -22,7 +22,9 @@ struct ReaderView: View {
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     /// v0.9.0(M4):标记 / 选词模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
-    @AppStorage("readerMarkMode") private var markMode = false
+    /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
+    /// 用户反馈"用过的工具回到主界面再进来就被重置了"。设置里可关掉"恢复上次书写状态"。
+    @State private var markMode = false
     /// v0.11.0(M4-B):Pencil 悬停预览 / 触觉开关
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
@@ -57,6 +59,12 @@ struct ReaderView: View {
     @State private var confirmClearInk = false
     /// v0.23.2:页面排布(纵向连续 / 横向连续 / 双页并排)
     @AppStorage("readerLayoutMode") private var layoutMode = "vertical"
+    /// v0.24.0:工具条自由位置(归一化比例换算成当前容器里的偏移)+ 拖动状态
+    @State private var dockOffset: CGSize = .zero
+    @State private var dockDragOrigin: CGSize?
+    @State private var dockDragActive = false
+    @State private var dockSize: CGSize = .zero
+    @State private var dockBounds: CGSize = .zero
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.dismiss) private var dismiss
@@ -67,6 +75,10 @@ struct ReaderView: View {
         self.jumpTarget = jumpTarget
         _currentPage = State(initialValue: jumpTarget?.page ?? doc.lastPage)
         _suppressSave = State(initialValue: jumpTarget != nil)
+        // v0.24.0:按书恢复上次的书写状态(可在设置里关闭)
+        let restoreWriting = (UserDefaults.standard.object(forKey: "restoreWritingState") as? Bool) ?? true
+        let savedMark = (UserDefaults.standard.object(forKey: "pencil.doc.\(doc.sha256).mark") as? Bool) ?? false
+        _markMode = State(initialValue: restoreWriting && savedMark)
     }
 
     var body: some View {
@@ -79,6 +91,21 @@ struct ReaderView: View {
         pencilSyncContent
             .onChange(of: pencilAutoReturnEraser) { _, value in
                 pencilTools.autoReturnFromEraser = value
+            }
+            .onChange(of: markMode) { _, on in
+                // v0.24.0:按书记住「选词 / 书写」状态,退出再进来不再被重置
+                UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
+                UserDefaults.standard.set(on, forKey: "readerMarkMode")
+                DiagLog.log("reader: markMode=\(on) saved")
+            }
+            .onChange(of: dockBounds) { _, size in
+                // v0.24.0:容器尺寸变化(旋转/分屏)时按归一化比例重新落位
+                guard size.width > 1, dockDragOrigin == nil else { return }
+                dockOffset = ToolDockPosition.clamp(
+                    ToolDockPosition.load(docSha: doc.sha256, bounds: size),
+                    bounds: size,
+                    dockSize: dockSize
+                )
             }
             .onAppear {
                 pencilTools.attachDocument(doc.sha256)
@@ -96,6 +123,8 @@ struct ReaderView: View {
             .onChange(of: pencilTools.eraserSizeIndex) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.useCustomEraser) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.nibAngleIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.calligraphySmoothing) { _, _ in applyPencilTool() }
     }
 
     private var sceneContent: some View {
@@ -106,15 +135,12 @@ struct ReaderView: View {
                 }
             }
             .onDisappear {
-                // v0.23.0:回主页即退出书写 —— 再进任何书都从「选词阅读」开始
-                markMode = false
+                // v0.24.0:退出阅读只落盘,不再重置工具 —— 上次用什么笔、是否在书写,
+                // 下次进这本书原样恢复(用户反馈:回到主界面再进来工具被重置了)。
                 arcAnchor = nil
-                // v0.23.2:退出「选中的工具」(只退回工具类,墨迹笔按书保留)
-                if [PencilToolKind.eraser, .lasso, .shape, .laser].contains(pencilTools.kind) {
-                    pencilTools.kind = .pen
-                }
                 readerHandle.coordinator?.setMarkMode(false)
-                DiagLog.log("reader: disappear -> markMode=false tool=\(pencilTools.kind.rawValue)")
+                DiagLog.log("reader: disappear (mark=\(markMode) tool=\(pencilTools.kind.rawValue))")
+                UserDefaults.standard.set(markMode, forKey: "pencil.doc.\(doc.sha256).mark")
                 saveProgressNow()
             }
     }
@@ -214,11 +240,32 @@ struct ReaderView: View {
             .overlay(alignment: .top) {
                 readerTopOverlay
             }
-            .overlay(alignment: .bottom) {
-                readerBottomDock
+            .overlay {
+                dockLayer
             }
             .animation(.easeInOut(duration: DS.Motion.base), value: focusMode)
             .animation(DS.Motion.spring, value: markMode)
+    }
+
+    /// v0.24.0:底部工具区 —— 用 GeometryReader 拿容器尺寸,让工具条能自由拖动、
+    /// 位置按归一化比例记忆(旋转/分屏后仍在相对位置)。非书写态仍是一颗居中胶囊。
+    private var dockLayer: some View {
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                readerBottomDock
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+            .onAppear { updateDockBounds(geo.size) }
+            .onChange(of: geo.size) { _, size in updateDockBounds(size) }
+        }
+    }
+
+    private func updateDockBounds(_ size: CGSize) {
+        guard size.width > 1 else { return }
+        if abs(size.width - dockBounds.width) > 0.5 || abs(size.height - dockBounds.height) > 0.5 {
+            dockBounds = size
+        }
     }
 
     private var rootContent: some View {
@@ -401,10 +448,25 @@ struct ReaderView: View {
                 session: pencilTools,
                 onUndo: { readerHandle.coordinator?.undoInk() },
                 onRedo: { readerHandle.coordinator?.redoInk() },
-                onExitWriting: { markMode = false }
+                onExitWriting: { markMode = false },
+                onDockDragChanged: { translation in handleDockDrag(translation) },
+                onDockDragEnded: { endDockDrag() },
+                onDockReset: { resetDock() }
             )
+            .background(
+                DockSizeReader { size in
+                    if abs(size.width - dockSize.width) > 0.5 || abs(size.height - dockSize.height) > 0.5 {
+                        dockSize = size
+                    }
+                }
+            )
+            .offset(x: dockOffset.width, y: dockOffset.height)
+            .scaleEffect(dockDragActive ? 1.03 : 1)
+            .shadow(color: .black.opacity(dockDragActive ? 0.18 : 0), radius: dockDragActive ? 18 : 0, y: 8)
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
+            .animation(dockDragActive ? nil : DS.Motion.spring, value: dockOffset)
+            .animation(DS.Motion.quickSpring, value: dockDragActive)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else if !focusMode {
             HStack(spacing: 3) {
@@ -426,6 +488,35 @@ struct ReaderView: View {
             .padding(.bottom, DS.Space.m)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    // MARK: - v0.24.0 工具条拖动
+
+    private func handleDockDrag(_ translation: CGSize) {
+        if dockDragOrigin == nil {
+            dockDragOrigin = dockOffset
+            dockDragActive = true
+        }
+        let base = dockDragOrigin ?? .zero
+        let raw = CGSize(width: base.width + translation.width, height: base.height + translation.height)
+        dockOffset = ToolDockPosition.clamp(raw, bounds: dockBounds, dockSize: dockSize)
+    }
+
+    private func endDockDrag() {
+        let snapped = ToolDockPosition.snapped(dockOffset, bounds: dockBounds, dockSize: dockSize)
+        dockDragActive = false
+        dockDragOrigin = nil
+        withAnimation(DS.Motion.spring) { dockOffset = snapped }
+        ToolDockPosition.save(snapped, docSha: doc.sha256, bounds: dockBounds)
+        if pencilHaptics { PencilHaptics.selectionCompleted(at: .zero) }
+        DiagLog.log("dock: moved to (\(Int(snapped.width)), \(Int(snapped.height)))")
+    }
+
+    private func resetDock() {
+        withAnimation(DS.Motion.spring) { dockOffset = .zero }
+        ToolDockPosition.save(.zero, docSha: doc.sha256, bounds: dockBounds)
+        if pencilHaptics { PencilHaptics.selectionCompleted(at: .zero) }
+        DiagLog.log("dock: reset")
     }
 
     private func readingModeSegment(

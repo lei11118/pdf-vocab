@@ -23,6 +23,8 @@ struct VocabStore: Sendable {
         let sourceDocTitle: String?
         let sourcePage: Int?
         let sourceRectsJSON: String?
+        /// v0.24.0:手动排序位置(越小越靠前)
+        let sortOrder: Int
     }
 
     struct HighlightRow {
@@ -124,10 +126,21 @@ struct VocabStore: Sendable {
     }
 
     /// 生词本列表(v0.8.0:按文档 / 分组 / 搜索筛选;v0.10.0:支持「未分组」筛选;带出处)。
-    func listWords(docSha: String? = nil, groupId: Int64? = nil, ungrouped: Bool = false, search: String? = nil) -> [WordSummary] {
+    /// v0.24.0:排序可选 —— 手动(默认)/ 最近更新 / 字母。
+    enum SortMode {
+        case manual, recent, alpha
+    }
+
+    func listWords(
+        docSha: String? = nil,
+        groupId: Int64? = nil,
+        ungrouped: Bool = false,
+        search: String? = nil,
+        sort: SortMode = .manual
+    ) -> [WordSummary] {
         var sql = """
             SELECT w.id AS id, w.lemma AS lemma, w.surface AS surface,
-                   w.updatedAt AS updatedAt,
+                   w.updatedAt AS updatedAt, w.sortOrder AS sortOrder,
                    (SELECT COUNT(*) FROM vocab_occurrence o0 WHERE o0.wordId = w.id
                     \(docSha != nil ? "AND o0.docSha = ?" : "")) AS cnt,
                    o.docSha AS srcDoc, o.page AS srcPage, d.title AS srcTitle,
@@ -154,7 +167,14 @@ struct VocabStore: Sendable {
         if search != nil {
             sql += "\n    AND (w.surface LIKE ? OR w.lemma LIKE ?)"
         }
-        sql += "\n    ORDER BY w.updatedAt DESC"
+        switch sort {
+        case .manual:
+            sql += "\n    ORDER BY w.sortOrder ASC, w.id ASC"
+        case .recent:
+            sql += "\n    ORDER BY w.updatedAt DESC, w.id DESC"
+        case .alpha:
+            sql += "\n    ORDER BY w.surface COLLATE NOCASE ASC, w.id ASC"
+        }
 
         var args: [DatabaseValueConvertible?] = []
         if let docSha {
@@ -181,6 +201,7 @@ struct VocabStore: Sendable {
                 let srcPage: Int? = row["srcPage"]
                 let srcTitle: String? = row["srcTitle"]
                 let srcRects: String? = row["srcRects"]
+                let order: Int = row["sortOrder"]
                 return WordSummary(
                     id: id,
                     lemma: lemma,
@@ -190,7 +211,8 @@ struct VocabStore: Sendable {
                     sourceDocSha: srcDoc,
                     sourceDocTitle: srcTitle,
                     sourcePage: srcPage,
-                    sourceRectsJSON: srcRects
+                    sourceRectsJSON: srcRects,
+                    sortOrder: order
                 )
             }
         }) ?? []
@@ -244,7 +266,10 @@ struct VocabStore: Sendable {
                 )
             } else {
                 try db.execute(
-                    sql: "INSERT INTO vocab_word (lemma, surface, status, createdAt, updatedAt) VALUES (?, ?, 'new', ?, ?)",
+                    sql: """
+                        INSERT INTO vocab_word (lemma, surface, status, createdAt, updatedAt, sortOrder)
+                        VALUES (?, ?, 'new', ?, ?, (SELECT COALESCE(MIN(sortOrder), 0) - 1 FROM vocab_word))
+                        """,
                     arguments: [lemma, surface, now, now]
                 )
                 wordId = db.lastInsertedRowID
@@ -365,11 +390,47 @@ struct VocabStore: Sendable {
             }
             let now = Date()
             try db.execute(
-                sql: "INSERT INTO vocab_word (lemma, surface, status, createdAt, updatedAt) VALUES (?, ?, 'new', ?, ?)",
+                sql: """
+                    INSERT INTO vocab_word (lemma, surface, status, createdAt, updatedAt, sortOrder)
+                    VALUES (?, ?, 'new', ?, ?, (SELECT COALESCE(MIN(sortOrder), 0) - 1 FROM vocab_word))
+                    """,
                 arguments: [lemma, surface, now, now]
             )
             return db.lastInsertedRowID
         }
+    }
+
+    // MARK: - v0.24.0 手动排序
+
+    /// 把「当前可见子集」的新顺序合并进全表顺序。
+    /// - fullOrder: 未筛选的全表 id 顺序(手动序)
+    /// - visible: 拖动前可见的 id 顺序
+    /// - moved: 拖动后的可见 id 顺序
+    ///
+    /// 做法:在 fullOrder 里记下 visible 占用的"槽位",再把 moved 依次填回去 ——
+    /// 这样在「全部 / 分组 / 未分组」任一筛选下拖动,都不会打乱其他词之间的相对顺序。
+    func applyManualOrder(fullOrder: [Int64], visible: [Int64], moved: [Int64]) {
+        guard !visible.isEmpty, visible.count == moved.count, Set(visible) == Set(moved) else { return }
+        let visibleSet = Set(visible)
+        var slots: [Int] = []
+        slots.reserveCapacity(visible.count)
+        for (index, id) in fullOrder.enumerated() where visibleSet.contains(id) {
+            slots.append(index)
+        }
+        guard slots.count == moved.count else { return }
+        var ordered = fullOrder
+        for (offset, slot) in slots.enumerated() {
+            ordered[slot] = moved[offset]
+        }
+        try? db.dbQueue.write { db in
+            for (index, id) in ordered.enumerated() {
+                try db.execute(
+                    sql: "UPDATE vocab_word SET sortOrder = ? WHERE id = ?",
+                    arguments: [index, id]
+                )
+            }
+        }
+        DiagLog.log("vocab: manual order applied (\(ordered.count) words)")
     }
 
     // MARK: - 颜色 / 分组 / 删除(v0.8.0)

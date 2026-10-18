@@ -1342,13 +1342,21 @@ final class ReaderCoordinator: NSObject {
                 color: session.currentUIColor,
                 width: session.width
             )
+            // v0.24.0:书法笔(斜切笔尖 + 稳定化,自研可变笔宽)
+            provider.setCalligraphyMode(
+                active: session.kind == .calligraphy,
+                color: session.currentUIColor,
+                width: session.width,
+                nib: session.nibAngle,
+                smoothing: session.calligraphySmoothing
+            )
             let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
             DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
         }
     }
 
     private static func toolSignature(_ session: PencilToolSession) -> String {
-        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)|\(session.shapeKind.rawValue)"
+        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)|\(session.shapeKind.rawValue)|\(session.nibAngleIndex)|\(session.calligraphySmoothing ? 1 : 0)"
     }
 
     // MARK: - v0.18.0 书写贴边自动滚动(连续书写第一步)
