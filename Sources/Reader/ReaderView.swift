@@ -120,6 +120,9 @@ struct ReaderView: View {
             .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.nibAngleIndex) { _, _ in applyPencilTool() }
             .onChange(of: pencilTools.calligraphySmoothing) { _, _ in applyPencilTool() }
+            // v0.25.1:换形状(直线/矩形/椭圆/箭头)必须立刻套用 —— 之前漏了这一条,
+            // 在样式面板里选了箭头,画布上仍是上一个形状,直到改颜色/笔宽才"顺便"生效。
+            .onChange(of: pencilTools.shapeKind) { _, _ in applyPencilTool() }
     }
 
     private var sceneContent: some View {

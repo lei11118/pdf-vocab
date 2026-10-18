@@ -208,15 +208,16 @@ enum CalligraphyInkBuilder {
             let theta = atan2(dy, dx)
 
             let chisel = CGFloat(abs(sin(Double(theta) - Double(nib))))
-            let pressure = 0.55 + 0.85 * points[i].force
+            // v0.25.1:压力/锥形的系数整体抬高,最细处也不再是"一根头发丝"
+            let pressure = 0.72 + 0.50 * points[i].force
             let dt = max(next.time - prev.time, 0.0001)
             let speed = Double(hypot(dx, dy)) / dt          // 画布点/秒
             let speedFactor = 1.0 - min(speed / 5200.0, 1.0) * 0.18
             let edge = min(CGFloat(i), CGFloat(count - 1 - i))
-            let taper = 0.42 + 0.58 * min(edge / 3, 1)
+            let taper = 0.55 + 0.45 * min(edge / 3, 1)
 
-            var width = baseWidth * (0.18 + 0.82 * chisel) * pressure * CGFloat(speedFactor) * taper
-            width = max(width, baseWidth * 0.16)
+            var width = baseWidth * (0.34 + 0.66 * chisel) * pressure * CGFloat(speedFactor) * taper
+            width = max(width, baseWidth * 0.30)
             sizes.append(width)
         }
         return sizes

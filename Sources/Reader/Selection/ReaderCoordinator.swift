@@ -411,6 +411,9 @@ final class ReaderCoordinator: NSObject {
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
+        // v0.25.1:新 provider 的橡皮/激光/形状/书法配置默认全是"关",必须把当前会话状态推一次,
+        // 否则重进文档后(overlay 在创建时继承的是默认关)会出现"工具选中了但画不出/擦不了"。
+        applyToolSession(force: true)
 
         // v0.14.0:自绘浮动工具带取代系统 PKToolPicker —— Pencil 系统手势回到自定义映射:
         // 挤压 = 切换标记/选词模式;轻点两下 = 橡皮 ⇄ 上一支笔(Notability 式手写体验)。
@@ -1282,7 +1285,10 @@ final class ReaderCoordinator: NSObject {
         clearHover()
         if !on { stopAutoScroll() }
         overlayProvider?.setMarkMode(on)
-        if on { applyToolSession() }   // v0.14.0:进入标记模式即套用当前笔具
+        // v0.25.1:进入书写时**强制**套用一次工具 —— 只靠签名去重的话,重进文档时
+        // 笔具 kind 与上次相同(比如橡皮/书法/形状)→ 一次都不 apply → 画布根本没被"装上"
+        // 那种工具(日志里重进后 eraser=0、且再无 apply tool= 行),表现就是"工具没记忆"。
+        if on { applyToolSession(force: true) }
         pencilPressRef?.isEnabled = !on
         let types: [NSNumber] = on
             ? [NSNumber(value: UITouch.TouchType.direct.rawValue)]

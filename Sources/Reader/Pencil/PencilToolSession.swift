@@ -195,7 +195,8 @@ final class PencilToolSession: ObservableObject {
         case .pen, .shape: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
         case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
         // v0.24.0:书法笔的"基准宽度"是笔锋最粗处,细处会按角度与压力自动收窄。
-        case .calligraphy: return [1.8, 2.8, 4.0, 5.6, 8.0][clamped(widthIndex, 0, 4)]
+        // v0.25.1:整档放大(原来最小档 1.8pt,乘系数后细到 0.29pt,真机看起来像没写出来)。
+        case .calligraphy: return [3.6, 5.5, 7.5, 10.5, 14.0][clamped(widthIndex, 0, 4)]
         case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
         case .crayon: return [2.5, 4.0, 6.0, 9.0, 13.0][clamped(widthIndex, 0, 4)]
         case .lasso, .laser, .eraser: return 0
