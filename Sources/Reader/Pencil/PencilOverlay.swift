@@ -32,6 +32,13 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
 
+    // MARK: - v0.27.0 统一撤销组(一条记录可跨页)
+
+    private let inkUndo = InkUndoStack()
+    /// 正在进行的用户动作:name + 各页「动作前」快照 + 涉及页集合
+    private var pendingAction: (name: String, before: [Int: PKDrawing], pages: Set<Int>)?
+    private var actionCommitWork: DispatchWorkItem?
+
     init(pdfView: PDFView?, docSha: String, inkStore: PencilInkStore?, markMode: Bool, tool: PKTool? = nil, rulerActive: Bool = false) {
         self.pdfView = pdfView
         self.docSha = docSha
@@ -63,6 +70,13 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             // v0.23.2:越过页顶的段搬到上一页
             overlay.onOverflowUp = { [weak self] index, stroke in
                 self?.moveOverflowUp(from: index, stroke: stroke) ?? false
+            }
+            // v0.27.0:一次用户动作的开始/结束 → 合成一条（可跨页的）撤销记录
+            overlay.onActionBegin = { [weak self] name, before in
+                self?.beginInkAction(name: name, page: index, before: before)
+            }
+            overlay.onActionEnd = { [weak self] in
+                self?.scheduleInkActionCommit()
             }
             // v0.22.0:新页画布继承当前橡皮配置
             overlay.setEraserMode(active: eraserConfig.active, whole: eraserConfig.whole, radius: eraserConfig.radius)
@@ -157,6 +171,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         guard pageHeight > 1 else { return false }
         let shift = pageHeight * InkGeometry.scale
         guard let moved = PencilStrokeTools.shifted(stroke, dy: -shift) else { return false }
+        // v0.27.0:两页都要进同一个撤销组(先拍"动作前"快照,再改)
+        notePagesInAction([index, index + 1])
 
         if let next = overlays[index + 1] {
             next.canvas.drawing = PKDrawing(strokes: next.canvas.drawing.strokes + [moved])
@@ -186,6 +202,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         let prevHeight = overlays[index - 1]?.bounds.height ?? pageHeight
         let shift = prevHeight * InkGeometry.scale
         guard let moved = PencilStrokeTools.shifted(stroke, dy: shift) else { return false }
+        // v0.27.0:同上,上下两页并进同一个撤销组
+        notePagesInAction([index - 1, index])
 
         if let prev = overlays[index - 1] {
             prev.canvas.drawing = PKDrawing(strokes: prev.canvas.drawing.strokes + [moved])
@@ -226,10 +244,98 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         return true
     }
 
-    /// v0.14.0:撤销 / 重做(目标 = 最近落笔画布;PencilKit 自带 undo 栈)。
-    /// v0.16.2:记录笔画数变化 —— 真机日志里出现过「30 笔 → 一次保存 10 笔」的整页回退,
-    /// 需要确诊是否是误触撤销(弧形工具盘/双指轻点)把大量笔迹一起撤掉。
+    // MARK: - v0.27.0 统一撤销组
+
+    /// 某页当前画面的值快照(`PKDrawing` 是写时复制,取快照几乎零成本;叠层不存在时从墨迹库读)
+    private func snapshotDrawing(page: Int) -> PKDrawing {
+        if let overlay = overlays[page] { return overlay.canvasSnapshot }
+        guard let record = inkStore?.drawing(docSha: docSha, page: page), !record.data.isEmpty,
+              var drawing = try? PKDrawing(data: record.data) else {
+            return PKDrawing()
+        }
+        let target = Double(InkGeometry.scale)
+        if record.scale > 0.001, abs(record.scale - target) > 0.001 {
+            let factor = CGFloat(target / record.scale)
+            drawing.transform(using: CGAffineTransform(scaleX: factor, y: factor))
+        }
+        // 库里是页面坐标,画布坐标还差一个顶部出血偏移
+        drawing.transform(using: CGAffineTransform(translationX: 0, y: InkGeometry.pageTopY()))
+        return drawing
+    }
+
+    /// 动作开始:记下这一页「动作前」的样子。若上一个动作还没落定,先把它关掉。
+    private func beginInkAction(name: String, page: Int, before: PKDrawing?) {
+        if pendingAction != nil { commitInkActionNow() }
+        let snapshot = before ?? snapshotDrawing(page: page)
+        pendingAction = (name: name, before: [page: snapshot], pages: [page])
+        scheduleInkActionCommit()
+    }
+
+    /// 这个动作接下来要动到哪些页(必须在改动之前调用,才能拿到正确的"动作前"快照)
+    private func notePagesInAction(_ pages: [Int]) {
+        guard var action = pendingAction else { return }
+        for page in pages where page >= 0 {
+            if action.before[page] == nil {
+                action.before[page] = snapshotDrawing(page: page)
+            }
+            action.pages.insert(page)
+        }
+        pendingAction = action
+    }
+
+    private func scheduleInkActionCommit() {
+        actionCommitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.commitInkActionNow() }
+        actionCommitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    /// 动作结束:把涉及的所有页「动作后」的快照一起收进**一条**记录
+    /// (跨页书写因此只需要撤销一次)。等 0.35s 是为了让跨页切分/直线吸附先完成。
+    private func commitInkActionNow() {
+        actionCommitWork?.cancel()
+        actionCommitWork = nil
+        guard let action = pendingAction else { return }
+        pendingAction = nil
+        var after: [Int: PKDrawing] = [:]
+        for page in action.pages {
+            after[page] = snapshotDrawing(page: page)
+        }
+        let entry = InkUndoEntry(name: action.name, before: action.before, after: after)
+        guard !entry.isEmpty else { return }
+        inkUndo.push(entry)
+        DiagLog.log("pencil: undo push \(action.name) pages=\(action.pages.sorted()) depth=\(inkUndo.undoDepth)")
+    }
+
+    private func applyInkSnapshots(_ snapshots: [Int: PKDrawing]) {
+        for (page, drawing) in snapshots {
+            if let overlay = overlays[page] {
+                overlay.suppressInkPostProcessing(for: 0.8)
+                overlay.applyCanvasSnapshot(drawing)
+                overlay.flushSave()
+            } else {
+                var stored = drawing
+                stored.transform(using: CGAffineTransform(translationX: 0, y: -InkGeometry.pageTopY()))
+                inkStore?.save(
+                    docSha: docSha,
+                    page: page,
+                    data: stored.dataRepresentation(),
+                    scale: Double(InkGeometry.scale)
+                )
+            }
+        }
+    }
+
+    /// 撤销:优先走统一栈(可跨页);栈空时退回 PencilKit 自带栈(兼容老记录)。
+    /// v0.16.2:记录笔画数变化 —— 真机日志里出现过「30 笔 → 一次保存 10 笔」的整页回退。
     func undo() {
+        commitInkActionNow()
+        if let entry = inkUndo.popUndo() {
+            applyInkSnapshots(entry.before)
+            inkUndo.pushRedo(entry)
+            DiagLog.log("pencil: undo \(entry.name) pages=\(entry.before.keys.sorted()) depth=\(inkUndo.undoDepth)")
+            return
+        }
         guard let canvas = activeCanvas ?? overlays.values.first?.canvas else {
             DiagLog.log("pencil: undo ignored (no canvas)")
             return
@@ -237,10 +343,16 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         let before = canvas.drawing.strokes.count
         canvas.becomeFirstResponder()
         canvas.undoManager?.undo()
-        DiagLog.log("pencil: undo \(before) -> \(canvas.drawing.strokes.count) strokes")
+        DiagLog.log("pencil: undo (legacy) \(before) -> \(canvas.drawing.strokes.count) strokes")
     }
 
     func redo() {
+        if let entry = inkUndo.popRedo() {
+            applyInkSnapshots(entry.after)
+            inkUndo.pushUndoBack(entry)
+            DiagLog.log("pencil: redo \(entry.name) pages=\(entry.after.keys.sorted()) depth=\(inkUndo.redoDepth)")
+            return
+        }
         guard let canvas = activeCanvas ?? overlays.values.first?.canvas else {
             DiagLog.log("pencil: redo ignored (no canvas)")
             return
@@ -248,7 +360,7 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         let before = canvas.drawing.strokes.count
         canvas.becomeFirstResponder()
         canvas.undoManager?.redo()
-        DiagLog.log("pencil: redo \(before) -> \(canvas.drawing.strokes.count) strokes")
+        DiagLog.log("pencil: redo (legacy) \(before) -> \(canvas.drawing.strokes.count) strokes")
     }
 
     func setMarkMode(_ on: Bool) {
@@ -259,6 +371,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     }
 
     func flushAll() {
+        // v0.27.0:收尾前先把未落定的动作收进撤销栈,避免"最后一笔撤不掉"
+        commitInkActionNow()
         for (_, overlay) in overlays {
             overlay.flushSave()
         }
@@ -277,6 +391,10 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     var onOverflow: ((Int, PKStroke) -> Bool)?
     /// v0.23.2:笔迹越过页顶 → 搬到上一页底部
     var onOverflowUp: ((Int, PKStroke) -> Bool)?
+    /// v0.27.0:一次用户动作(落笔/橡皮/形状/书法/清空)的开始与结束 —— provider 用它把
+    /// 涉及到的所有页(含跨页时的相邻页)合成**一条**撤销记录。
+    var onActionBegin: ((String, PKDrawing?) -> Void)?
+    var onActionEnd: (() -> Void)?
 
     // MARK: - v0.22.0 自研橡皮(可调大小 / 局部擦除)
 
@@ -318,6 +436,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private var calliPreviewLayer: CAShapeLayer?
     /// v0.25.1:跨页检查的调度状态(见 `scheduleOverflowCheck`)
     private var overflowCheckWork: DispatchWorkItem?
+    /// v0.27.0:在这个时刻之前,不做跨页切分/直线吸附(撤销装回快照后要静一会儿)
+    private var postProcessSuppressUntil: CFAbsoluteTime = 0
     private var pendingOverflowIndex: Int?
     /// 防止「切分 → 写回 drawing → drawingDidChange → 再切分」的递归
     private var transferring = false
@@ -504,6 +624,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         switch gesture.state {
         case .began:
             onCanvasBecameActive?(canvas)   // 撤销目标 = 这一页(自研手势不走 PencilKit 的回调)
+            onActionBegin?("书法", canvasSnapshot)
             calliUndoSnapshot = canvas.drawing
             calliBaseStrokes = canvas.drawing.strokes
             calliBeginIndex = calliBaseStrokes.count
@@ -580,6 +701,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         // 书法笔走的是自研手势,不会触发 canvasViewDidEndUsingTool —— 跨页切分要自己收尾
         pendingOverflowIndex = idx
         scheduleOverflowCheck()
+        onActionEnd?()
     }
 
     // MARK: - 自研工具手势(橡皮 / 激光笔 / 形状共用一个 pan)
@@ -605,6 +727,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         switch gesture.state {
         case .began:
             eraseUndoSnapshot = canvas.drawing
+            onActionBegin?("橡皮", canvasSnapshot)
             lastErasePoint = point
             lastEraseAt = 0
             eraseSegment(from: point, to: point)
@@ -627,6 +750,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             lastErasePoint = nil
             eraseUndoSnapshot = nil
             flushSave()
+            onActionEnd?()
         default:
             break
         }
@@ -766,6 +890,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         switch gesture.state {
         case .began:
             shapeUndoSnapshot = canvas.drawing
+            onActionBegin?("形状", canvasSnapshot)
             shapeStartCanvas = point
             updateShapePreview(from: point, to: point)
         case .changed:
@@ -778,6 +903,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             shapePreviewLayer = nil
             guard let start else { return }
             commitShape(from: start, to: point)
+            onActionEnd?()
         default:
             break
         }
@@ -984,6 +1110,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     // v0.14.0:落笔回调(撤销目标)+ 真机诊断
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         onCanvasBecameActive?(canvasView)
+        // v0.27.0:动作开始 —— 此刻 drawing 还不含这一笔,正好是"之前"的快照
+        onActionBegin?("笔画", canvasSnapshot)
         // v0.24.0:记下本次落笔的下标 —— 抬笔后精确处理"这一笔",不再靠 creationDate 的 3 秒窗口
         strokeIndexAtBegin = canvasView.drawing.strokes.count
         DiagLog.log("pencil: tool BEGIN page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
@@ -1003,10 +1131,14 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         // 现在只记下下标,由 `scheduleOverflowCheck()`(drawing 变化 / 0.1s 兜底)去执行。
         pendingOverflowIndex = beginIndex
         scheduleOverflowCheck()
+        // v0.27.0:动作结束(真正入栈要等跨页切分/吸附完成后再拍"之后"的快照)
+        onActionEnd?()
     }
 
     /// 跨页检查的防抖调度:同一笔在 drawing 更新前后可能被触发多次,只保留最后一次。
     private func scheduleOverflowCheck() {
+        // v0.27.0:撤销/重做装回快照后短时间内不做后处理,否则「撤销跨页一笔」会被立刻重新切开
+        guard CFAbsoluteTimeGetCurrent() >= postProcessSuppressUntil else { return }
         overflowCheckWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -1152,10 +1284,24 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
     }
 
+    /// v0.27.0:当前画布画面的值快照(`PKDrawing` 写时复制,取快照零成本)
+    var canvasSnapshot: PKDrawing { canvas.drawing }
+
+    /// v0.27.0:撤销/重做装回快照后,短暂关闭跨页切分与直线吸附后处理
+    func suppressInkPostProcessing(for seconds: TimeInterval) {
+        postProcessSuppressUntil = CFAbsoluteTimeGetCurrent() + seconds
+    }
+
+    /// v0.27.0:把快照装回画布(撤销/重做用)
+    func applyCanvasSnapshot(_ drawing: PKDrawing) {
+        canvas.drawing = drawing
+    }
+
     /// v0.23.0:清空整页手写(登记一条撤销,可恢复)
     func clearInk() {
         let snapshot = canvas.drawing
         guard !snapshot.strokes.isEmpty else { return }
+        onActionBegin?("清空本页", canvasSnapshot)
         canvas.drawing = PKDrawing()
         if let undo = canvas.undoManager {
             undo.registerUndo(withTarget: self) { target in
@@ -1163,6 +1309,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             }
         }
         flushSave()
+        onActionEnd?()
         DiagLog.log("pencil: page \(pageIndex) cleared \(snapshot.strokes.count) strokes")
     }
 
