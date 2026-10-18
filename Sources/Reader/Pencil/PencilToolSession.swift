@@ -1,9 +1,9 @@
 import SwiftUI
 import PencilKit
 
-/// v0.15.0:手写工具类型(Notability 四件套)
+/// v0.15.0:手写工具类型(Notability 四件套 + 蜡笔)
 enum PencilToolKind: String, CaseIterable, Identifiable {
-    case pen, pencil, marker, lasso, eraser
+    case pen, pencil, marker, crayon, lasso, eraser
 
     var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .pen: return "钢笔"
         case .pencil: return "铅笔"
         case .marker: return "荧光笔"
+        case .crayon: return "蜡笔"
         case .lasso: return "套索"
         case .eraser: return "橡皮"
         }
@@ -22,6 +23,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable {
         case .pen: return "pencil.tip"
         case .pencil: return "pencil"
         case .marker: return "highlighter"
+        case .crayon: return "scribble"
         case .lasso: return "lasso"
         case .eraser: return "eraser"
         }
@@ -39,6 +41,9 @@ final class PencilToolSession: ObservableObject {
     }
     @Published var colorIndex: Int = 0 { didSet { persist() } }
     @Published var markerColorIndex: Int = 0 { didSet { persist() } }
+    /// v0.17.0:自定义颜色(取色器)—— RGBA 0xRRGGBBAA;colorIndex = -1 时生效
+    @Published var customInkRGBA: Int = 0xE4572EFF { didSet { persist() } }
+    @Published var customMarkerRGBA: Int = 0xFFD400CC { didSet { persist() } }
     /// 0…4 五档笔宽(Notability 托盘为 5 档尺寸圆点)
     @Published var widthIndex: Int = 2 { didSet { persist() } }
     /// 橡皮:false = 局部(bitmap,擦过即擦),true = 整笔(vector,整条笔迹消失)
@@ -72,6 +77,12 @@ final class PencilToolSession: ObservableObject {
         }
         colorIndex = defaults.integer(forKey: "pencilColorIndex")
         markerColorIndex = defaults.integer(forKey: "pencilMarkerIndex")
+        if defaults.object(forKey: "pencilCustomInkRGBA") != nil {
+            customInkRGBA = defaults.integer(forKey: "pencilCustomInkRGBA")
+        }
+        if defaults.object(forKey: "pencilCustomMarkerRGBA") != nil {
+            customMarkerRGBA = defaults.integer(forKey: "pencilCustomMarkerRGBA")
+        }
         widthIndex = defaults.object(forKey: "pencilWidthIndex") == nil
             ? 2
             : defaults.integer(forKey: "pencilWidthIndex")
@@ -93,11 +104,32 @@ final class PencilToolSession: ObservableObject {
     var currentUIColor: UIColor {
         switch kind {
         case .eraser:
-            return Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
+            return colorIndex < 0 ? customInkColor : Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
         case .marker:
-            return Self.markerColors[clamped(markerColorIndex, 0, Self.markerColors.count - 1)]
+            return markerColorIndex < 0 ? customMarkerColor : Self.markerColors[clamped(markerColorIndex, 0, Self.markerColors.count - 1)]
         default:
-            return Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
+            return colorIndex < 0 ? customInkColor : Self.inkColors[clamped(colorIndex, 0, Self.inkColors.count - 1)]
+        }
+    }
+
+    var customInkColor: UIColor { UIColor(rgba: UInt32(truncatingIfNeeded: customInkRGBA)) }
+    var customMarkerColor: UIColor { UIColor(rgba: UInt32(truncatingIfNeeded: customMarkerRGBA)) }
+
+    /// v0.17.0:取色器选色 —— 直接落到"自定义颜色"并选中(index = -1)
+    func setCustomColor(_ color: Color) {
+        let ui = UIColor(color)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
+        let rgba = (UInt32(clamping: Int(r * 255)) << 24)
+            | (UInt32(clamping: Int(g * 255)) << 16)
+            | (UInt32(clamping: Int(b * 255)) << 8)
+            | UInt32(clamping: Int(a * 255))
+        if kind == .marker {
+            customMarkerRGBA = Int(rgba)
+            markerColorIndex = -1
+        } else {
+            customInkRGBA = Int(rgba)
+            colorIndex = -1
         }
     }
 
@@ -109,22 +141,28 @@ final class PencilToolSession: ObservableObject {
         case .pen: return [1.2, 2.0, 3.2, 4.8, 7.0][clamped(widthIndex, 0, 4)]
         case .pencil: return [1.0, 1.6, 2.4, 3.6, 5.2][clamped(widthIndex, 0, 4)]
         case .marker: return [10, 16, 24, 34, 46][clamped(widthIndex, 0, 4)]
+        case .crayon: return [2.5, 4.0, 6.0, 9.0, 13.0][clamped(widthIndex, 0, 4)]
         case .lasso, .eraser: return 0
         }
     }
 
-    func makeTool() -> PKTool {
+    /// v0.17.0:`scale` = 画布超采样倍数 —— 工具宽度按画布坐标放大,视觉宽度不变。
+    func makeTool(scale: CGFloat = 1) -> PKTool {
         switch kind {
         case .pen:
-            return PKInkingTool(.pen, color: currentUIColor, width: width)
+            return PKInkingTool(.pen, color: currentUIColor, width: width * scale)
         case .pencil:
-            return PKInkingTool(.pencil, color: currentUIColor, width: width)
+            return PKInkingTool(.pencil, color: currentUIColor, width: width * scale)
         case .marker:
-            return PKInkingTool(.marker, color: currentUIColor, width: width)
+            return PKInkingTool(.marker, color: currentUIColor, width: width * scale)
+        case .crayon:
+            return PKInkingTool(.crayon, color: currentUIColor, width: width * scale)
         case .lasso:
             return PKLassoTool()
         case .eraser:
-            return PKEraserTool(eraserWhole ? .vector : .bitmap)
+            let type: PKEraserTool.EraserType = eraserWhole ? .vector : .bitmap
+            // v0.17.0:橡皮宽度同样按画布坐标放大,否则超采样后视觉上会缩成 1/3
+            return PKEraserTool(eraserType: type, width: PKEraserTool.defaultWidth(for: type) * scale)
         }
     }
 
@@ -218,6 +256,8 @@ final class PencilToolSession: ObservableObject {
         defaults.set(kind.rawValue, forKey: "pencilToolKind")
         defaults.set(colorIndex, forKey: "pencilColorIndex")
         defaults.set(markerColorIndex, forKey: "pencilMarkerIndex")
+        defaults.set(customInkRGBA, forKey: "pencilCustomInkRGBA")
+        defaults.set(customMarkerRGBA, forKey: "pencilCustomMarkerRGBA")
         defaults.set(widthIndex, forKey: "pencilWidthIndex")
         defaults.set(eraserWhole, forKey: "pencilEraserWhole")
         defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")

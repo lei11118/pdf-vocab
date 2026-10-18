@@ -389,7 +389,7 @@ final class ReaderCoordinator: NSObject {
         // v0.9.0(M4):Pencil 标记层(PDFPageOverlayViewProvider 按页叠 PKCanvasView;不改动原 PDF)
         let provider = PencilOverlayProvider(
             pdfView: view, docSha: docSha, inkStore: inkStore, markMode: markMode,
-            tool: toolSession?.makeTool(), rulerActive: toolSession?.rulerActive ?? false
+            tool: toolSession?.makeTool(scale: InkGeometry.scale), rulerActive: toolSession?.rulerActive ?? false
         )
         overlayProvider = provider
         provider.onStrokeEnded = { [weak self] in
@@ -1299,7 +1299,7 @@ final class ReaderCoordinator: NSObject {
             guard let provider = self.overlayProvider, let session = self.toolSession else { return }
             let start = CFAbsoluteTimeGetCurrent()
             provider.setRulerActive(session.rulerActive)
-            provider.setTool(session.makeTool())
+            provider.setTool(session.makeTool(scale: InkGeometry.scale))
             let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
             DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
         }

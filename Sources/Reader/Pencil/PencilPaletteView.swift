@@ -184,7 +184,7 @@ struct PencilPaletteView: View {
                 eraserPanel
             case .lasso:
                 lassoPanel
-            case .pen, .pencil, .marker:
+            case .pen, .pencil, .marker, .crayon:
                 inkPanel
             }
 
@@ -255,6 +255,7 @@ struct PencilPaletteView: View {
         switch session.kind {
         case .pen, .pencil: return "颜色 · 笔宽"
         case .marker: return "半透明 · 五档宽度"
+        case .crayon: return "蜡质纹理 · 五档宽度"
         case .eraser: return session.eraserWhole ? "整笔擦除" : "局部擦除"
         case .lasso: return "圈选后可移动 / 删除"
         }
@@ -269,6 +270,17 @@ struct PencilPaletteView: View {
                 Spacer(minLength: 0)
             }
 
+            // v0.17.0:任意取色(Notability 的取色器);选中后 colorIndex = -1
+            HStack(spacing: DS.Space.xs) {
+                ColorPicker("", selection: customColorBinding, supportsOpacity: false)
+                    .labelsHidden()
+                    .frame(width: 28, height: 28)
+                Text(session.kind == .marker ? "自定义荧光色" : "自定义墨色")
+                    .font(DS.Fonts.micro)
+                    .foregroundStyle(DS.foreground3)
+                Spacer(minLength: 0)
+            }
+
             HStack(spacing: DS.Space.s) {
                 sizeDots
                 Spacer(minLength: 0)
@@ -276,6 +288,15 @@ struct PencilPaletteView: View {
                     .frame(width: 92)
             }
         }
+    }
+
+    private var customColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                Color(uiColor: session.kind == .marker ? session.customMarkerColor : session.customInkColor)
+            },
+            set: { session.setCustomColor($0) }
+        )
     }
 
     private var eraserPanel: some View {

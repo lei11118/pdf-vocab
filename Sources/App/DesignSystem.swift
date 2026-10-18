@@ -359,6 +359,16 @@ extension UIColor {
             alpha: 1.0
         )
     }
+
+    /// v0.17.0:自定义笔色(RGBA 0xRRGGBBAA)
+    convenience init(rgba: UInt32) {
+        self.init(
+            red: CGFloat((rgba >> 24) & 0xFF) / 255.0,
+            green: CGFloat((rgba >> 16) & 0xFF) / 255.0,
+            blue: CGFloat((rgba >> 8) & 0xFF) / 255.0,
+            alpha: CGFloat(rgba & 0xFF) / 255.0
+        )
+    }
 }
 
 /// 纸纹背景(可选):暖白底 + 细微纸纹。v0.15.0 起文档库/词表改用中性面 `DS.background1`,

@@ -157,17 +157,17 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.isOpaque = false
         canvas.delegate = self
         // v0.14.0:工具由外部会话驱动(保底黑笔);绘制手势只收 Pencil(公开属性第二道闸)
-        canvas.tool = tool ?? PKInkingTool(.pen, color: .black, width: 2.5)
+        canvas.tool = tool ?? PKInkingTool(.pen, color: .black, width: 2.5 * InkGeometry.scale)
         canvas.isRulerActive = rulerActive
         canvas.drawingGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
-        canvas.translatesAutoresizingMaskIntoConstraints = false
+        // v0.17.0:高清书写 —— 画布 bounds = 页面 ×3,再用 1/3 变换压回页面大小;
+        // 栅格化密度随画布尺寸提高,屏幕放大时不再糊。约束改为 layoutSubviews 手工布局。
+        canvas.translatesAutoresizingMaskIntoConstraints = true
+        canvas.layer.anchorPoint = .zero
+        canvas.layer.position = .zero
+        canvas.transform = InkGeometry.inverseTransform
+        canvas.bounds = CGRect(origin: .zero, size: InkGeometry.canvasSize(for: CGSize(width: 1, height: 1)))
         addSubview(canvas)
-        NSLayoutConstraint.activate([
-            canvas.leadingAnchor.constraint(equalTo: leadingAnchor),
-            canvas.trailingAnchor.constraint(equalTo: trailingAnchor),
-            canvas.topAnchor.constraint(equalTo: topAnchor),
-            canvas.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
         loadInk()
         marking = markMode
     }
@@ -237,10 +237,18 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // v0.17.0:画布始终是页面 ×InkGeometry.scale,再压回页面大小
+        let target = InkGeometry.canvasSize(for: bounds.size)
+        if target.width > 1, canvas.bounds.size != target {
+            canvas.bounds = CGRect(origin: .zero, size: target)
+            canvas.layer.position = .zero
+            canvas.transform = InkGeometry.inverseTransform
+            canvas.contentSize = target
+        }
         // 诊断:叠加层尺寸(真机核对"是否随缩放变换"的关键一行)
         if bounds.size != lastLoggedSize, bounds.width > 1 {
             lastLoggedSize = bounds.size
-            DiagLog.log("pencil: page \(pageIndex) overlay \(Int(bounds.width))x\(Int(bounds.height))")
+            DiagLog.log("pencil: page \(pageIndex) overlay \(Int(bounds.width))x\(Int(bounds.height)) canvas \(Int(target.width))x\(Int(target.height))")
         }
     }
 
@@ -248,11 +256,23 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     private func loadInk() {
         defer { loaded = true }
-        guard let data = inkStore?.drawing(docSha: docSha, page: pageIndex), !data.isEmpty else { return }
-        if let drawing = try? PKDrawing(data: data) {
-            canvas.drawing = drawing
-            DiagLog.log("pencil: page \(pageIndex) ink loaded \(canvas.drawing.strokes.count) strokes")
+        guard let record = inkStore?.drawing(docSha: docSha, page: pageIndex), !record.data.isEmpty else { return }
+        guard var drawing = try? PKDrawing(data: record.data) else { return }
+        // v0.17.0:老数据(scale=1)按当前超采样倍数放大并回写,避免每次打开重算
+        let target = Double(InkGeometry.scale)
+        if record.scale > 0.001, abs(record.scale - target) > 0.001 {
+            let factor = CGFloat(target / record.scale)
+            drawing.transform(using: CGAffineTransform(scaleX: factor, y: factor))
+            inkStore?.save(
+                docSha: docSha,
+                page: pageIndex,
+                data: drawing.dataRepresentation(),
+                scale: target
+            )
+            DiagLog.log("pencil: page \(pageIndex) ink migrated \(record.scale)x -> \(Int(target))x")
         }
+        canvas.drawing = drawing
+        DiagLog.log("pencil: page \(pageIndex) ink loaded \(canvas.drawing.strokes.count) strokes (scale \(Int(target))x)")
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -288,7 +308,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private func saveNow() {
         guard loaded, let inkStore, !docSha.isEmpty else { return }
         let data = canvas.drawing.dataRepresentation()
-        inkStore.save(docSha: docSha, page: pageIndex, data: data)
+        inkStore.save(docSha: docSha, page: pageIndex, data: data, scale: Double(InkGeometry.scale))
         DiagLog.log("pencil: page \(pageIndex) ink saved \(canvas.drawing.strokes.count) strokes")
     }
 }

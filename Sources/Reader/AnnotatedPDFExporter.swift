@@ -51,10 +51,14 @@ enum AnnotatedPDFExporter {
                             VocabStore.highlightColor(named: colorName).withAlphaComponent(0.4).setFill()
                             imageContext.cgContext.fill(mapped)
                         }
-                        // Pencil 手写(画布坐标 = 页面点尺寸)
-                        if let data = ink.drawing(docSha: docSha, page: i),
-                           let drawing = try? PKDrawing(data: data),
+                        // Pencil 手写(画布坐标 = 页面点 × scale;导出前归一化到页面坐标)
+                        if let record = ink.drawing(docSha: docSha, page: i),
+                           var drawing = try? PKDrawing(data: record.data),
                            !drawing.strokes.isEmpty {
+                            if record.scale > 0.001, abs(record.scale - 1) > 0.001 {
+                                let factor = CGFloat(1 / record.scale)
+                                drawing.transform(using: CGAffineTransform(scaleX: factor, y: factor))
+                            }
                             let inkImage = drawing.image(from: CGRect(origin: .zero, size: pageBounds.size), scale: scale)
                             inkImage.draw(in: CGRect(origin: .zero, size: pixelSize))
                         }

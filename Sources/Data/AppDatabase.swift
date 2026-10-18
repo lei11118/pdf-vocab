@@ -170,6 +170,13 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["wordId", "idx"])
             }
         }
+        migrator.registerMigration("v10.inkScale") { db in
+            // v0.17.0:高清书写 —— 画布按页面 ×K 超采样,笔迹坐标随之放大;
+            // 老数据的坐标是 1×,按 scale=1 记录,加载时自动放大迁移。
+            try db.alter(table: "pencil_ink") { t in
+                t.add(column: "scale", .double).notNull().defaults(to: 1)
+            }
+        }
         return migrator
     }
 }
