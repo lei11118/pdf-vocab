@@ -87,16 +87,28 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     }
 
     /// v0.14.0:撤销 / 重做(目标 = 最近落笔画布;PencilKit 自带 undo 栈)。
+    /// v0.16.2:记录笔画数变化 —— 真机日志里出现过「30 笔 → 一次保存 10 笔」的整页回退,
+    /// 需要确诊是否是误触撤销(弧形工具盘/双指轻点)把大量笔迹一起撤掉。
     func undo() {
-        guard let canvas = activeCanvas ?? overlays.values.first?.canvas else { return }
+        guard let canvas = activeCanvas ?? overlays.values.first?.canvas else {
+            DiagLog.log("pencil: undo ignored (no canvas)")
+            return
+        }
+        let before = canvas.drawing.strokes.count
         canvas.becomeFirstResponder()
         canvas.undoManager?.undo()
+        DiagLog.log("pencil: undo \(before) -> \(canvas.drawing.strokes.count) strokes")
     }
 
     func redo() {
-        guard let canvas = activeCanvas ?? overlays.values.first?.canvas else { return }
+        guard let canvas = activeCanvas ?? overlays.values.first?.canvas else {
+            DiagLog.log("pencil: redo ignored (no canvas)")
+            return
+        }
+        let before = canvas.drawing.strokes.count
         canvas.becomeFirstResponder()
         canvas.undoManager?.redo()
+        DiagLog.log("pencil: redo \(before) -> \(canvas.drawing.strokes.count) strokes")
     }
 
     func setMarkMode(_ on: Bool) {

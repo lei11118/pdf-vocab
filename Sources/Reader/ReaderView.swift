@@ -448,7 +448,6 @@ struct ReaderView: View {
                             session: pencilTools,
                             anchor: arcAnchor,
                             bounds: geo.size,
-                            onUndo: { readerHandle.coordinator?.undoInk() },
                             onDismiss: { self.arcAnchor = nil }
                         )
                     }

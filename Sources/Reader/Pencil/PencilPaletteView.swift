@@ -58,6 +58,7 @@ struct PencilPaletteView: View {
             divider
 
             Button {
+                DiagLog.log("palette: expand -> \(!expanded)")
                 withAnimation(DS.Motion.spring) { expanded.toggle() }
             } label: {
                 HStack(spacing: 5) {
@@ -99,6 +100,7 @@ struct PencilPaletteView: View {
     private func toolButton(_ tool: PencilToolKind) -> some View {
         let selected = session.kind == tool
         return Button {
+            DiagLog.log("palette: tap tool=\(tool.rawValue) selected=\(selected)")
             if selected {
                 // Notability:点当前工具 = 展开/收起风格托盘;点其他工具 = 立即切换去写。
                 withAnimation(DS.Motion.spring) { expanded.toggle() }
@@ -141,6 +143,7 @@ struct PencilPaletteView: View {
 
     private var rulerButton: some View {
         Button {
+            DiagLog.log("palette: ruler -> \(!session.rulerActive)")
             session.toggleRuler()
         } label: {
             Image(systemName: "ruler")

@@ -161,7 +161,11 @@ final class PencilToolSession: ObservableObject {
     }
 
     /// 直尺是叠加在画布上的辅助层,不改变当前笔具;适合 Notability 式“画直线/表格”。
+    /// v0.16.2:直尺只对墨迹笔有意义 —— 套索/橡皮下开启时先切回钢笔,避免 PencilKit 少见组合。
     func toggleRuler() {
+        if !rulerActive, kind == .lasso || kind == .eraser {
+            kind = .pen
+        }
         rulerActive.toggle()
     }
 
