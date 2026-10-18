@@ -76,6 +76,7 @@ struct ReaderView: View {
                 pencilTools.autoReturnFromEraser = value
             }
             .onAppear {
+                pencilTools.attachDocument(doc.sha256)
                 pencilTools.autoReturnFromEraser = pencilAutoReturnEraser
             }
     }
@@ -269,6 +270,15 @@ struct ReaderView: View {
                 Menu {
                     Toggle(isOn: $nightMode) {
                         Label("夜间模式", systemImage: "moon.fill")
+                    }
+                    Menu {
+                        Button("适应宽度") { readerHandle.coordinator?.zoomToFitWidth() }
+                        Button("100%") { readerHandle.coordinator?.zoomToPercent(100) }
+                        Button("200%") { readerHandle.coordinator?.zoomToPercent(200) }
+                        Button("400%") { readerHandle.coordinator?.zoomToPercent(400) }
+                        Button("800%") { readerHandle.coordinator?.zoomToPercent(800) }
+                    } label: {
+                        Label("缩放", systemImage: "magnifyingglass.circle")
                     }
                     Button {
                         showVocab = true

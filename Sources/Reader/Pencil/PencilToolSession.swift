@@ -223,6 +223,53 @@ final class PencilToolSession: ObservableObject {
         kind = lastInkKind
     }
 
+    // MARK: - v0.18.0:每个 PDF 记忆自己的工具
+
+    private var docKey: String?
+
+    /// 打开某份 PDF 时调用:恢复这份文档上次用的工具/颜色/笔宽/橡皮/直尺。
+    /// 没有记录时沿用全局默认(上次在任何文档里用的那套)。
+    func attachDocument(_ sha: String) {
+        guard !sha.isEmpty, docKey != sha else { return }
+        docKey = sha
+        let defaults = UserDefaults.standard
+        let prefix = "pencil.doc.\(sha)."
+        guard defaults.object(forKey: prefix + "width") != nil else {
+            DiagLog.log("pencil: doc tools default (no saved state)")
+            return
+        }
+        if let raw = defaults.string(forKey: prefix + "kind"),
+           let saved = PencilToolKind(rawValue: raw),
+           saved != .eraser {
+            kind = saved
+        }
+        if defaults.object(forKey: prefix + "color") != nil {
+            colorIndex = defaults.integer(forKey: prefix + "color")
+        }
+        if defaults.object(forKey: prefix + "markerColor") != nil {
+            markerColorIndex = defaults.integer(forKey: prefix + "markerColor")
+        }
+        widthIndex = defaults.integer(forKey: prefix + "width")
+        if defaults.object(forKey: prefix + "eraserWhole") != nil {
+            eraserWhole = defaults.bool(forKey: prefix + "eraserWhole")
+        }
+        if defaults.object(forKey: prefix + "ruler") != nil {
+            rulerActive = defaults.bool(forKey: prefix + "ruler")
+        }
+        DiagLog.log("pencil: doc tools loaded kind=\(kind.rawValue) width=\(widthIndex)")
+    }
+
+    private func persistDoc(_ defaults: UserDefaults) {
+        guard let docKey else { return }
+        let prefix = "pencil.doc.\(docKey)."
+        defaults.set(kind.rawValue, forKey: prefix + "kind")
+        defaults.set(colorIndex, forKey: prefix + "color")
+        defaults.set(markerColorIndex, forKey: prefix + "markerColor")
+        defaults.set(widthIndex, forKey: prefix + "width")
+        defaults.set(eraserWhole, forKey: prefix + "eraserWhole")
+        defaults.set(rulerActive, forKey: prefix + "ruler")
+    }
+
     // MARK: - 工具隐藏 / 恢复(可定制工具带)
 
     var hiddenSet: Set<String> { Set(hiddenToolRaw.split(separator: ",").map(String.init)) }
@@ -262,5 +309,6 @@ final class PencilToolSession: ObservableObject {
         defaults.set(eraserWhole, forKey: "pencilEraserWhole")
         defaults.set(autoReturnFromEraser, forKey: "pencilAutoReturnEraser")
         defaults.set(rulerActive, forKey: "pencilRulerActive")
+        persistDoc(defaults)
     }
 }

@@ -68,6 +68,11 @@ final class ReaderCoordinator: NSObject {
     private var lastInkActivityAt: CFAbsoluteTime = 0
     /// v0.16.2:挤压节流(挤压是持续事件,按住会连发回调)
     private var lastSqueezeAt: CFAbsoluteTime = 0
+    /// v0.18.0:书写贴边自动滚动(只观察 Pencil,不抢 PencilKit 手势)
+    private var pencilObserver: PencilTouchObserver?
+    private var autoScrollLink: CADisplayLink?
+    private var autoScrollSpeed: CGFloat = 0
+    private weak var autoScrollView: UIScrollView?
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
     private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
     private var appliedKey: String?
@@ -238,6 +243,7 @@ final class ReaderCoordinator: NSObject {
         holdMenuWork?.cancel()
         holdMenuWork = nil
         stopAutoscroll()
+        stopAutoScroll()
         loupe.end()
         menu.dismiss()
         clearJumpHighlight()
@@ -441,6 +447,13 @@ final class ReaderCoordinator: NSObject {
         // v0.11.0(M4-B):悬停预览(Pencil 悬停;仅在选词模式 + 开关开启时生效,见 handleHover)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
         view.addGestureRecognizer(hover)
+
+        // v0.18.0:书写贴边自动滚动 —— 只观察 Pencil 位置,永不识别,不影响绘制
+        let observer = PencilTouchObserver()
+        observer.onMove = { [weak self] point in self?.pencilMoved(to: point) }
+        observer.onEnd = { [weak self] in self?.stopAutoScroll() }
+        view.addGestureRecognizer(observer)
+        pencilObserver = observer
 
         suppressNativeSelection(in: view)
         observeScrolling()
@@ -1261,6 +1274,7 @@ final class ReaderCoordinator: NSObject {
             return
         }
         clearHover()
+        if !on { stopAutoScroll() }
         overlayProvider?.setMarkMode(on)
         if on { applyToolSession() }   // v0.14.0:进入标记模式即套用当前笔具
         pencilPressRef?.isEnabled = !on
@@ -1307,6 +1321,80 @@ final class ReaderCoordinator: NSObject {
 
     private static func toolSignature(_ session: PencilToolSession) -> String {
         "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.rulerActive)"
+    }
+
+    // MARK: - v0.18.0 书写贴边自动滚动(连续书写第一步)
+
+    /// Pencil 在屏幕上移动 → 靠近上下边缘时滚动 PDF,写到底不必抬手去滑。
+    /// 只读取 Pencil 位置(PencilTouchObserver 永不识别手势),不干扰 PencilKit 绘制。
+    private func pencilMoved(to point: CGPoint) {
+        guard markMode, let pdfView else { return }
+        let enabled = (UserDefaults.standard.object(forKey: "writingAutoScroll") as? Bool) ?? true
+        guard enabled else { return }
+        let height = pdfView.bounds.height
+        guard height > 100 else { return }
+        let edge: CGFloat = 90
+        if point.y > height - edge {
+            let t = min((point.y - (height - edge)) / edge, 1)
+            autoScrollSpeed = 700 * t
+        } else if point.y < edge {
+            let t = min((edge - point.y) / edge, 1)
+            autoScrollSpeed = -700 * t
+        } else {
+            stopAutoScroll()
+            return
+        }
+        startAutoScroll()
+    }
+
+    private func startAutoScroll() {
+        guard autoScrollLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(stepAutoScroll(_:)))
+        link.add(to: .main, forMode: .common)
+        autoScrollLink = link
+    }
+
+    private func stopAutoScroll() {
+        autoScrollLink?.invalidate()
+        autoScrollLink = nil
+        autoScrollSpeed = 0
+    }
+
+    @objc private func stepAutoScroll(_ link: CADisplayLink) {
+        guard markMode, autoScrollSpeed != 0, let pdfView else {
+            stopAutoScroll()
+            return
+        }
+        if autoScrollView == nil {
+            autoScrollView = PencilTouchIsolation.scrollViews(in: pdfView).first
+        }
+        guard let scroll = autoScrollView, scroll.contentSize.height > scroll.bounds.height else { return }
+        let dt = max(link.targetTimestamp - link.timestamp, 1.0 / 120.0)
+        let maxY = max(scroll.contentSize.height - scroll.bounds.height, 0)
+        let next = min(max(scroll.contentOffset.y + autoScrollSpeed * CGFloat(dt), 0), maxY)
+        guard abs(next - scroll.contentOffset.y) > 0.1 else { return }
+        scroll.contentOffset = CGPoint(x: scroll.contentOffset.x, y: next)
+    }
+
+    // MARK: - v0.18.0 缩放
+
+    /// 适应宽度(PDFView 的 autoScales 是整页适应,这里按当前页宽度算)
+    func zoomToFitWidth() {
+        guard let pdfView, let page = pdfView.currentPage else { return }
+        let pageWidth = page.bounds(for: pdfView.displayBox).width
+        guard pageWidth > 1, pdfView.bounds.width > 1 else { return }
+        pdfView.autoScales = false
+        let target = (pdfView.bounds.width - 24) / pageWidth
+        pdfView.scaleFactor = min(max(target, pdfView.minScaleFactor), pdfView.maxScaleFactor)
+        DiagLog.log("zoom: fit width \(String(format: "%.2f", pdfView.scaleFactor))")
+    }
+
+    /// 100% = 1 PDF 点对 1 屏幕点
+    func zoomToPercent(_ percent: CGFloat) {
+        guard let pdfView else { return }
+        pdfView.autoScales = false
+        pdfView.scaleFactor = min(max(percent / 100, pdfView.minScaleFactor), pdfView.maxScaleFactor)
+        DiagLog.log("zoom: \(Int(percent))% -> \(String(format: "%.2f", pdfView.scaleFactor))")
     }
 
     func undoInk() { overlayProvider?.undo() }
@@ -1948,15 +2036,24 @@ enum PencilTouchIsolation {
 // MARK: - v0.14.0:Apple Pencil 系统手势映射
 
 extension ReaderCoordinator: UIPencilInteractionDelegate {
-    /// Pencil 轻点两下:橡皮 ⇄ 上一支笔(仅标记模式有意义)
+    /// Pencil 轻点两下:可在设置里映射为「橡皮 ⇄ 上一支笔 / 撤销 / 关闭」
     func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
         guard markMode, let session = toolSession else { return }
-        session.toggleEraser()
-        applyToolSession()
-        DiagLog.log("pencil: double-tap tool=\(session.kind.rawValue)")
+        let action = UserDefaults.standard.string(forKey: "pencilDoubleTapAction") ?? "eraser"
+        switch action {
+        case "undo":
+            DiagLog.log("pencil: double-tap -> undo")
+            undoInk()
+        case "off":
+            DiagLog.log("pencil: double-tap ignored (off)")
+        default:
+            session.toggleEraser()
+            applyToolSession()
+            DiagLog.log("pencil: double-tap tool=\(session.kind.rawValue)")
+        }
     }
 
-    /// v0.15.0:Pencil Pro 挤压 = 呼出弧形工具盘(选词模式下先进入标记模式)
+    /// Pencil Pro 挤压:设置里可选「弧形工具盘 / 橡皮 / 关闭」
     /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(日志显示 0.7s 内 20 次),
     /// v0.16.0 每次回调都重设所有画布工具并重新弹盘 + 触觉 → 主线程卡死、还可能让工具盘
     /// 在笔尖下反复重排导致误触撤销。这里做 0.6s 节流,且不在挤压里套用工具。
@@ -1964,8 +2061,20 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastSqueezeAt > 0.6 else { return }
         lastSqueezeAt = now
+        let action = UserDefaults.standard.string(forKey: "pencilSqueezeAction") ?? "arc"
+        guard action != "off" else {
+            DiagLog.log("pencil: squeeze ignored (off)")
+            return
+        }
         if !markMode {
             setMarkMode(true)
+        }
+        if action == "eraser", let session = toolSession {
+            session.toggleEraser()
+            applyToolSession()
+            PencilHaptics.selectionCompleted(at: lastTouchViewPoint)
+            DiagLog.log("pencil: squeeze -> eraser")
+            return
         }
         let point = lastTouchViewPoint == .zero
             ? CGPoint(x: pdfView?.bounds.midX ?? 0, y: pdfView?.bounds.midY ?? 0)
