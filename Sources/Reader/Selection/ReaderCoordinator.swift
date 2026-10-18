@@ -215,6 +215,12 @@ final class ReaderCoordinator: NSObject {
         ocrWordsCache.removeAll()
         autoHighlightDonePages.removeAll()
         DiagLog.log("ocr: scanned=\(docScanned)")
+        // v0.23.0:恢复双页显示偏好(菜单里的开关持久化)
+        if let view = pdfView {
+            view.displayMode = UserDefaults.standard.bool(forKey: "readerTwoPage")
+                ? .twoUpContinuous
+                : .singlePageContinuous
+        }
         suppressNativeSelection(in: pdfView)
         observeScrolling()
         for delay in [0.5, 2.0] {
@@ -1865,6 +1871,26 @@ final class ReaderCoordinator: NSObject {
         hasUserInteracted = true
         pdfView.go(to: page)
         DiagLog.log("jump: page->\(idx)")
+    }
+
+    // MARK: - v0.23.0 缩略图 / 双页 / 清空本页
+
+    /// 供缩略图面板读取(面板只需要页数与页面,不持有 PDFView)
+    var document: PDFDocument? { pdfView?.document }
+
+    /// 双页显示(左右并排,仍连续滚动)
+    func setTwoUp(_ on: Bool) {
+        guard let pdfView else { return }
+        pdfView.displayMode = on ? .twoUpContinuous : .singlePageContinuous
+        DiagLog.log("display: twoUp=\(on ? 1 : 0)")
+    }
+
+    /// 清空当前页手写(程序化改画布,登记一条撤销)
+    func clearCurrentPageInk() {
+        guard let pdfView, let page = pdfView.currentPage,
+              let index = pdfView.document?.index(for: page) else { return }
+        let cleared = overlayProvider?.clearInk(pageIndex: index) ?? false
+        DiagLog.log("pencil: clear page \(index) -> \(cleared ? 1 : 0)")
     }
 
     // MARK: - 拖选计算(纯点坐标 + 词粒度)

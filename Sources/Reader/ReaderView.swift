@@ -52,6 +52,10 @@ struct ReaderView: View {
     @StateObject private var pencilTools = PencilToolSession()
     /// v0.15.0:挤压弧形工具盘锚点(nil = 收起)
     @State private var arcAnchor: CGPoint?
+    /// v0.23.0:页面缩略图 / 双页显示 / 清空本页手写
+    @State private var showThumbnails = false
+    @State private var confirmClearInk = false
+    @AppStorage("readerTwoPage") private var twoPage = false
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.dismiss) private var dismiss
@@ -137,6 +141,23 @@ struct ReaderView: View {
             }
             .sheet(item: $shareFile) { item in
                 ActivityShareView(items: [item.url])
+            }
+            .sheet(isPresented: $showThumbnails) {
+                if let doc = readerHandle.coordinator?.document {
+                    PageThumbnailSheet(document: doc, currentPage: currentPage) { target in
+                        readerHandle.coordinator?.go(toPage: target)
+                        currentPage = target
+                    }
+                }
+            }
+            .alert("清空本页手写?", isPresented: $confirmClearInk) {
+                Button("清空", role: .destructive) { readerHandle.coordinator?.clearCurrentPageInk() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("只清除当前页的笔迹,不影响其他页;清空后可用撤销恢复。")
+            }
+            .onChange(of: twoPage) { _, on in
+                readerHandle.coordinator?.setTwoUp(on)
             }
     }
 
@@ -287,6 +308,19 @@ struct ReaderView: View {
                         Button("4000%") { readerHandle.coordinator?.zoomToPercent(4000) }
                     } label: {
                         Label("缩放", systemImage: "magnifyingglass.circle")
+                    }
+                    Toggle(isOn: $twoPage) {
+                        Label("双页显示", systemImage: "book.pages")
+                    }
+                    Button {
+                        showThumbnails = true
+                    } label: {
+                        Label("页面缩略图", systemImage: "square.grid.3x2")
+                    }
+                    Button(role: .destructive) {
+                        confirmClearInk = true
+                    } label: {
+                        Label("清空本页手写", systemImage: "eraser.line.dashed")
                     }
                     Button {
                         showVocab = true

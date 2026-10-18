@@ -124,6 +124,13 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         }
     }
 
+    /// v0.23.0:清空某页手写(缩略图/菜单的「清空本页」)
+    func clearInk(pageIndex: Int) -> Bool {
+        guard let overlay = overlays[pageIndex] else { return false }
+        overlay.clearInk()
+        return true
+    }
+
     /// v0.20.0:把上一页切下来的溢出段平移到下一页画布顶部。
     /// 页面已设为无缝(pageBreakMargins = .zero),页底到下一页页顶的距离就是 0,
     /// 所以只需减去「页高 × 超采样倍数」。
@@ -820,6 +827,20 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
         canvas.drawing = PKDrawing(strokes: strokes)
         DiagLog.log("pencil: page \(pageIndex) overflow \(parts.outside.count)pts trimmed")
+    }
+
+    /// v0.23.0:清空整页手写(登记一条撤销,可恢复)
+    func clearInk() {
+        let snapshot = canvas.drawing
+        guard !snapshot.strokes.isEmpty else { return }
+        canvas.drawing = PKDrawing()
+        if let undo = canvas.undoManager {
+            undo.registerUndo(withTarget: self) { target in
+                target.canvas.drawing = snapshot
+            }
+        }
+        flushSave()
+        DiagLog.log("pencil: page \(pageIndex) cleared \(snapshot.strokes.count) strokes")
     }
 
     private func scheduleSave() {
