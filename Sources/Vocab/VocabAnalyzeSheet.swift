@@ -138,7 +138,7 @@ struct VocabAnalyzeSheet: View {
                 Text("筛选")
             }
             Section {
-                ForEach(visible.prefix(600)) { entry in
+                ForEach(visible.prefix(2_000)) { entry in
                     Button {
                         if selected.contains(entry.lemma) {
                             selected.remove(entry.lemma)
@@ -170,7 +170,7 @@ struct VocabAnalyzeSheet: View {
                     .buttonStyle(.plain)
                 }
             } header: {
-                Text("候选单词(按出现次数排序,最多显示 600)")
+                Text("候选单词(按出现次数排序,最多显示 2000)")
             } footer: {
                 Text("已收录的词已自动排除;批量收录只建词卡(不携带位置),单词高亮会随下次在文中选中该词自动出现。")
             }
@@ -214,28 +214,42 @@ struct VocabAnalyzeSheet: View {
         analyzing = true
         let url = self.url
         let db = store.db
+        let docSha = self.docSha
         let entries = await Task.detached(priority: .userInitiated) { () -> [AnalyzeEntry] in
             guard let doc = PDFDocument(url: url) else { return [] }
-            var text = ""
-            for i in 0..<doc.pageCount {
-                if let pageText = doc.page(at: i)?.string {
-                    text += pageText
-                    text += "\n"
-                }
-                if text.count > 2_000_000 { break }
-            }
-            guard !text.isEmpty else { return [] }
             let regex = try? NSRegularExpression(pattern: "[A-Za-z][A-Za-z'’-]+")
-            let ns = text as NSString
             var freq: [String: Int] = [:]
-            for match in regex?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? [] {
-                let token = ns.substring(with: match.range).lowercased()
-                if token.count < 3 { continue }
-                freq[token, default: 0] += 1
+            var textPages = 0
+
+            func count(_ text: String) {
+                guard let regex, !text.isEmpty else { return }
+                let ns = text as NSString
+                for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                    let token = ns.substring(with: match.range).lowercased()
+                    if token.count < 3 { continue }
+                    freq[token, default: 0] += 1
+                }
             }
+
+            // v0.23.2:逐页统计,**不再用 2M 字符上限截断**(旧实现大书只分析前半本)
+            for i in 0..<doc.pageCount {
+                guard let pageText = doc.page(at: i)?.string, !pageText.isEmpty else { continue }
+                textPages += 1
+                count(pageText)
+            }
+
+            // v0.23.2:扫描版(文字层覆盖不足一半)用整本 OCR 词表补全
+            if textPages * 2 < doc.pageCount {
+                let ocrWords = OCRStore(db: db).allWordTexts(docSha: docSha)
+                for word in ocrWords { count(word) }
+                DiagLog.log("analyze: textPages=\(textPages)/\(doc.pageCount) ocrWords=\(ocrWords.count)")
+            }
+
+            guard !freq.isEmpty else { return [] }
             let collected = Set(VocabStore(db: db).listWords().map { $0.lemma })
             var merged: [String: (surface: String, count: Int, tags: Set<String>, collins: Int, oxford: Bool)] = [:]
-            for (token, count) in freq.sorted(by: { $0.value > $1.value }).prefix(4_000) {
+            // v0.23.2:top 4000 → 20000,避免「低频词整批消失」
+            for (token, count) in freq.sorted(by: { $0.value > $1.value }).prefix(20_000) {
                 var lemma = token
                 var surface = token
                 var tags: Set<String> = []

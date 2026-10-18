@@ -55,7 +55,8 @@ struct ReaderView: View {
     /// v0.23.0:页面缩略图 / 双页显示 / 清空本页手写
     @State private var showThumbnails = false
     @State private var confirmClearInk = false
-    @AppStorage("readerTwoPage") private var twoPage = false
+    /// v0.23.2:页面排布(纵向连续 / 横向连续 / 双页并排)
+    @AppStorage("readerLayoutMode") private var layoutMode = "vertical"
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.dismiss) private var dismiss
@@ -108,6 +109,12 @@ struct ReaderView: View {
                 // v0.23.0:回主页即退出书写 —— 再进任何书都从「选词阅读」开始
                 markMode = false
                 arcAnchor = nil
+                // v0.23.2:退出「选中的工具」(只退回工具类,墨迹笔按书保留)
+                if [PencilToolKind.eraser, .lasso, .shape, .laser].contains(pencilTools.kind) {
+                    pencilTools.kind = .pen
+                }
+                readerHandle.coordinator?.setMarkMode(false)
+                DiagLog.log("reader: disappear -> markMode=false tool=\(pencilTools.kind.rawValue)")
                 saveProgressNow()
             }
     }
@@ -156,8 +163,8 @@ struct ReaderView: View {
             } message: {
                 Text("只清除当前页的笔迹,不影响其他页;清空后可用撤销恢复。")
             }
-            .onChange(of: twoPage) { _, on in
-                readerHandle.coordinator?.setTwoUp(on)
+            .onChange(of: layoutMode) { _, mode in
+                readerHandle.coordinator?.setLayoutMode(mode)
             }
     }
 
@@ -309,8 +316,24 @@ struct ReaderView: View {
                     } label: {
                         Label("缩放", systemImage: "magnifyingglass.circle")
                     }
-                    Toggle(isOn: $twoPage) {
-                        Label("双页显示", systemImage: "book.pages")
+                    Menu {
+                        Button {
+                            layoutMode = "vertical"
+                        } label: {
+                            Label("纵向连续", systemImage: layoutMode == "vertical" ? "checkmark" : "rectangle.portrait")
+                        }
+                        Button {
+                            layoutMode = "horizontal"
+                        } label: {
+                            Label("横向连续", systemImage: layoutMode == "horizontal" ? "checkmark" : "rectangle")
+                        }
+                        Button {
+                            layoutMode = "twoUp"
+                        } label: {
+                            Label("双页并排", systemImage: layoutMode == "twoUp" ? "checkmark" : "book.pages")
+                        }
+                    } label: {
+                        Label("页面排布", systemImage: "rectangle.split.2x1")
                     }
                     Button {
                         showThumbnails = true

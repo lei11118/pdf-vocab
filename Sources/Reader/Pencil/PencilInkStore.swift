@@ -77,4 +77,26 @@ enum InkGeometry {
     /// v0.20.0:跨页书写 —— 画布向下多留的"出血区"(页面点)。
     /// 笔尖越过页底后可继续写,抬笔时超出的部分切到下一页。
     static let bleed: CGFloat = 240
+
+    /// v0.23.2:向上的出血区 —— 从下一页往回写到上一页时,笔尖越过页顶也能继续。
+    /// 抬笔时把 y<0 的部分切到上一页底部。
+    static let bleedTop: CGFloat = 200
+
+    /// v0.23.2:带上下出血的画布 bounds(原点 0;页面顶部在 y = bleedTop×scale 处)
+    static func canvasBounds(for pageSize: CGSize) -> CGRect {
+        CGRect(
+            x: 0,
+            y: 0,
+            width: pageSize.width * scale,
+            height: (pageSize.height + bleedTop + bleed) * scale
+        )
+    }
+
+    /// 画布层在页面坐标系里的位置(上移 bleedTop,使页面顶部落在画布 y=bleedTop×scale)
+    static var canvasOrigin: CGPoint {
+        CGPoint(x: 0, y: -bleedTop)
+    }
+
+    /// 页面顶部/底部在画布坐标里的 y
+    static func pageTopY() -> CGFloat { bleedTop * scale }
 }

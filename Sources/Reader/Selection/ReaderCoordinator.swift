@@ -215,11 +215,12 @@ final class ReaderCoordinator: NSObject {
         ocrWordsCache.removeAll()
         autoHighlightDonePages.removeAll()
         DiagLog.log("ocr: scanned=\(docScanned)")
-        // v0.23.0:恢复双页显示偏好(菜单里的开关持久化)
+        // v0.23.2:恢复页面排布(纵向/横向/双页)
         if let view = pdfView {
-            view.displayMode = UserDefaults.standard.bool(forKey: "readerTwoPage")
-                ? .twoUpContinuous
-                : .singlePageContinuous
+            setLayoutMode(UserDefaults.standard.string(forKey: "readerLayoutMode") ?? "vertical")
+            // PDFKit 设文档后会重置缩放上下限,这里重新放开到 4000%
+            applyZoomLimits(view)
+            DiagLog.log("zoom: limits after load max=\(String(format: "%.1f", view.maxScaleFactor))")
         }
         suppressNativeSelection(in: pdfView)
         observeScrolling()
@@ -1405,24 +1406,40 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - v0.18.0 缩放
 
-    /// 适应宽度(PDFView 的 autoScales 是整页适应,这里按当前页宽度算)
-    func zoomToFitWidth() {
-        guard let pdfView, let page = pdfView.currentPage else { return }
-        let pageWidth = page.bounds(for: pdfView.displayBox).width
-        guard pageWidth > 1, pdfView.bounds.width > 1 else { return }
-        pdfView.autoScales = false
-        let target = (pdfView.bounds.width - 24) / pageWidth
-        pdfView.scaleFactor = min(max(target, pdfView.minScaleFactor), pdfView.maxScaleFactor)
-        DiagLog.log("zoom: fit width \(String(format: "%.2f", pdfView.scaleFactor))")
-    }
+        /// v0.23.2:PDFKit 在设置 document / 切换 displayMode 之后会把 `maxScaleFactor` 重置回
+        /// 内部默认值(真机反馈「800% 以上无区别」就是被夹回上限)。任何改缩放前先重设上下限。
+        private func applyZoomLimits(_ view: PDFView) {
+            if abs(view.minScaleFactor - 0.2) > 0.001 { view.minScaleFactor = 0.2 }
+            if abs(view.maxScaleFactor - 40) > 0.001 { view.maxScaleFactor = 40 }
+        }
 
-    /// 100% = 1 PDF 点对 1 屏幕点
-    func zoomToPercent(_ percent: CGFloat) {
-        guard let pdfView else { return }
-        pdfView.autoScales = false
-        pdfView.scaleFactor = min(max(percent / 100, pdfView.minScaleFactor), pdfView.maxScaleFactor)
-        DiagLog.log("zoom: \(Int(percent))% -> \(String(format: "%.2f", pdfView.scaleFactor))")
-    }
+        /// 设置缩放;若仍被 PDFKit 夹回(上限被内部重置),把上限提到目标值再试一次并记日志。
+        private func setScale(_ target: CGFloat, on view: PDFView, tag: String) {
+            applyZoomLimits(view)
+            let clamped = min(max(target, view.minScaleFactor), view.maxScaleFactor)
+            view.scaleFactor = clamped
+            if view.scaleFactor < clamped - 0.05 {
+                view.maxScaleFactor = max(view.maxScaleFactor, target)
+                view.scaleFactor = target
+            }
+            DiagLog.log("zoom[\(tag)]: want=\(String(format: "%.2f", target)) got=\(String(format: "%.2f", view.scaleFactor)) max=\(String(format: "%.2f", view.maxScaleFactor))")
+        }
+
+        /// 适应宽度(PDFView 的 autoScales 是整页适应,这里按当前页宽度算)
+        func zoomToFitWidth() {
+            guard let pdfView, let page = pdfView.currentPage else { return }
+            let pageWidth = page.bounds(for: pdfView.displayBox).width
+            guard pageWidth > 1, pdfView.bounds.width > 1 else { return }
+            pdfView.autoScales = false
+            setScale((pdfView.bounds.width - 24) / pageWidth, on: pdfView, tag: "fit")
+        }
+
+        /// 100% = 1 PDF 点对 1 屏幕点
+        func zoomToPercent(_ percent: CGFloat) {
+            guard let pdfView else { return }
+            pdfView.autoScales = false
+            setScale(percent / 100, on: pdfView, tag: "\(Int(percent))%")
+        }
 
     func undoInk() { overlayProvider?.undo() }
     func redoInk() { overlayProvider?.redo() }
@@ -1832,7 +1849,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("restore: begin page=\(pageIndex) zoom=\(String(format: "%.2f", state.zoom)) auto=\(state.zoomAuto)")
         if !state.zoomAuto, state.zoom > 0.01 {
             pdfView.autoScales = false
-            pdfView.scaleFactor = min(max(CGFloat(state.zoom), pdfView.minScaleFactor), pdfView.maxScaleFactor)
+            setScale(CGFloat(state.zoom), on: pdfView, tag: "restore")
         } else {
             pdfView.autoScales = true
         }
@@ -1880,9 +1897,29 @@ final class ReaderCoordinator: NSObject {
 
     /// 双页显示(左右并排,仍连续滚动)
     func setTwoUp(_ on: Bool) {
+        setLayoutMode(on ? "twoUp" : "vertical")
+    }
+
+    /// v0.23.2:页面排布 —— 纵向连续 / 横向连续 / 双页并排。
+    /// 切换 displayMode 会重置缩放上限,所以切完重新放开并恢复原缩放。
+    func setLayoutMode(_ raw: String) {
         guard let pdfView else { return }
-        pdfView.displayMode = on ? .twoUpContinuous : .singlePageContinuous
-        DiagLog.log("display: twoUp=\(on ? 1 : 0)")
+        let scale = pdfView.scaleFactor
+        let auto = pdfView.autoScales
+        switch raw {
+        case "horizontal":
+            pdfView.displayMode = .singlePageContinuous
+            pdfView.displayDirection = .horizontal
+        case "twoUp":
+            pdfView.displayMode = .twoUpContinuous
+            pdfView.displayDirection = .vertical
+        default:
+            pdfView.displayMode = .singlePageContinuous
+            pdfView.displayDirection = .vertical
+        }
+        applyZoomLimits(pdfView)
+        if !auto { pdfView.scaleFactor = scale }
+        DiagLog.log("display: layout=\(raw)")
     }
 
     /// 清空当前页手写(程序化改画布,登记一条撤销)

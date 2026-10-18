@@ -96,6 +96,9 @@ struct PDFKitView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PDFView, context: Context) {
+        // v0.23.2:PDFKit 会在文档/布局变化后重置缩放上下限 —— 每次更新都重新放开
+        if abs(uiView.maxScaleFactor - 40) > 0.001 { uiView.maxScaleFactor = 40 }
+        if abs(uiView.minScaleFactor - 0.2) > 0.001 { uiView.minScaleFactor = 0.2 }
         context.coordinator.onPageChanged = onPageChanged
         context.coordinator.onSelectionInfo = onSelectionInfo
         context.coordinator.onTranslate = onTranslate

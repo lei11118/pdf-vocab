@@ -58,6 +58,17 @@ final class OCRStore: @unchecked Sendable {
         return done == 1
     }
 
+    /// v0.23.2:整本 OCR 词文本(词频分析补全扫描版用;按页/词序输出)
+    func allWordTexts(docSha: String) -> [String] {
+        (try? db.dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT text FROM ocr_word WHERE docSha = ? ORDER BY page, idx",
+                arguments: [docSha]
+            )
+        }) ?? []
+    }
+
     /// 扫描版搜索(v0.12.0,M7):LIKE 命中词框 → 按行聚合(该行全部词,供片段与跳转高亮)。
     func searchLines(docSha: String, query: String, limit: Int = 100) -> [(page: Int, words: [OCRWord])] {
         var out: [(page: Int, words: [OCRWord])] = []

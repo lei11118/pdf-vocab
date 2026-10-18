@@ -92,42 +92,50 @@ struct ReaderSearchSheet: View {
         let (found, noteText) = await Task.detached(priority: .userInitiated) { () -> ([SearchHit], String?) in
             var out: [SearchHit] = []
             var noteText: String?
+            var seen = Set<String>()
             guard let doc = PDFDocument(url: url) else { return ([], "无法打开文档") }
+
+            // v0.23.2:文字层不再截断前 200 条 —— 整本全部命中都列出来
             let matches = doc.findString(q, withOptions: [.caseInsensitive, .diacriticInsensitive])
-            for selection in matches.prefix(200) {
+            for selection in matches {
                 guard let page = selection.pages.first else { continue }
                 let idx = doc.index(for: page)
                 let snippet = (selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let rects = selection.selectionsByLine().prefix(8).map { $0.bounds(for: page) }
+                let json = VocabStore.rectsToJSON(rects)
+                let key = "\(idx)|\(json)"
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
                 out.append(SearchHit(
                     page: idx,
                     snippet: snippet.isEmpty ? q : String(snippet.prefix(96)),
-                    rectsJSON: VocabStore.rectsToJSON(rects)
+                    rectsJSON: json
                 ))
             }
-            if out.isEmpty {
-                // 扫描版(或本文档文字层无匹配):OCR 词库按行搜索
-                let lines = ocrStore.searchLines(docSha: docSha, query: q)
-                out = lines.map { hit in
-                    let snippet = hit.words.map { $0.text }.joined(separator: " ")
-                    let pageBounds = doc.page(at: hit.page)?.bounds(for: .mediaBox)
-                    let rects: [CGRect] = pageBounds == nil ? [] : hit.words.map { word in
-                        OCRService.pageRect(from: word, pageBounds: pageBounds!)
-                    }
-                    return SearchHit(
-                        page: hit.page,
-                        snippet: String(snippet.prefix(96)),
-                        rectsJSON: VocabStore.rectsToJSON(rects)
-                    )
-                }
-                if !out.isEmpty {
-                    noteText = "来自扫描版 OCR 文字"
-                }
-            } else if matches.count > 200 {
-                noteText = "结果较多,仅显示前 200 条"
+
+            // v0.23.2:OCR 结果**始终合并**(扫描版,或文字层只覆盖部分页的书)
+            let lines = ocrStore.searchLines(docSha: docSha, query: q, limit: 500)
+            for hit in lines {
+                let snippet = hit.words.map { $0.text }.joined(separator: " ")
+                guard let pageBounds = doc.page(at: hit.page)?.bounds(for: .mediaBox) else { continue }
+                let rects = hit.words.map { OCRService.pageRect(from: $0, pageBounds: pageBounds) }
+                let json = VocabStore.rectsToJSON(rects)
+                let key = "\(hit.page)|\(json)"
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                out.append(SearchHit(
+                    page: hit.page,
+                    snippet: String(snippet.prefix(96)),
+                    rectsJSON: json
+                ))
+            }
+
+            out.sort { $0.page < $1.page }
+            if !out.isEmpty, !ocrStore.isDone(docSha: docSha) {
+                noteText = "OCR 还在识别中,扫描页的结果可能不完整"
             }
             if out.isEmpty {
-                noteText = "没有找到匹配(扫描版需等待 OCR 完成后可搜)"
+                noteText = "没有找到「\(q)」"
             }
             return (out, noteText)
         }.value
