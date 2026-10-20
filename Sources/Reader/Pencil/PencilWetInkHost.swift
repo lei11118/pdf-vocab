@@ -7,7 +7,8 @@ import PDFKit
 /// 因此书写过程中越过页缝的墨在抬笔前看不见(旧实现只能等抬笔再搬到邻页)。
 /// 这个视图是 `PDFView` 的直接子视图,固定在视口坐标里,永远盖在所有页之上:
 /// 常规笔只画「当前页矩形之外」的那一段(页内仍由 PencilKit 画),
-/// 书法/形状则整段预览都画在这里(激光仍留在页内叠层,不做跨页处理)。
+/// 形状预览则整段画在这里(激光仍留在页内叠层,不做跨页处理)。
+/// 上下左右四个方向都适用 —— 页外判定用的是页面矩形,与排布方向无关。
 ///
 /// 所有输入路径都用**页面本地坐标(y 向下)**,与墨迹库一致;
 /// 显示时按当前页的 CropBox 现算 page → view 仿射变换,所以滚动/缩放时只需重绘一次。
@@ -58,8 +59,16 @@ final class PencilWetInkHost: UIView {
     /// 显示/更新一笔湿墨。重复调用只替换内容,不重置显示链接。
     func show(_ stroke: PencilWetStroke) {
         self.stroke = stroke
+        ensureOnTop()
         startLink()
         redraw()
+    }
+
+    /// v0.29.0:PDFKit 加载文档/翻页/切换排布时会重建内部层级,可能把任何同级子视图压到下面。
+    /// 每次落笔前确认自己仍在最上层 —— 否则湿墨(页缝外那一段)就被页视图盖住,看起来"断了"。
+    private func ensureOnTop() {
+        guard let superview, superview.subviews.last !== self else { return }
+        superview.bringSubviewToFront(self)
     }
 
     func clear() {
@@ -160,7 +169,7 @@ struct PencilWetStroke {
     var path: UIBezierPath
     var color: UIColor
     var lineWidth: CGFloat
-    /// true = 用填充多边形(书法预览);false = 用描边折线(常规笔/激光/形状)
+    /// true = 用填充多边形;false = 用描边折线(常规笔/形状预览)
     var filled: Bool
     /// true = 只画当前页矩形之外的部分(常规笔;页内仍由 PencilKit 负责)
     var clipOutsidePage: Bool

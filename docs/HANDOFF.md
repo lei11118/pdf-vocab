@@ -1,6 +1,6 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
-> 交接时间:2026-10-19 · 当前版本:**v0.28.0(build 67)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
+> 交接时间:2026-10-20 · 当前版本:**v0.29.0(build 68)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 
 ---
@@ -11,20 +11,20 @@
 - **形态**:纯本地、无账号、无云同步、无内购、无埋点;免费 Apple ID 自签侧载(AltStore / SideStore / Sideloadly)。
 - **开发机**:Windows,**没有 Mac**。一切编译与打包走 GitHub Actions(`macos-26` + Xcode 26.6),产出未签名 IPA,用户自己侧载。
 - **代码规模**:52 个 Swift 文件 / 约 13,700 行;2 个第三方依赖(GRDB、ZIPFoundation),其余全 Apple 原生框架。
-- **状态**:M0–M7 里程碑全部完成。书写/阅读已迭代到 **v0.23.2**:Notability 式工具状态机、2×→3× 超采样、自研橡皮、跨页书写(上下双向)、直线吸附、形状(直线/矩形/椭圆/箭头)、激光笔、4000% 缩放、横向/双页排布、缩略图、每书工具记忆。
-- **下一步最该做的**:让用户真机验收 **v0.23.2 的六项修复**(§9.1),重点确认「跨页回写」「缩放是否真能过 800%」「全文搜索/词频是否覆盖全本」。验收前不要叠新功能。
+- **状态**:M0–M7 里程碑全部完成。书写/阅读已迭代到 **v0.29.0**:Notability 式工具状态机、2×→3× 超采样、自研橡皮、跨页书写(**上下左右四边**、按版面几何找邻页)、直线吸附、形状(直线/矩形/椭圆/箭头)、激光笔、4000% 缩放、横向/双页排布、缩略图、每书工具记忆。
+- **下一步最该做的**:让用户真机验收 **v0.29.0 的跨页四项**(§9.1),重点确认「竖排/横排/双页/页角」跨页连续与「一次撤销两半同时消失」。验收前不要叠新功能。
 
-### 0.1 新窗口速查(2026-10-18 收尾状态)
+### 0.1 新窗口速查(2026-10-20 收尾状态)
 
 | 项 | 值 |
 |---|---|
-| 最新版本 | **v0.28.0 / build 67**(`project.yml`) |
-| 最新 Release | 待发布(v0.27.0:https://github.com/lei11118/pdf-vocab/releases/tag/v0.27.0) |
-| 代码提交 | v0.28.0 代码 = 本节所在提交(HEAD) |
+| 最新版本 | **v0.29.0 / build 68**(`project.yml`) |
+| 最新 Release | v0.28.0:https://github.com/lei11118/pdf-vocab/releases/tag/v0.28.0 |
+| 代码提交 | v0.29.0 代码 = 本节所在提交(HEAD) |
 | 远端 HEAD | 与本地 `main` 一致(API 通道推送后已 `reset --soft origin/main` 对齐历史) |
 | 新环境第一步 | `git fetch origin && git reset --soft origin/main`(树相同,再提交即可对齐历史) |
-| CI | 全部绿;v0.25.1 的 build 见 `gh run list -L 3` |
-| 待验收 | §9.1:**v0.28.0 四项**(工具记忆 / 跨页连续 / 形状即时 / 书法显现)+ v0.26.0 页缝与每支笔记忆 + v0.27.0 统一撤销 |
+| CI | 全部绿;最新一次 build 见 `gh run list -L 3` |
+| 待验收 | §9.1:**v0.29.0 跨页四项**(竖排 / 横排 / 双页 / 页角)+ 书法已移除 + v0.28.0 工具记忆/形状即时 + v0.27.0 统一撤销 |
 
 **v0.25.0 新增的三条硬事实(改之前先看懂)**:
 6. **`PKCanvasView` 是 UIScrollView,`clipsToBounds` 默认为真 —— 超出 canvas.bounds 的墨迹会被直接裁掉。**
@@ -32,28 +32,40 @@
    再遇到"画到一半断掉/截断",先看日志 `stroke hit canvas edge (bleed exhausted)`。
 7. **纸面永远是白纸**:阅读区 `DS.paperFixed` + `PDFView.overrideUserInterfaceStyle = .light` + 画布同样钉在 `.light`。
    深色模式下 PencilKit 会按外观"适配"墨色,黑笔看起来发灰;夜间阅读请用「夜间模式」开关(只压纸面)。
-8. **书法笔的实时笔迹是自绘的**:书写过程用全局湿墨层画填充多边形(`CalligraphyInkBuilder.previewPath`),
-   抬笔才把整笔提交成 `PKStroke`。**不要**再在手势进行中写 `canvas.drawing` —— PencilKit 不保证重绘。
+8. **自研手势(橡皮/形状/激光)进行中不要写 `canvas.drawing`**:PencilKit 不保证重绘,
+   预览一律走自己的 `CAShapeLayer` 或全局湿墨层。(v0.29.0 已移除书法笔及 `CalligraphyInkBuilder`。)
 
-**v0.28.0 的三条新口径(改之前先看懂)**:
+**v0.29.0 的三条新口径(改之前先看懂)**:
+1. **跨页是四边的,不是上下两边的**:`InkGeometry.bleedX = 360`(左右出血)+ `bleedTop / bleed = 620`;
+   页面左上角在画布 `(bleedX×scale, bleedTop×scale)`。画布↔页面换算**只用**
+   `InkGeometry.canvasFromPage` / `pageFromCanvas` / `pageRectInCanvas(pageSize:)`,
+   别再手写 `±pageTopY()`(v0.28.0 的左右断页就是漏了 x 轴)。
+2. **邻页由版面几何决定**:`PencilOverlayProvider.neighborIndex(of:side:)` 在索引 ±6 内按页中心方向
+   找最近页(轴主导向 0.6),**不要**再写 `index ± 1` —— 双页并排时 +1 在右边、竖排时在下面、横排时没有下面。
+   位移用两页视图 rect 的 origin 差 ×`scale / scaleFactor`,不要用页高硬算。
+3. **一笔可能同时越两条边**:`overflowCandidates` 按越界量从大到小返回**所有**越界边,调用方逐条试,
+   某条边没有邻页(竖排的左右、横排的上下)就换下一条;切分只取**连续**溢出段
+   (`splitRun`:跨出又折回的那截留在本页)。书法笔已移除,旧 `"calligraphy"` 存档解码为钢笔。
+
+**v0.28.0 的三条口径(仍然有效)**:
 1. **工具状态只有一个真相源**:`Sources/Reader/Pencil/PencilToolState.swift` 的 `PencilToolState`
    (kind / 每支笔 prefs / shapeKind / useCustomEraser / rulerActive),全局 + 按书各存一份 v2 JSON。
    `PencilToolSession` 每次变更 `stateRevision += 1`;`ReaderView` 只监听这一个值,
    `ReaderCoordinator.applyToolSession` 用 **latest-wins** 应用:同步套模式/手势,异步只赋 `canvas.tool`。
    **不要**再给单个属性挂 `onChange`,也不要再用"签名去重 + 单布尔"丢状态。
 2. **湿墨层**:`PencilWetInkHost` 是 `PDFView` 的直接子视图(固定在视口坐标),常规笔只画当前页矩形
-   **之外**的溢出段,书法/形状整段预览也画在这里。页内墨仍由 PencilKit 画。它解决的是
-   "下一页页视图遮住本页出血区墨迹"这一层遮挡。
-3. **书法笔是分段定宽提交**:同一 `creationDate` 的一组 `PKStroke`(每段固定 `size`),
-   不再依赖 PencilKit 是否遵守逐点 `size`;整笔橡皮按 `creationDate` 分组删除。
-   跨页切分处理的是"本次动作的整段下标范围",不是单笔。
+   **之外**的溢出段,形状整段预览也画在这里。页内墨仍由 PencilKit 画。它解决的是
+   "下一页页视图遮住本页出血区墨迹"这一层遮挡;`show()` 每次都会重新置顶(PDFKit 会重建层级)。
+3. **跨页切分处理"本次动作的整段下标范围",不是单笔**(`pendingOverflowStart`),目标页 0.5s 内
+   不二次切分;一笔跨两页以上只有**仍越界**才排队再查(防乒乓)。
 
 **v0.23.2 的三条关键实现(改之前先看懂,否则会错位/丢墨)**:
 1. **手写坐标 = 页面坐标,不含出血偏移**。画布 bounds 高 = `(页高 + bleedTop + bleed) × 3`(v0.25.0:两者都是 620),画布层 `position.y = -bleedTop`,所以页面顶部对应画布 y=`bleedTop×3`;`loadInk` 平移 `+bleedTop×3`、`saveNow` 平移 `-bleedTop×3`、导出直接用库里的页面坐标。任何新增的「直接读写 `canvas.drawing`」代码都必须遵守这条。
-2. **向上跨页用 `PencilStrokeTools.splitUpward(atY:)`**,不能用 `split(atY:)`(后者假设起点在阈值上方,反向写时 `firstIndex` 恒为 0);向下仍用 `split`。切完先用 `onOverflow/onOverflowUp` 确认目标页 overlay 就绪,成功才裁本页。
+2. **切分方向必须和越界边一致**(v0.29.0 起为 `splitBelow/splitAbove/splitRight/splitLeft`,共用 `splitRun`)。
+   统一走 `overflowCandidates` → `onMoveOverflow(pageIndex, side, stroke)` 确认目标页能接收,成功才裁本页。
 3. **PDFKit 会重置 `maxScaleFactor`**(设文档/切 `displayMode` 后),所以 `applyZoomLimits + setScale` 要在 `documentDidLoad`、每次缩放、`applyReadingState`、`updateUIView` 都调用;日志 `zoom[tag]: want/got/max` 用于判断是“上限被重置”还是“内部硬限制”。
-4. **v0.24.0:书法笔是自研渲染**(`PencilInkSampler.swift`):`InkSamplePanRecognizer` 只**读** `touchesMoved` 的原始采样(含 `force`/`azimuth`/`altitude`,并展开 `coalescedTouches`),`CalligraphyInkBuilder` 逐点算 `size`(笔锋夹角 + 压力 + 速度 + 起收笔收锋)生成一条 `PKStroke`。它是第四条"自研手势通道"(橡皮/形状/激光笔之外),同样靠 `canvas.drawingGestureRecognizer.isEnabled = false` 让位,**不碰任何系统 delegate**。
-5. **v0.24.0:跨页不再用 `creationDate` 3 秒窗口**。`canvasViewDidBeginUsingTool` 记 `strokeIndexAtBegin`,`didEndUsingTool` 用它定位"这一笔"(慢写 4–5 秒的长笔以前会漏切/漏吸附)。书法笔不走 PencilKit 回调,自己在 `.ended` 里调 `transferOverflowIfNeeded(preferredIndex: nil)`。
+4. ~~**v0.24.0:书法笔是自研渲染**~~ → **v0.29.0 已整条移除**;自研手势通道现在只剩橡皮/形状/激光(同样靠 `canvas.drawingGestureRecognizer.isEnabled = false` 让位,**不碰任何系统 delegate**)。
+5. **v0.24.0:跨页不再用 `creationDate` 3 秒窗口**。`canvasViewDidBeginUsingTool` 记 `strokeIndexAtBegin`,`didEndUsingTool` 用它定位"这一笔"(慢写 4–5 秒的长笔以前会漏切/漏吸附)。
 
 ---
 
@@ -192,14 +204,13 @@ Sources/
 │  ├─ Pencil/
 │  │  ├─ PencilOverlay.swift      914  PDFPageOverlayViewProvider + InkOverlayView(每页 PKCanvasView;上下出血/跨页/自研橡皮/形状/激光笔)
 │  │  ├─ PencilToolSession.swift  385   工具/颜色/5档笔宽/橡皮大小/形状/每书记忆
-│  │  ├─ PencilPaletteView.swift  535   Notability 式悬浮工具条(点当前工具展开样式层;8 工具)
-│  │  ├─ PencilArcMenu.swift      135   挤压弧形工具盘(直尺 + 8 工具,无撤销扇区;半径 150)
-│  │  ├─ PencilInkStore.swift     102  笔迹按页存取(GRDB)+ InkGeometry(scale 3 / bleedTop 200 / bleed 240)
-│  │  ├─ PencilInkSampler.swift   170  书法笔:原始采样(force/azimuth/altitude)+ 逐点变宽 PKStroke
+│  │  ├─ PencilPaletteView.swift  535   Notability 式悬浮工具条(点当前工具展开样式层;7 工具,书法已移除)
+│  │  ├─ PencilArcMenu.swift      135   挤压弧形工具盘(直尺 + 7 工具,无撤销扇区;半径 150)
+│  │  ├─ PencilInkStore.swift     102  笔迹按页存取(GRDB)+ InkGeometry(scale 3 / bleedX 360 / bleedTop 620 / bleed 620)
 │  │  ├─ ToolDockPosition.swift    66  工具条自由位置(归一化存取 + 钳制 + 磁吸)
-│  │  ├─ PencilStrokeTools.swift   91  按 y 切分(向下 split / 向上 splitUpward)+ 平移重建(保留 creationDate)
+│  │  ├─ PencilStrokeTools.swift   91  四边切分(splitBelow/Above/Right/Left,共用 splitRun 连续溢出段)+ 平移重建(保留 creationDate)
 │  │  ├─ PencilToolState.swift     —   v0.28.0 工具状态唯一真相源(v2 JSON / 全局+按书 / 迁移 / 容错解码)
-│  │  └─ PencilWetInkHost.swift     —   v0.28.0 全局湿墨层(常规笔页外溢出段、书法/形状预览)
+│  │  └─ PencilWetInkHost.swift     —   v0.28.0 全局湿墨层(常规笔页外溢出段、形状预览;每次 show 重新置顶)
 │  ├─ Selection/
 │  │  ├─ ReaderCoordinator.swift 2177  ★核心★ 取词/选区/菜单/手柄/拖选/OCR 兜底/手势隔离/Pencil 模式/工具会话/缩放/排布
 │  │  ├─ SelectionKit.swift       185  HandleMetrics(唯一几何口径)+ 选区合法性
@@ -277,7 +288,7 @@ Sources/
 
 ### 6.2 Pencil 手写(`Pencil/`)
 - **高清书写(v0.17.0 → v0.22.0)**:PDF 的页叠层会被 PDFView 的缩放变换放大,`PKCanvasView` 只按屏幕 scale 栅格化一次 → 笔迹被拉伸变糊(Apple 论坛确认 `contentScaleFactor` 无效)。对策 = **超采样画布**:`InkGeometry.scale = 3`,画布 bounds = 页面点 ×3(再叠上下出血),套 `1/3` 变换压回页面;笔宽 ×3 保持视觉粗细;**老笔迹加载时 `PKDrawing.transform` 放大并回写**(`pencil_ink.scale` 记录倍数);批注导出按倍数归一化。SDK 的 `PKEraserTool` 没有宽度参数,所以 v0.22 起用自研橡皮(半径按画布坐标 ×3,不受超采样影响)。
-- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。**画布高 = (页高 + 顶部 200 + 底部 240) × 3**,画布层 `position.y = -200`,容器保持页面尺寸给 PDFKit;**存储/导出始终是页面坐标**(loadInk/saveNow 做 ±200×3 平移,见 §0.1)。
+- 叠层:`PDFPageOverlayViewProvider` 给每页挂 `InkOverlayView`(容器)+ `PKCanvasView`(`drawingPolicy = .pencilOnly`、`isScrollEnabled = false`、`backgroundColor = .clear`、`drawingGestureRecognizer.allowedTouchTypes = [.pencil]`)。**画布 = (页宽 + 左右各 360)×(页高 + 上 620 + 下 620),再 ×3**,画布层 `position = (-360, -620)`,容器保持页面尺寸给 PDFKit;**存储/导出始终是页面坐标**(loadInk/saveNow 用 `InkGeometry.canvasFromPage` / `pageFromCanvas` 平移,见 §0.1)。
 - 模式切换:`select` 模式 `hitTest` 返回 nil(全穿透);`mark` 模式**无条件返回画布**(不判触摸类型)。
 - 让 Pencil 绘制不被滚动抢:遍历 PDFView 内所有 `UIScrollView`,把 `panGestureRecognizer.allowedTouchTypes = [.direct]` + `delaysContentTouches = false`,账本记原值,退出还原;**幂等重臂**(文档加载/变更/翻页/每次 updateUIView 都要重做,因为 PDFKit 会重建内部层级)。
 - 工具:**不用 PKToolPicker**(v0.14 起移除),自绘 `PencilPaletteView` + 自装 `UIPencilInteraction`:
@@ -291,8 +302,11 @@ Sources/
   - **v0.22 自研橡皮**:五档半径、局部/整笔、12ms 节流重建 `canvas.drawing`;可回退系统橡皮;
   - **v0.23 阅读**:4000% 缩放(预设 100/200/400/800/1500/2000/4000%)、页面排布(纵向/横向/双页)、页面缩略图、清空本页手写、双页显示;全文搜索合并 OCR、词频分析全本(OCR 补全);
   - **擦后回笔** = `canvasViewDidEndUsingTool` → `returnFromEraserIfNeeded()`,可在工具条右键菜单/设置页关闭。
-  - **v0.24 书法笔**:`PencilToolKind.calligraphy`。斜切笔尖(0/30/45/60/90°)+ 稳定化(一阶低通)+ 压力 + 速度收锋,逐点写 `PKStrokePoint.size` 得到**可变笔宽**;`InkSamplePanRecognizer` 只读原始触点(含 `coalescedTouches`),绘制手势让位。撤销仍走整页快照。**粗细不随方向变化 = PencilKit 没吃逐点 size**,退路是按 8 段拆成多笔、每笔固定宽度。
-  - **v0.28.0 全量重构**:①`PencilToolState` 统一状态(全局 + 按书 v2 JSON,含 shapeKind/useCustomEraser/rulerActive),`stateRevision` + latest-wins 应用;②`PencilWetInkHost` 全局湿墨层(常规笔页外溢出段 + 书法/形状预览),解决页缝遮挡;③跨页改为"本次动作下标范围"批量切分(书法分段一次全部处理),目标页 0.5s 内不再二次切分;④书法改为**共享 creationDate 的分段定宽笔迹**(必然可见),整笔橡皮按日期分组。
+  - ~~**v0.24 书法笔**~~ → **v0.29.0 已移除**(用户要求):`PencilInkSampler.swift` / `CalligraphyInkBuilder` /
+    整条自研书法手势与面板全部删除;旧存档里的 `"calligraphy"` 由容错解码回退成钢笔。
+  - **v0.28.0 全量重构**:①`PencilToolState` 统一状态(全局 + 按书 v2 JSON,含 shapeKind/useCustomEraser/rulerActive),`stateRevision` + latest-wins 应用;②`PencilWetInkHost` 全局湿墨层(常规笔页外溢出段 + 形状预览),解决页缝遮挡;③跨页改为"本次动作下标范围"批量切分,目标页 0.5s 内不再二次切分。
+  - **v0.29.0 跨页四边贯通**:左右出血 + `splitRight/splitLeft` + 版面几何找邻页 + 视图 origin 差算位移;
+    一笔越两条边时按越界量逐条试(某边没邻页就换下一条)。详见 `docs/RELEASE_v0.29.0.md`。
   - **v0.24 工具条可拖动**:`PencilPaletteView` 左侧握把(`onDockDragChanged/Ended/Reset`),`ReaderView` 用 `GeometryReader` 拿容器尺寸,`ToolDockPosition` 存**归一化比例**(x 0…1 从左到右、y 0…1 从底到顶),`clamp` 保证含展开样式层也不出屏,松手 `snapped` 磁吸回中线,双击握把复位。拖动时 `scaleEffect 1.03` + 阴影,松手 `DS.Motion.spring`。
 - 阅读 chrome(v0.16):浮动胶囊顶栏(返回 / 标题+页码跳转 / 专注 / ⋯)+ 底部「选词 · 手写」模式条;手写模式下底部换成工具条。**专注模式**隐藏顶栏与模式条,只留纸面与一个「退出专注」胶囊;四指轻点或顶栏按钮切换。
 - 撤销目标 = 最近一次 `canvasViewDidBeginUsingTool` 记下的活跃画布(`canvas.undoManager`)。
@@ -352,6 +366,7 @@ v0.15 起对齐逆向资料采样值(不是自创暖色):
 | **0.23.0** | **59** | 挤压工具盘跟随 Pencil Pro **悬停位置**弹出;回主页自动退出书写;缩放上限 **4000%**(2000/4000% 预设);新增**形状工具**(直线/矩形/椭圆/箭头)与**激光笔**(抬手淡出);弧盘扩到 9 扇区 |
 | **0.23.1** | **60** | 实用工具:页面缩略图导航(按需渲染)、双页显示、清空本页手写(可撤销) |
 | **0.24.0** | **62** | 用户六项反馈:页缝衔接(插值桥接 + 落笔下标)/ 生词本 UI 重构 + 拖动排序(v11 `sortOrder`)/ 按书恢复工具与书写状态 / **书法笔**(斜切笔锋 + 稳定化 + 压力)/ 工具条自由拖动(握把 + 磁吸 + 归一化记忆)/ 直线吸附与跨页改用「本次落笔」定位 |
+| **0.29.0** | **68** | **跨页四边贯通 + 移除书法**:①`InkGeometry.bleedX = 360`(左右出血),画布↔页面换算统一 `canvasFromPage/pageFromCanvas`;②`PencilStrokeTools` 新增 `splitRight/splitLeft`、`splitRun` 只取**连续**溢出段(跨出又折回留在本页);③邻页由 `neighborIndex` 按**版面几何**决定(不再 `index ± 1`),位移用两页视图 origin 差(页高/页宽不同、页缝有间距都对);④一笔越两条边时按越界量逐条试,目标页仍越界才多跳(防乒乓);⑤湿墨层每次落笔重新置顶、延迟清除 0.18→0.30s;⑥**书法笔整条移除**(旧存档解码为钢笔) |
 | **0.28.0** | **67** | **手写全量重构**:①工具状态收敛为 `PencilToolState`(v2 JSON,全局+按书,补齐 shapeKind/useCustomEraser/rulerActive),`stateRevision` + latest-wins 两段式应用;②新增 `PencilWetInkHost` 全局湿墨层(常规笔页外溢出段、书法/形状预览),修复书写过程中页缝被邻页遮挡;③跨页按"本次动作下标范围"批量切分(书法分段/形状多笔),目标页抑制二次切分;④书法改为共享 `creationDate` 的分段定宽 `PKStroke`,整笔橡皮按日期分组,不再赌 PencilKit 的逐点 size |
 | **0.27.0** | **66** | **统一撤销组**(§9.4-1):新增 `InkUndoStack`,一条记录 = 一组「页 → PKDrawing」前后快照(COW,取快照零成本),跨页一笔/橡皮/形状/书法/吸附/清空都只占一次撤销;`PKCanvasView` 的原生栈退为兜底;撤销装回后 0.8s 内关闭跨页切分与吸附(否则撤销的跨页笔会被立刻重新切开) |
 | **0.26.0** | **65** | ①**所有页合并成一张长纸**:关掉 `pageShadowsEnabled` / `displaysPageBreaks`(页影与页间分隔线是"每页像一张独立纸"的视觉根因,切排布后还要重钉),叠层 `clipsToBounds = false` 让出血区墨迹可见地越过页缝 ②**每支笔独立状态**:`PencilToolPrefs` 按工具存墨色/自定义色/笔宽/笔锋角度/稳定化/橡皮模式与大小,JSON 状态表按书 + 全局双写,进文档装回,切工具互不污染 |
@@ -383,24 +398,35 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 
 ## 9. 当前待办
 
-### 9.1 v0.28.0 / v0.26.0 / v0.27.0 真机验收(最优先)
+### 9.1 v0.29.0 / v0.28.0 / v0.26.0 / v0.27.0 真机验收(最优先)
 
-> **v0.28.0 四项(先验这四条)**:
-> 1. **工具记忆**:钢笔 2 档 → 荧光笔最粗 → 切回钢笔仍细;书法 90° → 形状选椭圆 + 整笔橡皮 + 直尺开
->    → 回文档库/杀 App 重进同一本书:四支笔、形状、橡皮模式、直尺全部保持,第一次拖动就是椭圆。
+> **v0.29.0 跨页四项(先验这四条)**:
+> 1. **竖排(上下)**:页底向下写、下一页页顶向上写;书写过程中页缝外应始终有墨(湿墨层),
+>    抬笔后两半接上。日志 `pencil: wet begin/end`、`pencil: overflow moved … below|above`。
+> 2. **横排(左右)**:切「横向」排布,页右边缘向右写、下一页左边缘向左写;同样要求连续。
+>    日志 `pencil: overflow moved … right|left`。若出现 `dropped (page N has no neighbour)`,
+>    说明 `neighborIndex` 没找到目标页(把日志连同排布一起反馈)。
+> 3. **双页并排**:右页跨到左页、下排跨到上排都要落位正确(以前 `index±1` 会搬到右边而不是下面)。
+> 4. **页角**:在右下角写一笔同时越过页底与页右,页底那一段必须搬走(以前只会试越界最大的那条边,
+>    一旦那条边没邻页就整笔放弃)。日志 `overflow trimmed idx=… kept=… hops=…`。
+>
+> 另外确认:**撤销一次两半同时消失、重做一起回来**(v0.27.0 的 `InkUndoStack` 不受本版影响);
+> **工具带已无书法**;之前存过书法的书,其它工具记忆(颜色/笔宽/橡皮/直尺/形状)仍在,
+> 当前工具回退成钢笔而不是整份状态失效。
+
+> **v0.28.0 剩余三项(与跨页一起验)**:
+> 1. **工具记忆**:钢笔 2 档 → 荧光笔最粗 → 切回钢笔仍细;形状选椭圆 + 整笔橡皮 + 直尺开
+>    → 回文档库/杀 App 重进同一本书:各支笔、形状、橡皮模式、直尺全部保持,第一次拖动就是椭圆。
 >    日志 `pencil: state loaded rev=… scope=doc` / `pencil: state applied rev=…`。
-> 2. **跨页连续**:页底向下写、下一页页顶向上写;书写过程中页缝外应始终有墨(湿墨层),
->    抬笔后两半接上;页缝正中横线,一次撤销两半同时消失、重做一起回来。日志 `pencil: wet begin/end`、
->    `pencil: overflow check`、`pencil: tx/undo push`。
+> 2. **跨页连续(基础项)**:见上面 v0.29.0 四项。
 > 3. **形状即时**:依次选直线/矩形/椭圆/箭头,每次选完立刻拖,第一次落笔就是该形状。
-> 4. **书法显现**:五档宽度 × 五个笔锋角度,快写/慢写都清晰可见;抬笔前后粗细一致;
->    整笔橡皮一次擦掉整条书法。日志 `pencil: calli segments=…`。
+> ~~4. 书法显现~~ → 书法已移除,不再验收。
 
 > **v0.26.0 新增两项,先验这两条(改动最直接)**:
 > 1. **所有页是否连成一张纸**:上下滚动过页缝,应该看不到页影/分隔线/白边;在页缝正中写一笔横线,
 >    笔迹应当连续不断(以前会在页边消失半个采样间隔)。若仍有一条细线,说明 PDFKit 的页边距没被钉住。
 > 2. **每支笔的状态是否各自记住**:钢笔选 2 档细笔 → 切荧光笔调到最粗 → 切回钢笔(应仍细)→
->    再切荧光笔(应仍最粗)→ 书法笔调笔锋 90° → 回文档库 → 重进同一本书:四支笔各自保持。
+>    再切荧光笔(应仍最粗)→ 蜡笔调一档 → 回文档库 → 重进同一本书:各支笔各自保持(书法已移除)。
 >    日志关键字 `doc state loaded tools=`。
 > 3. **撤销一次就够(v0.27.0)**:在页缝处写一笔跨页横线 → 点一次撤销,上下两页的那一笔应**同时**消失;
 >    再点重做,两半一起回来。撤销后不应"自己又被切开"。日志关键字 `pencil: undo push` / `pencil: undo`。
@@ -411,7 +437,7 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 1. **工具记忆(真正装载,不只是图标)**:日志证据是重进文档后 `page N eraser=0` 且**再没有** `apply tool=` 行 ——
    kind 与上次相同 → `toolSignature` 去重 → 一次都不套用,新 provider 的橡皮/书法/形状/激光配置全是默认关。
    现在:建 provider 后与进入书写模式时都 `applyToolSession(force: true)`。
-   **验收**:选「橡皮(整笔)」→ 回文档库 → 再进同一本书 → 直接擦,能整笔擦掉;选「书法」/「形状」同理,重进后第一笔就生效。
+   **验收**:选「橡皮(整笔)」→ 回文档库 → 再进同一本书 → 直接擦,能整笔擦掉;选「形状」同理,重进后第一笔就生效。
    日志里重进后应能看到 `pencil: apply tool=… err=…`。
 2. **跨页笔画**:根因是 `PKCanvasView` 的代理回调里 `canvas.drawing` **还没**包含刚画完的那一笔
    (PencilKit 是在 `canvasViewDidEndUsingTool` 返回之后才并进去的),旧代码在 `DispatchQueue.main.async` 里查下标,
@@ -422,8 +448,7 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
    ⚠️ 书写**过程中**页缝以上的墨仍然看不见(PDFView 的页视图层级挡住页外墨迹),抬笔才搬到上一页 —— 这是当前实现的上限。
 3. **形状切换**:`shapeKind` 之前漏了 `onChange`,在样式面板里选「箭头/椭圆」不会立刻生效(要等改颜色/笔宽)。
    现在选完立刻生效。**验收**:形状工具 → 选箭头 → 直接拖,画出来就是箭头;再选椭圆 → 直接拖,是椭圆。
-4. **书法笔宽度**:基准笔宽从 1.8 起上调到 3.6 起,宽度公式整体抬高(最细处 0.29pt → ≈1.1pt,最粗 ≈1.4×基准)。
-   **验收**:书法笔最小档写一行,应是清晰的毛笔感线条(横细竖粗),不再像"没写出来";抬笔前后粗细一致。
+4. ~~**书法笔宽度**~~ → **v0.29.0 已移除书法笔**,本条作废。
 
 ### 9.2 回归项(工具/橡皮/直尺/套索/手势/书架/chrome)
 
@@ -441,11 +466,11 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 - **无自动化测试**;CI 绿 ≠ 真机不崩(v0.13.1 已证)。
 - **v0.19–v0.23.2 全部只过了 CI 编译**,跨页(上下)、直线吸附、自研橡皮、3× 超采样、形状/激光笔、悬停弧盘、词频/搜索的改动都**等真机验收**。
 - **v0.23.2 改了手写坐标体系**(画布顶部 200pt 出血,存储仍是页面坐标):老笔记靠 `loadInk` 平移兼容,但**没有真机验证过老笔记的位置精度**;若发现整体上下偏移 200pt 量级,先查 `InkGeometry.pageTopY()` 的加减方向。
-- **程序化改动画布与 PencilKit 撤销栈混用**:跨页切分/直线吸附/自研橡皮/形状/**书法笔**/清空本页都绕过原生撤销,可能出现撤销顺序不一致;下一步做**统一撤销组**。
+- **程序化改动画布与 PencilKit 撤销栈混用**:跨页切分/直线吸附/自研橡皮/形状/清空本页都绕过原生撤销(v0.27.0 起统一收进 `InkUndoStack`,原生栈只作兜底)。
 - **形状只支持直线/矩形/椭圆/箭头**,没有「识别手绘形状」;手绘形状替换需要笔画拟合,未做。
-- **书法笔是程序化生成的一条 PKStroke**:如果 PencilKit 在真机上忽略逐点 `size`,粗细会变均匀(需改「分段多笔」退路)。
-  实时轮廓已经是自绘(`previewPath`),但**轮廓 ↔ 最终 PKStroke 的视觉一致性**还只在代码层对齐,等真机确认。
-- **跨页书写的上限 = 上下 bleed(620pt)**:超过就从画布边界被裁掉(日志 `bleed exhausted`)。真要写满两页,得改「跨页时切换到另一页画布继续」的方案。
+- ~~**书法笔**~~ → **v0.29.0 已移除**;旧存档 `"calligraphy"` 解码为钢笔。
+- **跨页书写的上限 = 出血区**(左右各 360pt、上下各 620pt):超过就从画布边界被裁掉(日志 `bleed exhausted`)。真要写满两页,得改「跨页时切换到另一页画布继续」的方案。
+- **左右出血让画布变宽 720pt(×3)**:长文档内存/栅格化开销上升,尚未做大页压测。
 - **深色模式**:阅读区固定白纸(这是"黑笔不灰"的前提),所以深色模式下阅读页本身是亮的;要暗读只能用「夜间模式」。
 - **生词本拖动换位**是"卡片拖到卡片"(`dropDestination`),不是 iOS 列表手柄;在超大词表(千级)下的手势灵敏度未压测。
 - **页缝切分只在抬笔后做**:书写过程中看到的仍是出血区里的原笔迹(视觉连续),抬笔才搬到另一页;如果一直停在页缝上不抬手,那一笔不会自动归属。
@@ -476,7 +501,7 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 **PencilKit / 手写(v0.25.0 新踩)**
 - **`PKCanvasView` 会裁掉超出自己 bounds 的墨迹**(它是 UIScrollView,`clipsToBounds` 默认真)。跨页书写的可用范围就等于上下 bleed 之和;
   想"无限往上写"必须换方案(跨页时切画布),不是把 bleed 调大就完事。诊断日志:`stroke hit canvas edge (bleed exhausted)`。
-- **手势进行中不要写 `canvas.drawing`**:PencilKit 不保证重绘(书法笔"写完才出现"就是这么来的)。自研笔一律用**自己的 CAShapeLayer 画实时预览**,抬笔再提交。
+- **手势进行中不要写 `canvas.drawing`**:PencilKit 不保证重绘。自研笔一律用**自己的 CAShapeLayer / 全局湿墨层画实时预览**,抬笔再提交。
 - **深色模式会"适配"墨色**:黑笔发灰。纸面固定暖白 + `overrideUserInterfaceStyle = .light`(PDFView 与画布都要),别用动态色当纸。
 - **工具记忆的两个隐形杀手**:`init` 里 `if kind == .eraser { kind = .pen }`;`attachDocument` 里 `saved != .eraser`。
   只要有一处把橡皮排除,用户选好的橡皮/整笔模式就永远恢复不了。
@@ -484,12 +509,19 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 - **代理回调里 `canvas.drawing` 还没包含刚画完的那一笔**:`canvasViewDidEndUsingTool` 返回之后 PencilKit 才并进去。
   任何"处理刚画的这一笔"的逻辑(吸附/跨页/统计)都不能在 `DispatchQueue.main.async` 里立刻按下标取 —— 会取不到。
   正确做法:记下标 + 由 `canvasViewDrawingDidChange`(再叠 0.1s 兜底)触发,并保留"从最后一笔往前找"的退化路径。
-- **`toolSignature` 去重的反面**:重进文档时 kind 和上次一样 → 一次都不 apply → 新 provider 的橡皮/书法/形状/激光配置
+- **`toolSignature` 去重的反面**:重进文档时 kind 和上次一样 → 一次都不 apply → 新 provider 的橡皮/形状/激光配置
   全是默认"关",表现就是"工具选中了但画不出/擦不了"。provider 建好后、进入书写模式时都要 `applyToolSession(force: true)`。
 - **每个 `@Published` 的工具属性都必须有对应的 `onChange`**:v0.25.0 漏了 `shapeKind`,于是"选了箭头还是画椭圆"。
   新增工具参数时先检查 `ReaderView.pencilSyncContent`。
-- **书法笔的宽度系数**:`0.18 + 0.82×chisel` 配上最小档 1.8pt,最细处只有 0.29pt(真机=看不见)。
-  艺术系数别低于 0.34,并且要有 `max(width, base×0.30)` 兜底。
+- **跨页只做 y 轴 = 横排必断**(v0.29.0 教训):`bleed` 只有上下、切分只有 `splitBelow/Above` 时,
+  横向排布下越过页左/页右的墨会被画布边界直接裁掉。任何"页边"逻辑都要 **x/y 两端同时成立**。
+- **邻页不能按 `index ± 1` 推**(v0.29.0 教训):双页并排时 +1 在右边;横排时没有"下面"。
+  用 `pdfView.convert(page.bounds, from: page)` 拿真实版面 rect 再找邻页;位移也用两页 origin 差,
+  不要用页高 × scale 硬算(页高不同/页缝有间距会错位)。
+- **"取越界最大的那条边"不够**(v0.29.0 教训):页角一笔同时越两条边,最大的那条边可能**没有邻页**
+  (竖排的左右),直接放弃就永远不搬页底那一段。正确做法:列出所有越界边,逐条试到成功为止。
+- **切分只取连续溢出段**:笔跨出页边又折回时,折回的那截属于本页;取"第一个越界点之后的全部"
+  会把本页墨搬到邻页,并和邻页回切形成乒乓。
 
 **编译 / Swift**
 - **SwiftUI `body` 不能写成 20+ 个修饰符的一条长链**:会触发 `unable to type-check this expression in reasonable time`(v0.16 实测:CI 在 Archive 卡 11 分钟才报错)。拆成多个 `private var xxxContent: some View`(每组 ≤6 个修饰符),body 只返回最后一段。
@@ -504,7 +536,10 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 - **跨页的「什么时候切」绝不能靠 `creationDate` 时间窗**(v0.24.0 教训):`creationDate` 是**落笔时刻**,慢慢写 4–5 秒的一笔抬笔时早就超过 3 秒 → 不切、不吸附,真机表现就是「页缝那里断了 / 挂在页缝上」。正解:`canvasViewDidBeginUsingTool` 记下 `canvas.drawing.strokes.count` 作为本次落笔的下标,抬笔按这个下标处理。
 - **切分点要插值**:直接取「阈值外的第一个采样点」会少掉半个采样间隔(快写十几毫米),页缝必断;用 `PencilStrokeTools.interpolate` 在相邻两点之间按 y 插一个边界点,两半共享它。
 - **目标页叠层可能不存在**(PDFKit 只为可见页建 overlay):跨页回写必须支持「直接写进目标页的墨迹库」(`appendToStore`),否则高倍缩放时那段墨要么丢、要么挂在错误页的出血区里。
-- **跨页笔迹(v0.23.2 起上下双向)**:画布高 = (页高 + `bleedTop 200` + `bleed 240`)×3,画布层 `position.y = -200`,页面顶部对应画布 y=`200×3`;**落库/导出始终是页面坐标**(loadInk +200×3、saveNow −200×3)。向下用 `split(atY:)`、向上用 `splitUpward(atY:)`(方向反了会拿不到段);先让目标页确认能接收(`onOverflow`/`onOverflowUp` 返回 Bool),再裁本页 —— 否则宁可保留整笔,不丢墨。
+- **跨页笔迹(v0.29.0 起四边)**:画布 = (页宽 + 2×`bleedX 360`) × (页高 + `bleedTop 620` + `bleed 620`),再 ×3;
+  画布层 `position = (-360, -620)`,页面左上角对应画布 `(360×3, 620×3)`;**落库/导出始终是页面坐标**
+  (`InkGeometry.canvasFromPage` / `pageFromCanvas`)。四边切分 `splitBelow/splitAbove/splitRight/splitLeft`,
+  共用 `splitRun`;先让目标页确认能接收(`onMoveOverflow` 返回 Bool),再裁本页 —— 否则宁可保留整笔,不丢墨。
 - **PDFKit 会重置 `maxScaleFactor`**:设置 `document`、切换 `displayMode` 后都会回到内部默认值(真机现象 = 800% 封顶)。每次改缩放前 `applyZoomLimits(min0.2/max40)`;若 `scaleFactor` 仍被夹回,先把 max 提到目标值再设一次;诊断行 `zoom[tag]: want/got/max` 能区分「上限重置」和「内部硬限制」。
 - **程序化改 `canvas.drawing`**(跨页切分 / 直线吸附)会绕过 PencilKit 的撤销栈;若要严格 undo,需要自定义 undo 组。
 - **直线吸附**只对「抬笔 3 秒内」的最后一笔生效;长度 > 60pt 且偏差 < 2% 才拉直,避免误伤手写字母。
@@ -549,14 +584,15 @@ D:\设计方法与风格\Notability-16.13-逆向学习-skill.zip  早期 skill �
 2. 读 `README.md`(功能全景)+ 本文 §4 架构图 + **§0.1 新窗口速查**(坐标体系与缩放上限两条必读)。
 3. 打开 `Sources/Reader/Selection/ReaderCoordinator.swift` 与 `Sources/Reader/Pencil/PencilOverlay.swift`,理解两条主线。
 4. 确认 gh 可用:`D:/codx/gh/bin/gh.exe auth status`;确认能列 run:`gh run list --repo lei11118/pdf-vocab -L 3`。
-5. 拿最新 release 的 IPA 解包复核一遍(§3.3 脚本),确认 `跃文 / 0.23.2 / 61 / 0 签名条目`。
-6. 问用户要 **v0.23.2 六项修复的真机反馈**(§9.1),按反馈决定下一版是 0.23.3(修)还是 0.24.0(统一撤销组/缩放书写条)。
-7. 若用户没反馈:不要盲叠功能,先把 §9.4 第 1 项「统一撤销组」做掉(它决定后续所有程序化改画布功能的安全边界)。
+5. 拿最新 release 的 IPA 解包复核一遍(§3.3 脚本),确认 `跃文 / 0.29.0 / 68 / 0 签名条目`。
+6. 问用户要 **v0.29.0 跨页四项的真机反馈**(§9.1:竖排 / 横排 / 双页 / 页角),按反馈决定下一版。
+7. 若用户没反馈:不要盲叠功能,优先做 §9.4 第 2 项「缩放书写条」或第 4 项「3× 画布内存优化」
+   (v0.29.0 的左右出血让画布更宽)。
 
 ---
 
 ## 12. 给下一个 agent 的开场提示(可直接粘贴)
 
-> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。**当前版本 v0.28.0(67)**。
-> 先读 `docs/HANDOFF.md`(尤其 §0.1 新窗口速查:手写坐标含 bleedTop 偏移、PDFKit 会重置 maxScaleFactor、v0.28.0 的单一工具状态/湿墨层/书法分段三条口径),再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
-> 当前在「按 Notability 逆向资料重构 UI 与 Pencil 体验」阶段:**v0.28.0 的手写全量重构(工具记忆 / 跨页连续 / 形状即时 / 书法显现)待真机验收**(§9.1)。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。
+> 项目「跃文」在 `D:\codx\pdf-vocab`(iPad PDF 取词学英语 App,公开仓库 lei11118/pdf-vocab)。本机无 Mac,一切构建走 GitHub Actions(`gh workflow run build-ipa.yml`),产出未签名 IPA 供用户自签侧载。**当前版本 v0.29.0(68)**。
+> 先读 `docs/HANDOFF.md`(尤其 §0.1 新窗口速查:手写坐标含四周出血偏移、PDFKit 会重置 maxScaleFactor、v0.29.0 的跨页四边/版面几何找邻页/逐边尝试三条口径),再读 `docs/PLAN.md` 查历史决策。硬约束:零新增第三方依赖、纯本地无账号、UI 只用 `DS` token、不改 Bundle ID、绝不替换系统手势 delegate、取词只用点坐标 API。
+> 当前在「按 Notability 逆向资料重构 UI 与 Pencil 体验」阶段:**v0.29.0 的跨页四边贯通(竖排/横排/双页/页角)待真机验收**(§9.1),书法笔已按用户要求移除。改动后必须:提交 → 推送(网络差用 `tools/gh_push_via_api.py`)→ dispatch CI → 盯绿 → 下载 IPA 解包校验 → 发 release + tag。

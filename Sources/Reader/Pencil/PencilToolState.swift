@@ -40,14 +40,10 @@ struct PencilToolState: Codable, Equatable {
     }
 
     var width: CGFloat { PencilMetrics.width(kind: kind, index: activePrefs.widthIndex) }
-    var nibAngle: CGFloat {
-        PencilMetrics.nibAngles[min(max(activePrefs.nibAngleIndex, 0), PencilMetrics.nibAngles.count - 1)]
-    }
     var eraserRadius: CGFloat {
         PencilMetrics.eraserRadii[min(max(activePrefs.eraserSizeIndex, 0), PencilMetrics.eraserRadii.count - 1)]
     }
     var eraserWhole: Bool { activePrefs.eraserWhole }
-    var calligraphySmoothing: Bool { activePrefs.smoothing }
 }
 
 extension PencilToolState {
@@ -85,6 +81,7 @@ struct PencilToolPrefs: Codable, Equatable {
     var colorIndex: Int = 0
     var customRGBA: Int = 0
     var widthIndex: Int = 2
+    /// v0.29.0:书法笔已移除。这两个键仅为兼容旧 v2 blob 保留(解码时读入、不再使用)。
     var nibAngleIndex: Int = 2
     var smoothing: Bool = true
     var eraserWhole: Bool = false
@@ -92,13 +89,11 @@ struct PencilToolPrefs: Codable, Equatable {
 
     init() {}
 
-    init(colorIndex: Int, customRGBA: Int, widthIndex: Int, nibAngleIndex: Int,
-         smoothing: Bool, eraserWhole: Bool, eraserSizeIndex: Int) {
+    init(colorIndex: Int, customRGBA: Int, widthIndex: Int,
+         eraserWhole: Bool, eraserSizeIndex: Int) {
         self.colorIndex = colorIndex
         self.customRGBA = customRGBA
         self.widthIndex = widthIndex
-        self.nibAngleIndex = nibAngleIndex
-        self.smoothing = smoothing
         self.eraserWhole = eraserWhole
         self.eraserSizeIndex = eraserSizeIndex
     }
@@ -126,16 +121,12 @@ enum PencilMetrics {
         switch kind {
         case .pen, .shape: return [1.2, 2.0, 3.2, 4.8, 7.0][i]
         case .pencil:      return [1.0, 1.6, 2.4, 3.6, 5.2][i]
-        // 书法基准宽度 = 笔锋最粗处;细处按角度/压力自动收窄。
-        case .calligraphy: return [3.6, 5.5, 7.5, 10.5, 14.0][i]
         case .marker:      return [10, 16, 24, 34, 46][i]
         case .crayon:      return [2.5, 4.0, 6.0, 9.0, 13.0][i]
         case .lasso, .laser, .eraser: return 0
         }
     }
 
-    /// 0° = 笔尖水平,横细竖粗的差值最大。
-    static let nibAngles: [CGFloat] = [0, 30, 45, 60, 90]
     /// 自研橡皮半径五档(页面点)。
     static let eraserRadii: [CGFloat] = [4, 7, 11, 16, 24]
 }

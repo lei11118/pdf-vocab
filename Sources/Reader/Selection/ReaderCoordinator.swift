@@ -424,7 +424,7 @@ final class ReaderCoordinator: NSObject {
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
-        // v0.25.1:新 provider 的橡皮/激光/形状/书法配置默认全是"关",必须把当前会话状态推一次,
+        // v0.25.1:新 provider 的橡皮/激光/形状配置默认全是"关",必须把当前会话状态推一次,
         // 否则重进文档后(overlay 在创建时继承的是默认关)会出现"工具选中了但画不出/擦不了"。
         applyToolSession(force: true)
 
@@ -493,12 +493,12 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - v0.28.0 全局湿墨(常规笔的跨页溢出段)
 
-    /// 只有常规墨迹笔需要这层;橡皮/套索/形状/激光/书法由各自的手势或预览层负责。
+    /// 只有常规墨迹笔需要这层;橡皮/套索/形状/激光由各自的手势或预览层负责。
     private var wetToolIsRegular: Bool {
         guard let kind = toolSession?.kind else { return false }
         switch kind {
         case .pen, .pencil, .marker, .crayon: return true
-        case .calligraphy, .lasso, .shape, .laser, .eraser: return false
+        case .lasso, .shape, .laser, .eraser: return false
         }
     }
 
@@ -528,9 +528,12 @@ final class ReaderCoordinator: NSObject {
             let box = page.bounds(for: pdfView.displayBox)
             let inPage = pdfView.convert(viewPoint, to: page)
             let local = CGPoint(x: inPage.x - box.minX, y: box.maxY - inPage.y)
-            // 超出画布上下出血的采样不会再被 PencilKit 保存,预览也不画,避免"抬手即消失"。
+            // 超出画布四周出血的采样不会再被 PencilKit 保存,预览也不画,避免"抬手即消失"。
+            // v0.29.0:左右也有出血(横向排布),x/y 两个方向都要卡。
             guard local.y >= -InkGeometry.bleedTop - 1,
-                  local.y <= box.height + InkGeometry.bleed + 1 else { continue }
+                  local.y <= box.height + InkGeometry.bleed + 1,
+                  local.x >= -InkGeometry.bleedX - 1,
+                  local.x <= box.width + InkGeometry.bleedX + 1 else { continue }
             wetStrokePoints.append(local)
             if wetStrokePoints.count > 8192 {
                 wetStrokePoints.removeFirst(wetStrokePoints.count - 8192)
@@ -559,7 +562,9 @@ final class ReaderCoordinator: NSObject {
         let generation = wetGeneration
         DiagLog.log("pencil: wet end epoch=\(generation) points=\(wetStrokePoints.count)")
         // 等提交/跨页搬运完成再撤掉湿墨,避免抬笔瞬间页缝外先“消失”再出现在邻页。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+        // v0.29.0:0.18s 太紧 —— 跨页检查排在 0.10s,加上 drawingDidChange 的抖动,
+        // 偶尔会先撤湿墨、后落位,视觉上就是页缝处闪一下缺口。放宽到 0.30s。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self, self.wetGeneration == generation else { return }
             self.wetHost?.clear()
             self.wetStrokePoints.removeAll(keepingCapacity: true)
@@ -1405,7 +1410,7 @@ final class ReaderCoordinator: NSObject {
         }
         overlayProvider?.setMarkMode(on)
         // v0.25.1:进入书写时**强制**套用一次工具 —— 只靠签名去重的话,重进文档时
-        // 笔具 kind 与上次相同(比如橡皮/书法/形状)→ 一次都不 apply → 画布根本没被"装上"
+        // 笔具 kind 与上次相同(比如橡皮/形状)→ 一次都不 apply → 画布根本没被"装上"
         // 那种工具(日志里重进后 eraser=0、且再无 apply tool= 行),表现就是"工具没记忆"。
         if on { applyToolSession(force: true) }
         pencilPressRef?.isEnabled = !on
@@ -1437,7 +1442,7 @@ final class ReaderCoordinator: NSObject {
         let revision = session.stateRevision
         if !force, revision == appliedToolRevision, !toolApplyScheduled { return }
 
-        // 第一段(同步):模式标志/手势开关/形状与书法参数立刻生效。
+        // 第一段(同步):模式标志/手势开关/形状参数立刻生效。
         // 选完形状后下一次拖动就是新形状 —— 不再等异步的 canvas.tool 那一段。
         overlayProvider?.applyModeState(session.state)
 
