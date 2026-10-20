@@ -1,6 +1,6 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
-> 交接时间:2026-10-20 · 当前版本:**v0.33.0(build 71)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
+> 交接时间:2026-10-20 · 当前版本:**v0.34.0(build 72)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 
 ---
@@ -39,6 +39,11 @@ v0.28.0 → v0.30.0 三版"手写重构"引入的两个致命点,已在 v0.32.0 
 **v0.33.0 补充(依据真机 diagnostics.log)**:
 - **跨页必须沿排布方向**(`PencilOverlayProvider.flowAxis`):纵向连续只处理上下越界(位移一页高),横向连续只处理左右越界(位移一页宽);另一轴没有邻页,不要搬。v0.32 只按 y 切,横向排布下把越过页底的墨搬到"右边那一页",真机表现为图形跑到隔壁页 + `stroke hit canvas edge (bleed exhausted)`。
 - **湿墨预览的结束回调不可靠**:真机日志只有 `wet begin`、没有 `wet end`,预览会永久残留一段幽灵墨迹。现在画布落定即无条件清除(`clearWetAfterCommit` 不再看 `wetActive`),并用 1s 采样间隔兜底换新一笔。
+
+**v0.34.0 三条(真机第三轮)**:
+- **赋 `canvas.tool` 之后必须重算手势状态**:PencilKit 会重建内部识别器,把自研橡皮/形状/激光笔刚关掉的绘制手势重新打开 —— 表现是「选形状却画出普通笔迹」。`PencilOverlayProvider.setTool` 里每次赋值后调 `overlay.refreshGestureState()`。
+- **缩放下限会被 PDFKit 重置成 1.0**,而捏合不触发 SwiftUI 更新,`updateUIView` 里的重设等不到 → 用户看到「100% 就下不去」。现在在缩放观察者里每次 `applyZoomLimits`,并补 50%/75% 预设;诊断行 `zoom[pinch]: s=… min=… max=… auto=…`。
+- **跨页支持 3 页以上**:`settleOverflow` 记录本次搬到了哪些页,收尾后接着结算邻页(`DispatchQueue.main.async` 里串下去),页面叠层创建时也结算一次。否则中间页的越界段会永远卡住(`settling` 递归保护会挡掉邻页那次)。
 
 **v0.25.0 新增的三条硬事实(改之前先看懂)**:
 6. **`PKCanvasView` 是 UIScrollView,`clipsToBounds` 默认为真 —— 超出 canvas.bounds 的墨迹会被直接裁掉。**

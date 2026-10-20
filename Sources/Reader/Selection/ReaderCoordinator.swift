@@ -1974,6 +1974,15 @@ final class ReaderCoordinator: NSObject {
             self?.menu.updatePosition(animated: false)  // v0.6.10:缩放后菜单随选区同步
             self?.dryHost?.refresh()                    // v0.30.0:跨页干墨跟随缩放
             self?.overlayProvider?.refreshRulerFocus()  // v0.32.0:直尺跟随焦点页
+            // v0.34.0:真机反馈「缩到 100% 就下不去」——PDFKit 会把 minScaleFactor 悄悄恢复成 1.0,
+            // 而捏合缩放不触发 SwiftUI 更新,`updateUIView` 里那句重设永远等不到。
+            // 这里每次缩放都重新放开上下限(只改限值、不动当前比例,不干扰手势)。
+            if let view = self?.pdfView {
+                self?.applyZoomLimits(view)
+                if view.scaleFactor < 1.2 {
+                    DiagLog.log("zoom[pinch]: s=\(String(format: "%.2f", view.scaleFactor)) min=\(String(format: "%.2f", view.minScaleFactor)) max=\(String(format: "%.2f", view.maxScaleFactor)) auto=\(view.autoScales ? 1 : 0)")
+                }
+            }
             self?.fireReadingTick()
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in

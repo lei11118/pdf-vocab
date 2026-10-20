@@ -115,6 +115,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlays[index] = overlay
             // v0.30.0:从库里载入的墨可能带页外部分 —— 干墨跨页层立即补上
             dryHost?.update(page: index, drawing: overlay.canvasSnapshot, pageSize: overlay.bounds.size)
+            // v0.34.0:载入的墨若越界(跨 3 页以上时中间页会存着越界段),先结算一次
+            scheduleOverflowSettle(page: index)
             DiagLog.log("pencil: overlay created page=\(index)")
             // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak overlay] in
@@ -182,6 +184,7 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
 
         var changed = false
         var rounds = 0
+        var touched: Set<Int> = []
         settling = true
         defer { settling = false }
 
@@ -197,15 +200,17 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             let ownSpan = axis == .y ? pageSize.height : pageSize.width
             let span = forward ? ownSpan : (neighborSpan(page: page - 1, axis: axis) ?? ownSpan)
             let delta = (forward ? -span : span) * InkGeometry.scale
+            let guardTarget = forward ? page + 1 : page - 1
             guard parts.outside.count >= 2,
                   let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
                   let moved = PencilStrokeTools.shifted(outside,
                                                         dx: axis == .x ? delta : 0,
                                                         dy: axis == .y ? delta : 0),
-                  handoff(page: forward ? page + 1 : page - 1, canvasStroke: moved) else {
+                  handoff(page: guardTarget, canvasStroke: moved) else {
                 DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") stuck page=\(page) pts=\(parts.outside.count)")
                 break
             }
+            touched.insert(guardTarget)   // v0.34.0:邻页若还有越界段,接着往下一页传(3 页以上)
             if parts.inside.count >= 2,
                let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
                 strokes[idx] = inside
@@ -220,6 +225,16 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         overlay.applyCanvasSnapshot(settled)
         overlay.flushSave()
         dryHost?.update(page: page, drawing: settled, pageSize: pageSize)
+
+        // v0.34.0:一笔可以跨 3 页以上 —— 邻页收到墨后可能仍然越界。等本次结算收尾
+        // (settling 复位)后再结算邻页,否则会被 `guard !settling` 挡掉,墨就卡在中间那页。
+        if !touched.isEmpty {
+            let pages = touched
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for page in pages.sorted() { self.scheduleOverflowSettle(page: page) }
+            }
+        }
     }
 
     /// 邻页在切分轴上的尺寸(叠层没建时问文档)
@@ -269,11 +284,15 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     }
 
     /// v0.14.0:把当前笔具套用到全部页画布(幂等)。
+    /// v0.34.0:**设完工具必须重算一次手势状态**。给 `canvas.tool` 赋值会让 PencilKit 重建
+    /// 内部手势识别器,把自研橡皮/形状/激光笔的"接管绘制手势"重新打开 —— 真机表现就是
+    /// 「选了形状,画出来却是普通笔迹」。
     func setTool(_ tool: PKTool?) {
         currentTool = tool
         guard let tool else { return }
         for (_, overlay) in overlays {
             overlay.canvas.tool = tool
+            overlay.refreshGestureState()
         }
     }
 
@@ -674,6 +693,12 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             lastErasePoint = nil
             eraseUndoSnapshot = nil
         }
+    }
+
+    /// v0.34.0:外部(provider.setTool)赋完 `canvas.tool` 后调用 —— PencilKit 重建手势时
+    /// 会把绘制手势重新打开,自研橡皮/形状/激光笔必须再接管一次。
+    func refreshGestureState() {
+        applyToolGestureState()
     }
 
     /// v0.28.0:一次装填整份模式状态。与逐项 setXxxMode 的差别是:
