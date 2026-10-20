@@ -207,8 +207,6 @@ struct PencilPaletteView: View {
                 shapePanel
             case .laser:
                 laserPanel
-            case .calligraphy:
-                calligraphyPanel
             case .pen, .pencil, .marker, .crayon:
                 inkPanel
             }
@@ -279,7 +277,6 @@ struct PencilPaletteView: View {
     private var headerHint: String {
         switch session.kind {
         case .pen, .pencil: return "颜色 · 笔宽"
-        case .calligraphy: return "笔锋角度 · 稳定化"
         case .marker: return "半透明 · 五档宽度"
         case .crayon: return "蜡质纹理 · 五档宽度"
         case .eraser: return session.eraserWhole ? "整笔擦除" : "局部擦除"
@@ -410,88 +407,6 @@ struct PencilPaletteView: View {
                 }
             }
             inkPanel
-        }
-    }
-
-    /// v0.24.0:书法笔 —— 笔锋角度(横细竖粗)+ 稳定化 + 墨色/笔宽
-    private var calligraphyPanel: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s) {
-            HStack(spacing: DS.Space.x2s) {
-                Text("笔锋")
-                    .font(DS.Fonts.caption2)
-                    .foregroundStyle(DS.foreground3)
-                ForEach(0..<PencilToolSession.nibAngles.count, id: \.self) { index in
-                    let selected = session.nibAngleIndex == index
-                    let degrees = PencilToolSession.nibAngles[index]
-                    Button {
-                        session.nibAngleIndex = index
-                    } label: {
-                        Image(systemName: "pencil.tip")
-                            .font(.system(size: 15, weight: .semibold))
-                            .rotationEffect(.degrees(Double(degrees)))
-                            .foregroundStyle(selected ? DS.accent : DS.foreground2)
-                            .frame(width: 30, height: 30)
-                            .background(
-                                RoundedRectangle(cornerRadius: DS.Radius.sharp, style: .continuous)
-                                    .fill(selected ? DS.accentContainer : DS.background1)
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(DSPressableButtonStyle())
-                    .accessibilityLabel("笔锋 \(Int(degrees)) 度")
-                    .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
-                }
-                Spacer(minLength: 0)
-                Text("\(Int(session.nibAngle))°")
-                    .font(DS.Fonts.micro.monospacedDigit())
-                    .foregroundStyle(DS.foreground3)
-            }
-
-            nibPreview
-                .frame(height: 30)
-                .frame(maxWidth: .infinity)
-                .accessibilityHidden(true)
-
-            Toggle(isOn: $session.calligraphySmoothing) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("稳定化")
-                        .font(DS.Fonts.caption)
-                        .foregroundStyle(DS.foreground1)
-                    Text("收敛手抖,写字更顺;关掉更贴笔尖")
-                        .font(DS.Fonts.micro)
-                        .foregroundStyle(DS.foreground3)
-                }
-            }
-            .tint(DS.accent)
-
-            inkPanel
-        }
-    }
-
-    /// 笔锋预览:同一个正弦路径,按当前角度算"横细竖粗",和真笔一致。
-    private var nibPreview: some View {
-        Canvas { context, size in
-            let nib = Double(session.nibAngle) * .pi / 180
-            let steps = 56
-            var prev = CGPoint(x: 4, y: size.height * 0.5)
-            for i in 1...steps {
-                let t = CGFloat(i) / CGFloat(steps)
-                let x = 4 + (size.width - 8) * t
-                let y = Double(size.height) * 0.5 + sin(Double(t) * .pi * 2) * Double(size.height) * 0.28
-                let point = CGPoint(x: x, y: CGFloat(y))
-                let theta = atan2(Double(point.y - prev.y), Double(point.x - prev.x))
-                let chisel = CGFloat(abs(sin(theta - nib)))
-                let lineWidth = 1.2 + 4.6 * chisel
-                var path = Path()
-                path.move(to: prev)
-                path.addLine(to: point)
-                context.stroke(
-                    path,
-                    with: .color(session.swatchColor.opacity(0.86)),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
-                )
-                prev = point
-            }
         }
     }
 

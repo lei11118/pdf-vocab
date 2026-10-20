@@ -65,9 +65,10 @@ enum InkGeometry {
     /// 注:v0.22.0 起配自研橡皮(半径可调、按画布坐标缩放),不再受 SDK 橡皮无宽度参数的限制。
     static let scale: CGFloat = 3
 
-    /// 画布坐标系(页面点 × scale)下的尺寸
+    /// 画布坐标系(页面点 × scale)下的尺寸(含四周出血)
     static func canvasSize(for pageSize: CGSize) -> CGSize {
-        CGSize(width: pageSize.width * scale, height: pageSize.height * scale)
+        CGSize(width: (pageSize.width + bleedX * 2) * scale,
+               height: (pageSize.height + bleedTop + bleed) * scale)
     }
 
     /// 把画布压回页面大小
@@ -88,31 +89,58 @@ enum InkGeometry {
     /// 抬笔时把 y<0 的部分切到上一页底部。
     static let bleedTop: CGFloat = 620
 
-    /// v0.23.2:带上下出血的画布 bounds(原点 0;页面顶部在 y = bleedTop×scale 处)
+    /// v0.29.0:左右出血区 —— 横向排布(左右翻页)时,笔尖越过页左/页右也要能继续写。
+    /// v0.28.0 之前只有上下出血,横向排布下越过页边的墨直接被画布边界裁掉,所以「左右排序」必断。
+    static let bleedX: CGFloat = 360
+
+    /// 带四周出血的画布 bounds(原点 0;页面左上角在 (bleedX×scale, bleedTop×scale) 处)
     static func canvasBounds(for pageSize: CGSize) -> CGRect {
         CGRect(
             x: 0,
             y: 0,
-            width: pageSize.width * scale,
+            width: (pageSize.width + bleedX * 2) * scale,
             height: (pageSize.height + bleedTop + bleed) * scale
         )
     }
 
-    /// 画布层在页面坐标系里的位置(上移 bleedTop,使页面顶部落在画布 y=bleedTop×scale)
+    /// 画布层在页面坐标系里的位置(左上各外扩出血,使页面左上角落在画布 (bleedX, bleedTop))
     static var canvasOrigin: CGPoint {
-        CGPoint(x: 0, y: -bleedTop)
+        CGPoint(x: -bleedX, y: -bleedTop)
     }
 
-    /// 页面顶部/底部在画布坐标里的 y
+    /// 页面顶部在画布坐标里的 y
     static func pageTopY() -> CGFloat { bleedTop * scale }
 
-    /// v0.25.0:一笔是否已经顶到画布的上下沿(说明被裁了,需要更大的出血区)。
+    /// 页面左侧在画布坐标里的 x
+    static func pageLeftX() -> CGFloat { bleedX * scale }
+
+    /// 页面坐标 → 画布坐标(唯一口径;落库/载入/搬运都用它,避免各写一份 ± 偏移)
+    static var canvasFromPage: CGAffineTransform {
+        CGAffineTransform(translationX: pageLeftX(), y: pageTopY())
+    }
+
+    /// 画布坐标 → 页面坐标
+    static var pageFromCanvas: CGAffineTransform {
+        CGAffineTransform(translationX: -pageLeftX(), y: -pageTopY())
+    }
+
+    /// 画布坐标里「页面矩形」(不含出血)
+    static func pageRectInCanvas(pageSize: CGSize) -> CGRect {
+        CGRect(
+            x: pageLeftX(),
+            y: pageTopY(),
+            width: pageSize.width * scale,
+            height: pageSize.height * scale
+        )
+    }
+
+    /// v0.25.0:一笔是否已经顶到画布的四周边缘(说明被裁了,需要更大的出血区)。
     /// 只用于诊断日志 —— 真机上再出现"截断"时,能一眼看出是不是又被画布边界裁掉。
-    static func touchesCanvasEdge(_ stroke: PKStroke, pageHeight: CGFloat) -> Bool {
-        let top = pageTopY()
-        let bottom = top + pageHeight * scale
+    static func touchesCanvasEdge(_ stroke: PKStroke, pageSize: CGSize) -> Bool {
+        let rect = pageRectInCanvas(pageSize: pageSize)
         for point in stroke.path {
-            if point.location.y <= 1 || point.location.y >= bottom + bleed * scale - 1 {
+            if point.location.y <= 1 || point.location.y >= rect.maxY + bleed * scale - 1
+                || point.location.x <= 1 || point.location.x >= rect.maxX + bleedX * scale - 1 {
                 return true
             }
         }
