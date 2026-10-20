@@ -105,19 +105,24 @@ struct ReaderView: View {
             }
             .onAppear {
                 pencilTools.attachDocument(doc.sha256)
-                // v0.30.0:双页并排已取消,旧设置一律回落到纵向连续
-                if layoutMode == "twoUp" { layoutMode = "vertical" }
-                // v0.28.0:装回按书状态后强制套一次 —— 新 provider/新叠层必须拿到完整状态,
-                // 不能指望“值没变所以不用套”(这正是重进文档后工具不生效的根因)。
-                DispatchQueue.main.async { applyPencilTool(force: true) }
             }
     }
 
     private var pencilSyncContent: some View {
         sceneContent
-            // v0.28.0:所有工具属性共用一个 stateRevision。以前每加一个参数就要记得补一条
-            // onChange(v0.25.0 漏了 shapeKind 就是这么出的问题);现在漏挂的整类 bug 消失。
-            .onChange(of: pencilTools.stateRevision) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.kind) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.colorIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.markerColorIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.widthIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.eraserWhole) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.eraserSizeIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.useCustomEraser) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.rulerActive) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.nibAngleIndex) { _, _ in applyPencilTool() }
+            .onChange(of: pencilTools.calligraphySmoothing) { _, _ in applyPencilTool() }
+            // v0.25.1:换形状(直线/矩形/椭圆/箭头)必须立刻套用 —— 之前漏了这一条,
+            // 在样式面板里选了箭头,画布上仍是上一个形状,直到改颜色/笔宽才"顺便"生效。
+            .onChange(of: pencilTools.shapeKind) { _, _ in applyPencilTool() }
     }
 
     private var sceneContent: some View {
@@ -125,9 +130,6 @@ struct ReaderView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
                     saveProgressNow()
-                } else {
-                    // v0.28.0:回到前台重臂一次(系统可能已经重建了 PDFView 内部层级)
-                    applyPencilTool(force: true)
                 }
             }
             .onDisappear {
@@ -370,6 +372,11 @@ struct ReaderView: View {
                         } label: {
                             Label("横向连续", systemImage: layoutMode == "horizontal" ? "checkmark" : "rectangle")
                         }
+                        Button {
+                            layoutMode = "twoUp"
+                        } label: {
+                            Label("双页并排", systemImage: layoutMode == "twoUp" ? "checkmark" : "book.pages")
+                        }
                     } label: {
                         Label("页面排布", systemImage: "rectangle.split.2x1")
                     }
@@ -534,8 +541,8 @@ struct ReaderView: View {
     }
 
     /// v0.14.0:把当前笔具同步给预览画布的协调器
-    private func applyPencilTool(force: Bool = false) {
-        readerHandle.coordinator?.applyToolSession(force: force)
+    private func applyPencilTool() {
+        readerHandle.coordinator?.applyToolSession()
     }
 
     /// v0.6.9:选词后自动发音(设置项,默认关;美音)

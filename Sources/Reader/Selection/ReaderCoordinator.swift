@@ -60,11 +60,9 @@ final class ReaderCoordinator: NSObject {
     var onFocusToggle: (() -> Void)?
     var markMode = false
     private var overlayProvider: PencilOverlayProvider?
-    /// v0.28.0:上次已套用的状态版本。SwiftUI 每次更新都会尝试同步工具,
-    /// 无脑 `canvas.tool = ...` 会让 PencilKit 反复重建工具状态,严重时主线程卡死;
-    /// 但旧实现的“签名 + 单布尔”会在排队期间永久丢掉一次状态变化,现在改为
-    /// latest-wins:异步任务执行时读取最新 state,若有更新再补排一次。
-    private var appliedToolRevision = -1
+    /// v0.16.1:上次已套用的工具签名 —— SwiftUI 每帧 updateUIView 都会尝试同步工具,
+    /// 无脑 `canvas.tool = ...` 会让 PencilKit 反复重建工具状态,严重时主线程卡死。
+    private var appliedToolSignature: String?
     private var toolApplyScheduled = false
     /// v0.16.2:最近一次落笔/擦除结束时间 —— 双指撤销手势的手掌误触防护
     private var lastInkActivityAt: CFAbsoluteTime = 0
@@ -75,15 +73,6 @@ final class ReaderCoordinator: NSObject {
     private var autoScrollLink: CADisplayLink?
     private var autoScrollSpeed: CGFloat = 0
     private weak var autoScrollView: UIScrollView?
-    /// v0.28.0:全局湿墨层 —— 常规笔越出当前页的那一段画在 PDFView 之上,不被邻页遮挡
-    private var wetHost: PencilWetInkHost?
-    /// v0.30.0:跨页干墨层 —— 每页墨迹里越过页面矩形的部分画在邻页上(不切分、不搬迁)
-    private var dryHost: PencilDryInkHost?
-    private var wetActive = false
-    private var wetPageIndex = 0
-    private var wetStrokePoints: [CGPoint] = []   // 页面本地坐标(y 向下)
-    private var wetLastDrawAt: CFAbsoluteTime = 0
-    private var wetGeneration = 0
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
     private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
     private var appliedKey: String?
@@ -228,8 +217,6 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("ocr: scanned=\(docScanned)")
         // v0.23.2:恢复页面排布(纵向/横向/双页)
         if let view = pdfView {
-            if let dryHost { view.bringSubviewToFront(dryHost) }
-            if let wetHost { view.bringSubviewToFront(wetHost) }
             setLayoutMode(UserDefaults.standard.string(forKey: "readerLayoutMode") ?? "vertical")
             // PDFKit 设文档后会重置缩放上下限,这里重新放开到 4000%
             applyZoomLimits(view)
@@ -272,11 +259,6 @@ final class ReaderCoordinator: NSObject {
         clearJumpHighlight()
         freezeScrolling(false)
         clearTempHighlight()
-        clearWetInk()
-        wetHost?.removeFromSuperview()
-        wetHost = nil
-        dryHost?.removeFromSuperview()
-        dryHost = nil
         removeObservers()
     }
 
@@ -429,9 +411,7 @@ final class ReaderCoordinator: NSObject {
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
-        // v0.30.0:干墨层接手后立刻撤湿墨预览(同一段墨不重复画)
-        provider.onInkCommitted = { [weak self] in self?.clearWetAfterCommit() }
-        // v0.25.1:新 provider 的橡皮/激光/形状配置默认全是"关",必须把当前会话状态推一次,
+        // v0.25.1:新 provider 的橡皮/激光/形状/书法配置默认全是"关",必须把当前会话状态推一次,
         // 否则重进文档后(overlay 在创建时继承的是默认关)会出现"工具选中了但画不出/擦不了"。
         applyToolSession(force: true)
 
@@ -473,132 +453,14 @@ final class ReaderCoordinator: NSObject {
         view.addGestureRecognizer(hover)
 
         // v0.18.0:书写贴边自动滚动 —— 只观察 Pencil 位置,永不识别,不影响绘制
-        // v0.28.0:同一批采样也喂给全局湿墨层(页缝外的溢出段因此能实时显示)。
         let observer = PencilTouchObserver()
-        observer.onBegin = { [weak self] in self?.beginWetStroke() }
-        observer.onSamples = { [weak self] points in self?.appendWetSamples(points) }
         observer.onMove = { [weak self] point in self?.pencilMoved(to: point) }
-        observer.onEnd = { [weak self] in
-            self?.stopAutoScroll()
-            self?.endWetStroke()
-        }
+        observer.onEnd = { [weak self] in self?.stopAutoScroll() }
         view.addGestureRecognizer(observer)
         pencilObserver = observer
 
-        // v0.30.0:跨页干墨层(先加,湿墨层在它之上)
-        let dry = PencilDryInkHost(frame: view.bounds)
-        dry.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        dry.pdfView = view
-        view.addSubview(dry)
-        dryHost = dry
-        overlayProvider?.dryHost = dry
-
-        // v0.28.0:全局湿墨层(直接挂在 PDFView 上,固定在视口坐标,盖住所有页)
-        let wet = PencilWetInkHost(frame: view.bounds)
-        wet.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        wet.pdfView = view
-        view.addSubview(wet)
-        view.bringSubviewToFront(wet)
-        wetHost = wet
-        dry.aboveView = wet
-        overlayProvider?.wetHost = wet
-
         suppressNativeSelection(in: view)
         observeScrolling()
-    }
-
-    // MARK: - v0.28.0 全局湿墨(常规笔的跨页溢出段)
-
-    /// 只有常规墨迹笔需要这层;橡皮/套索/形状/激光由各自的手势或预览层负责。
-    private var wetToolIsRegular: Bool {
-        guard let kind = toolSession?.kind else { return false }
-        switch kind {
-        case .pen, .pencil, .marker, .crayon: return true
-        case .lasso, .shape, .laser, .eraser: return false
-        }
-    }
-
-    private func beginWetStroke() {
-        wetGeneration &+= 1
-        wetActive = false
-        wetLastDrawAt = 0
-        wetStrokePoints.removeAll(keepingCapacity: true)
-        // 切到橡皮/套索等非常规笔时立刻清掉上一笔的湿墨;否则上一笔的延迟清除会被
-        // 这次 generation 递增作废,预览会一直留在屏幕上。常规笔则保留到新路径替换它,
-        // 避免极快连写时上一笔的跨页溢出预览先消失一下。
-        if !wetToolIsRegular { wetHost?.clear() }
-    }
-
-    private func appendWetSamples(_ viewPoints: [CGPoint]) {
-        guard markMode, wetToolIsRegular, let pdfView, let session = toolSession else { return }
-        for viewPoint in viewPoints {
-            if !wetActive {
-                guard let page = pdfView.page(for: viewPoint, nearest: true) else { continue }
-                wetPageIndex = pdfView.document?.index(for: page) ?? 0
-                wetActive = true
-                wetStrokePoints.removeAll(keepingCapacity: true)
-                DiagLog.log("pencil: wet begin epoch=\(wetGeneration) page=\(wetPageIndex) tool=\(session.kind.rawValue)")
-            }
-            guard let doc = pdfView.document, wetPageIndex >= 0, wetPageIndex < doc.pageCount,
-                  let page = doc.page(at: wetPageIndex) else { continue }
-            let box = page.bounds(for: pdfView.displayBox)
-            let inPage = pdfView.convert(viewPoint, to: page)
-            let local = CGPoint(x: inPage.x - box.minX, y: box.maxY - inPage.y)
-            // 超出画布四周出血的采样不会再被 PencilKit 保存,预览也不画,避免"抬手即消失"。
-            // v0.29.0:左右也有出血(横向排布),x/y 两个方向都要卡。
-            guard local.y >= -InkGeometry.bleedTop - 1,
-                  local.y <= box.height + InkGeometry.bleed + 1,
-                  local.x >= -InkGeometry.bleedX - 1,
-                  local.x <= box.width + InkGeometry.bleedX + 1 else { continue }
-            wetStrokePoints.append(local)
-            if wetStrokePoints.count > 8192 {
-                wetStrokePoints.removeFirst(wetStrokePoints.count - 8192)
-            }
-        }
-        guard wetActive, wetStrokePoints.count >= 2 else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - wetLastDrawAt >= 0.008 else { return }   // ~120Hz 上限
-        wetLastDrawAt = now
-        let path = UIBezierPath()
-        path.move(to: wetStrokePoints[0])
-        for point in wetStrokePoints.dropFirst() { path.addLine(to: point) }
-        wetHost?.show(PencilWetStroke(
-            pageIndex: wetPageIndex,
-            path: path,
-            color: session.currentUIColor,
-            lineWidth: session.width,
-            filled: false,
-            clipOutsidePage: true
-        ))
-    }
-
-    private func endWetStroke() {
-        guard wetActive else { return }
-        wetActive = false
-        let generation = wetGeneration
-        DiagLog.log("pencil: wet end epoch=\(generation) points=\(wetStrokePoints.count)")
-        // 等提交/跨页搬运完成再撤掉湿墨,避免抬笔瞬间页缝外先“消失”再出现在邻页。
-        // v0.29.0:0.18s 太紧 —— 跨页检查排在 0.10s,加上 drawingDidChange 的抖动,
-        // 偶尔会先撤湿墨、后落位,视觉上就是页缝处闪一下缺口。放宽到 0.30s。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
-            guard let self, self.wetGeneration == generation else { return }
-            self.wetHost?.clear()
-            self.wetStrokePoints.removeAll(keepingCapacity: true)
-        }
-    }
-
-    private func clearWetInk() {
-        wetGeneration &+= 1
-        wetActive = false
-        wetStrokePoints.removeAll(keepingCapacity: true)
-        wetHost?.clear()
-    }
-
-    /// v0.30.0:干墨层已经画出这一笔 → 立即撤掉湿墨预览,避免页外那段被两套渲染叠着画。
-    /// 若新一笔已经开始(`wetActive` 还是 true),不要清它 —— 交给它自己的结束流程。
-    private func clearWetAfterCommit() {
-        guard !wetActive else { return }
-        clearWetInk()
     }
 
     /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放与链接单击。
@@ -1412,12 +1274,6 @@ final class ReaderCoordinator: NSObject {
     /// v0.9.0(M4):标记 / 选词模式切换——标记模式下 Pencil 交给画布(Pencil 专属选区手势让位),
     /// 手指的滚动/缩放/长按选词两种模式都保留;切到标记模式时清掉当前选区。
     func setMarkMode(_ on: Bool) {
-        // v0.28.0:PDFView 会在加载/翻页/重排时重建内部层级,湿墨层每次都要重新置顶;
-        // 若它被移出层级(极端情况)也补挂回去。
-        if let wetHost, let pdfView {
-            if wetHost.superview == nil { pdfView.addSubview(wetHost) }
-            pdfView.bringSubviewToFront(wetHost)
-        }
         let changed = markMode != on
         markMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
@@ -1427,13 +1283,10 @@ final class ReaderCoordinator: NSObject {
             return
         }
         clearHover()
-        if !on {
-            stopAutoScroll()
-            clearWetInk()
-        }
+        if !on { stopAutoScroll() }
         overlayProvider?.setMarkMode(on)
         // v0.25.1:进入书写时**强制**套用一次工具 —— 只靠签名去重的话,重进文档时
-        // 笔具 kind 与上次相同(比如橡皮/形状)→ 一次都不 apply → 画布根本没被"装上"
+        // 笔具 kind 与上次相同(比如橡皮/书法/形状)→ 一次都不 apply → 画布根本没被"装上"
         // 那种工具(日志里重进后 eraser=0、且再无 apply tool= 行),表现就是"工具没记忆"。
         if on { applyToolSession(force: true) }
         pencilPressRef?.isEnabled = !on
@@ -1457,37 +1310,47 @@ final class ReaderCoordinator: NSObject {
     /// 把工具会话当前笔具套到所有页画布(调色盘 / 笔宽变化时由 SwiftUI onChange 调用;幂等)。
     /// v0.16.1(卡死修复):
     /// ① **签名去重**——工具没变就完全不碰 PencilKit(此前 `updateUIView` 每帧都重建工具);
-    /// ② **延迟到下一个 runloop**——绝不在 SwiftUI 更新/手势回调里同步改 `PKCanvasView.tool`
-    ///    (在 PencilKit 自己的回调里改工具、或在布局过程中改,都可能把主线程锁死)。
+    /// ② v0.31.0:**改回同步**。异步版本留下过一个致命窗口:`provider` 还没创建时
+    ///    任务直接 return,而签名已经被记下 —— 之后再没有任何人重套一次,画布就永远停在
+    ///    初始化时的保底黑笔上。真机表现正是「除了橡皮和直尺,其余工具都只有黑笔效果」。
+    ///    赋值只是一次工具对象替换(页数 × 1),签名去重仍然挡住「每帧重设」的卡死风险。
     func applyToolSession(force: Bool = false) {
         guard let session = toolSession else { return }
-        if !wetToolIsRegular { clearWetInk() }
-        let revision = session.stateRevision
-        if !force, revision == appliedToolRevision, !toolApplyScheduled { return }
+        let signature = Self.toolSignature(session)
+        if !force, signature == appliedToolSignature { return }
+        // provider 未就绪时**不记签名**,留给建好之后的下一次调用(enterMarkMode / onAppear)
+        guard let provider = overlayProvider else { return }
+        appliedToolSignature = signature
+        let start = CFAbsoluteTimeGetCurrent()
+        provider.setRulerActive(session.rulerActive)
+        provider.setTool(session.makeTool(scale: InkGeometry.scale))
+        provider.setEraserMode(
+            active: session.kind == .eraser && session.useCustomEraser,
+            whole: session.eraserWhole,
+            radius: session.eraserRadius * InkGeometry.scale
+        )
+        // v0.23.0:激光笔 / 形状工具(与橡皮共用同一条自研手势通道)
+        provider.setLaserMode(active: session.kind == .laser)
+        provider.setShapeMode(
+            active: session.kind == .shape,
+            kind: session.shapeKind,
+            color: session.currentUIColor,
+            width: session.width
+        )
+        // v0.24.0:书法笔(斜切笔尖 + 稳定化,自研可变笔宽)
+        provider.setCalligraphyMode(
+            active: session.kind == .calligraphy,
+            color: session.currentUIColor,
+            width: session.width,
+            nib: session.nibAngle,
+            smoothing: session.calligraphySmoothing
+        )
+        let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+        DiagLog.log("pencil: apply tool=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
+    }
 
-        // 第一段(同步):模式标志/手势开关/形状参数立刻生效。
-        // 选完形状后下一次拖动就是新形状 —— 不再等异步的 canvas.tool 那一段。
-        overlayProvider?.applyModeState(session.state)
-
-        // 第二段(异步):只赋 PKCanvasView.tool。若已有任务在排队,它执行时会读最新会话值,
-        // 因此这里直接返回也不会丢状态。
-        guard !toolApplyScheduled else { return }
-        toolApplyScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.toolApplyScheduled = false
-            guard let provider = self.overlayProvider, let session = self.toolSession else { return }
-            let start = CFAbsoluteTimeGetCurrent()
-            let appliedRevision = session.stateRevision
-            provider.setTool(session.makeTool(scale: InkGeometry.scale))
-            self.appliedToolRevision = appliedRevision
-            let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
-            DiagLog.log("pencil: state applied rev=\(appliedRevision) kind=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
-            // 执行期间状态又变了 → 追上最新值再补一次。
-            if session.stateRevision != appliedRevision {
-                self.applyToolSession(force: true)
-            }
-        }
+    private static func toolSignature(_ session: PencilToolSession) -> String {
+        "\(session.kind.rawValue)|\(session.colorIndex)|\(session.markerColorIndex)|\(session.widthIndex)|\(session.eraserWhole)|\(session.eraserSizeIndex)|\(session.useCustomEraser)|\(session.rulerActive)|\(session.shapeKind.rawValue)|\(session.nibAngleIndex)|\(session.calligraphySmoothing ? 1 : 0)"
     }
 
     // MARK: - v0.18.0 书写贴边自动滚动(连续书写第一步)
@@ -1580,14 +1443,8 @@ final class ReaderCoordinator: NSObject {
             setScale(percent / 100, on: pdfView, tag: "\(Int(percent))%")
         }
 
-    func undoInk() {
-        clearWetInk()
-        overlayProvider?.undo()
-    }
-    func redoInk() {
-        clearWetInk()
-        overlayProvider?.redo()
-    }
+    func undoInk() { overlayProvider?.undo() }
+    func redoInk() { overlayProvider?.redo() }
 
     // v0.15.0:双指轻点 = 撤销、三指轻点 = 重做(Notability 手势;仅标记模式生效)
     // v0.16.2:手掌误触防护 —— 刚落笔/擦除后的 0.35s 内忽略(真机日志出现过「30 笔一次变 10 笔」,
@@ -1942,7 +1799,8 @@ final class ReaderCoordinator: NSObject {
             guard let self else { return }
             self.refreshHandles()
             self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
-            self.dryHost?.refresh()                      // v0.30.0:跨页干墨跟随滚动
+            // v0.31.0:直尺跟着焦点页走(否则滚动后尺子会留在上一页)
+            self.overlayProvider?.refreshRulerFocus()
             if sv.isDragging || sv.isDecelerating {
                 self.hasUserInteracted = true
             }
@@ -1951,13 +1809,13 @@ final class ReaderCoordinator: NSObject {
         scrollObservers.append(sv.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:缩放后菜单随选区同步
-            self?.dryHost?.refresh()                    // v0.30.0:跨页干墨跟随缩放
+            self?.overlayProvider?.refreshRulerFocus()
             self?.fireReadingTick()
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:旋转/布局变化后菜单随选区同步
-            self?.dryHost?.refresh()                    // v0.30.0:旋转/分屏后页矩形变化
+            self?.overlayProvider?.refreshRulerFocus()
         })
     }
 
@@ -2043,9 +1901,12 @@ final class ReaderCoordinator: NSObject {
     /// 供缩略图面板读取(面板只需要页数与页面,不持有 PDFView)
     var document: PDFDocument? { pdfView?.document }
 
-    /// v0.23.2:页面排布 —— 纵向连续 / 横向连续。
-    /// v0.30.0:**取消双页并排**(`twoUp`):所有页始终以一张连续长纸显示,
-    /// 旧设置里的 "twoUp" 一律回落到纵向连续。
+    /// 双页显示(左右并排,仍连续滚动)
+    func setTwoUp(_ on: Bool) {
+        setLayoutMode(on ? "twoUp" : "vertical")
+    }
+
+    /// v0.23.2:页面排布 —— 纵向连续 / 横向连续 / 双页并排。
     /// 切换 displayMode 会重置缩放上限,所以切完重新放开并恢复原缩放。
     func setLayoutMode(_ raw: String) {
         guard let pdfView else { return }
@@ -2055,6 +1916,9 @@ final class ReaderCoordinator: NSObject {
         case "horizontal":
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .horizontal
+        case "twoUp":
+            pdfView.displayMode = .twoUpContinuous
+            pdfView.displayDirection = .vertical
         default:
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .vertical
@@ -2066,7 +1930,6 @@ final class ReaderCoordinator: NSObject {
         pdfView.pageBreakMargins = .zero
         applyZoomLimits(pdfView)
         if !auto { pdfView.scaleFactor = scale }
-        dryHost?.refresh()   // v0.30.0:页矩形随排布变化,跨页干墨重算位置
         DiagLog.log("display: layout=\(raw)")
     }
 
