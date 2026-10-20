@@ -77,6 +77,8 @@ final class ReaderCoordinator: NSObject {
     private weak var autoScrollView: UIScrollView?
     /// v0.28.0:全局湿墨层 —— 常规笔越出当前页的那一段画在 PDFView 之上,不被邻页遮挡
     private var wetHost: PencilWetInkHost?
+    /// v0.30.0:跨页干墨层 —— 每页墨迹里越过页面矩形的部分画在邻页上(不切分、不搬迁)
+    private var dryHost: PencilDryInkHost?
     private var wetActive = false
     private var wetPageIndex = 0
     private var wetStrokePoints: [CGPoint] = []   // 页面本地坐标(y 向下)
@@ -226,6 +228,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("ocr: scanned=\(docScanned)")
         // v0.23.2:恢复页面排布(纵向/横向/双页)
         if let view = pdfView {
+            if let dryHost { view.bringSubviewToFront(dryHost) }
             if let wetHost { view.bringSubviewToFront(wetHost) }
             setLayoutMode(UserDefaults.standard.string(forKey: "readerLayoutMode") ?? "vertical")
             // PDFKit 设文档后会重置缩放上下限,这里重新放开到 4000%
@@ -272,6 +275,8 @@ final class ReaderCoordinator: NSObject {
         clearWetInk()
         wetHost?.removeFromSuperview()
         wetHost = nil
+        dryHost?.removeFromSuperview()
+        dryHost = nil
         removeObservers()
     }
 
@@ -424,6 +429,8 @@ final class ReaderCoordinator: NSObject {
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
+        // v0.30.0:干墨层接手后立刻撤湿墨预览(同一段墨不重复画)
+        provider.onInkCommitted = { [weak self] in self?.clearWetAfterCommit() }
         // v0.25.1:新 provider 的橡皮/激光/形状配置默认全是"关",必须把当前会话状态推一次,
         // 否则重进文档后(overlay 在创建时继承的是默认关)会出现"工具选中了但画不出/擦不了"。
         applyToolSession(force: true)
@@ -478,6 +485,14 @@ final class ReaderCoordinator: NSObject {
         view.addGestureRecognizer(observer)
         pencilObserver = observer
 
+        // v0.30.0:跨页干墨层(先加,湿墨层在它之上)
+        let dry = PencilDryInkHost(frame: view.bounds)
+        dry.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dry.pdfView = view
+        view.addSubview(dry)
+        dryHost = dry
+        overlayProvider?.dryHost = dry
+
         // v0.28.0:全局湿墨层(直接挂在 PDFView 上,固定在视口坐标,盖住所有页)
         let wet = PencilWetInkHost(frame: view.bounds)
         wet.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -485,6 +500,7 @@ final class ReaderCoordinator: NSObject {
         view.addSubview(wet)
         view.bringSubviewToFront(wet)
         wetHost = wet
+        dry.aboveView = wet
         overlayProvider?.wetHost = wet
 
         suppressNativeSelection(in: view)
@@ -576,6 +592,13 @@ final class ReaderCoordinator: NSObject {
         wetActive = false
         wetStrokePoints.removeAll(keepingCapacity: true)
         wetHost?.clear()
+    }
+
+    /// v0.30.0:干墨层已经画出这一笔 → 立即撤掉湿墨预览,避免页外那段被两套渲染叠着画。
+    /// 若新一笔已经开始(`wetActive` 还是 true),不要清它 —— 交给它自己的结束流程。
+    private func clearWetAfterCommit() {
+        guard !wetActive else { return }
+        clearWetInk()
     }
 
     /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放与链接单击。
@@ -1919,6 +1942,7 @@ final class ReaderCoordinator: NSObject {
             guard let self else { return }
             self.refreshHandles()
             self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
+            self.dryHost?.refresh()                      // v0.30.0:跨页干墨跟随滚动
             if sv.isDragging || sv.isDecelerating {
                 self.hasUserInteracted = true
             }
@@ -1927,11 +1951,13 @@ final class ReaderCoordinator: NSObject {
         scrollObservers.append(sv.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:缩放后菜单随选区同步
+            self?.dryHost?.refresh()                    // v0.30.0:跨页干墨跟随缩放
             self?.fireReadingTick()
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:旋转/布局变化后菜单随选区同步
+            self?.dryHost?.refresh()                    // v0.30.0:旋转/分屏后页矩形变化
         })
     }
 
@@ -2017,12 +2043,9 @@ final class ReaderCoordinator: NSObject {
     /// 供缩略图面板读取(面板只需要页数与页面,不持有 PDFView)
     var document: PDFDocument? { pdfView?.document }
 
-    /// 双页显示(左右并排,仍连续滚动)
-    func setTwoUp(_ on: Bool) {
-        setLayoutMode(on ? "twoUp" : "vertical")
-    }
-
-    /// v0.23.2:页面排布 —— 纵向连续 / 横向连续 / 双页并排。
+    /// v0.23.2:页面排布 —— 纵向连续 / 横向连续。
+    /// v0.30.0:**取消双页并排**(`twoUp`):所有页始终以一张连续长纸显示,
+    /// 旧设置里的 "twoUp" 一律回落到纵向连续。
     /// 切换 displayMode 会重置缩放上限,所以切完重新放开并恢复原缩放。
     func setLayoutMode(_ raw: String) {
         guard let pdfView else { return }
@@ -2032,9 +2055,6 @@ final class ReaderCoordinator: NSObject {
         case "horizontal":
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .horizontal
-        case "twoUp":
-            pdfView.displayMode = .twoUpContinuous
-            pdfView.displayDirection = .vertical
         default:
             pdfView.displayMode = .singlePageContinuous
             pdfView.displayDirection = .vertical
@@ -2046,6 +2066,7 @@ final class ReaderCoordinator: NSObject {
         pdfView.pageBreakMargins = .zero
         applyZoomLimits(pdfView)
         if !auto { pdfView.scaleFactor = scale }
+        dryHost?.refresh()   // v0.30.0:页矩形随排布变化,跨页干墨重算位置
         DiagLog.log("display: layout=\(raw)")
     }
 

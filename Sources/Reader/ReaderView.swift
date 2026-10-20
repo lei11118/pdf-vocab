@@ -105,6 +105,8 @@ struct ReaderView: View {
             }
             .onAppear {
                 pencilTools.attachDocument(doc.sha256)
+                // v0.30.0:双页并排已取消,旧设置一律回落到纵向连续
+                if layoutMode == "twoUp" { layoutMode = "vertical" }
                 // v0.28.0:装回按书状态后强制套一次 —— 新 provider/新叠层必须拿到完整状态,
                 // 不能指望“值没变所以不用套”(这正是重进文档后工具不生效的根因)。
                 DispatchQueue.main.async { applyPencilTool(force: true) }
@@ -367,11 +369,6 @@ struct ReaderView: View {
                             layoutMode = "horizontal"
                         } label: {
                             Label("横向连续", systemImage: layoutMode == "horizontal" ? "checkmark" : "rectangle")
-                        }
-                        Button {
-                            layoutMode = "twoUp"
-                        } label: {
-                            Label("双页并排", systemImage: layoutMode == "twoUp" ? "checkmark" : "book.pages")
                         }
                     } label: {
                         Label("页面排布", systemImage: "rectangle.split.2x1")
