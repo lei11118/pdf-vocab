@@ -84,6 +84,9 @@ final class ReaderCoordinator: NSObject {
     private var wetPageIndex = 0
     private var wetStrokePoints: [CGPoint] = []   // 页面本地坐标(y 向下)
     private var wetLastDrawAt: CFAbsoluteTime = 0
+    /// v0.33.0:最近一次收到采样点的时刻 —— 观察者的 touchesEnded 不稳(真机日志里
+    /// 只有 `wet begin`、从来没有 `wet end`),靠它判断"上一笔其实已经结束"。
+    private var wetLastSampleAt: CFAbsoluteTime = 0
     private var wetGeneration = 0
     /// v0.13.2(紧急修复):已隔离的滚动 pan 账本(原始触型 / 延迟设置;退出标记模式逐条还原)
     private var armedScrollPans: [ObjectIdentifier: (pan: UIPanGestureRecognizer, scroll: UIScrollView, originalTouchTypes: [NSNumber], originalDelays: Bool)] = [:]
@@ -427,6 +430,8 @@ final class ReaderCoordinator: NSObject {
             tool: toolSession?.makeTool(scale: InkGeometry.scale), rulerActive: toolSession?.rulerActive ?? false
         )
         overlayProvider = provider
+        // v0.33.0:跨页沿当前排布方向搬(横向连续时邻页在左右)
+        provider.flowAxis = view.displayDirection == .horizontal ? .horizontal : .vertical
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
         view.pageOverlayViewProvider = provider
@@ -532,6 +537,11 @@ final class ReaderCoordinator: NSObject {
 
     private func appendWetSamples(_ viewPoints: [CGPoint]) {
         guard markMode, wetToolIsRegular, let pdfView, let session = toolSession else { return }
+        // v0.33.0:观察者的 touchesEnded 不稳(日志里只有 begin、没有 end)→ 上一笔的湿墨
+        // 会一直留在屏上。这里用采样间隔兜底:超过 1s 没新采样,就当作已经开始新一笔。
+        let stamp = CFAbsoluteTimeGetCurrent()
+        if wetActive, stamp - wetLastSampleAt > 1.0 { beginWetStroke() }
+        wetLastSampleAt = stamp
         for viewPoint in viewPoints {
             if !wetActive {
                 guard let page = pdfView.page(for: viewPoint, nearest: true) else { continue }
@@ -598,7 +608,9 @@ final class ReaderCoordinator: NSObject {
     /// v0.30.0:干墨层已经画出这一笔 → 立即撤掉湿墨预览,避免页外那段被两套渲染叠着画。
     /// 若新一笔已经开始(`wetActive` 还是 true),不要清它 —— 交给它自己的结束流程。
     private func clearWetAfterCommit() {
-        guard !wetActive else { return }
+        // v0.33.0:不再因 `wetActive` 卡住。真机日志里 `wet end` 一次都没出现,
+        // 说明观察者的结束回调不可靠 —— 湿墨预览会永久留一段"幽灵墨迹"在屏上。
+        // 画布内容已经落定(干墨接手)就无条件清掉,预览至多早撤一帧。
         clearWetInk()
     }
 
@@ -2077,6 +2089,8 @@ final class ReaderCoordinator: NSObject {
         pdfView.pageBreakMargins = .zero
         applyZoomLimits(pdfView)
         if !auto { pdfView.scaleFactor = scale }
+        // v0.33.0:排布方向变了,跨页搬页的方向跟着变
+        overlayProvider?.flowAxis = pdfView.displayDirection == .horizontal ? .horizontal : .vertical
         dryHost?.refresh()   // v0.30.0:页矩形随排布变化,跨页干墨重算位置
         DiagLog.log("display: layout=\(raw)")
     }

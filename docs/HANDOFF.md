@@ -1,6 +1,6 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
-> 交接时间:2026-10-20 · 当前版本:**v0.32.0(build 70)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
+> 交接时间:2026-10-20 · 当前版本:**v0.33.0(build 71)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 
 ---
@@ -18,13 +18,13 @@
 
 | 项 | 值 |
 |---|---|
-| 最新版本 | **v0.32.0 / build 70**(`project.yml`) |
-| 最新 Release | https://github.com/lei11118/pdf-vocab/releases/tag/v0.32.0 |
-| 代码提交 | v0.32.0 代码 = 本节所在提交(HEAD) |
+| 最新版本 | **v0.33.0 / build 71**(`project.yml`) |
+| 最新 Release | https://github.com/lei11118/pdf-vocab/releases/tag/v0.33.0 |
+| 代码提交 | v0.33.0 代码 = 本节所在提交(HEAD) |
 | 远端 HEAD | 与本地 `main` 内容一致(API 通道推送,哈希不同,历史不回写) |
 | 新环境第一步 | `git fetch origin && git reset --soft origin/main`(树相同,再提交即可对齐历史) |
 | CI | 全部绿;最新一次 build 见 `gh run list -L 3` |
-| 待验收 | §9.1:**v0.32.0 三项**——①切笔后墨色/笔宽是否跟随(不再只有黑笔)②直尺是否只有中间一把并跟随滚动 ③第 2 页往上写能否接到第 1 页;外加 v0.28.0 工具记忆、v0.27.0 统一撤销 |
+| 待验收 | §9.1:**v0.33.0 四项**——①横向连续下跨页是否落到右边那页左缘 ②纵向连续下第 2 页往上写是否接上第 1 页 ③停手后页边是否残留墨迹 ④各工具颜色/粗细是否正确;另 + **"工具图标"具体现象待用户确认**(日志无记录) |
 
 **v0.32.0 手写层重建说明(必读,别再走弯路)**:
 
@@ -34,7 +34,11 @@ v0.28.0 → v0.30.0 三版"手写重构"引入的两个致命点,已在 v0.32.0 
 2. **跨页不能用"PDFView 上的镜像层"**。v0.30 的干墨镜像层会被 PDFKit 翻页重建的页视图压到下层,页缝处正好被裁成截断。现在:回到**抬笔切分搬页**,并改成**幂等结算**(`PencilOverlayProvider.settleOverflow(page:)`:凡越出页面矩形的笔迹按页边插值切开、页外段平移给邻页;邻页无叠层则写库;撤销后 0.8s 内不结算)。
 3. **直尺是每块画布各带一把**。`applyModeState` 里对所有页设 `isRulerActive` = 屏幕上多把尺子。现在只由 `refreshRulerFocus()` 挂到视口焦点页,滚动/缩放/旋转时跟随。
 
-诊断行:`pencil: apply ink=<墨型>:<#RRGGBB>:<宽度>`(工具是否真的套到画布)、`pencil: overflow up/down page X -> Y pts=N`(跨页是否搬了)、`pencil: overflow ... stuck`(搬不动,附原因)。
+诊断行:`pencil: apply ink=<墨型>:<#RRGGBB>:<宽度>`(工具是否真的套到画布)、`pencil: overflow y+/y-/x+/x- page X -> Y pts=N`(跨页沿哪个轴搬了)、`pencil: overflow ... stuck`(搬不动)。
+
+**v0.33.0 补充(依据真机 diagnostics.log)**:
+- **跨页必须沿排布方向**(`PencilOverlayProvider.flowAxis`):纵向连续只处理上下越界(位移一页高),横向连续只处理左右越界(位移一页宽);另一轴没有邻页,不要搬。v0.32 只按 y 切,横向排布下把越过页底的墨搬到"右边那一页",真机表现为图形跑到隔壁页 + `stroke hit canvas edge (bleed exhausted)`。
+- **湿墨预览的结束回调不可靠**:真机日志只有 `wet begin`、没有 `wet end`,预览会永久残留一段幽灵墨迹。现在画布落定即无条件清除(`clearWetAfterCommit` 不再看 `wetActive`),并用 1s 采样间隔兜底换新一笔。
 
 **v0.25.0 新增的三条硬事实(改之前先看懂)**:
 6. **`PKCanvasView` 是 UIScrollView,`clipsToBounds` 默认为真 —— 超出 canvas.bounds 的墨迹会被直接裁掉。**

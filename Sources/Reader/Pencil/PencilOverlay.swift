@@ -2,6 +2,12 @@ import UIKit
 import PencilKit
 import PDFKit
 
+/// v0.33.0:连续排布方向。跨页只能沿这个方向搬 —— 横向排布时邻页在左右,没有上下邻页。
+enum InkFlowAxis {
+    case vertical
+    case horizontal
+}
+
 /// Pencil 标记层(v0.9.0,M4;v0.14.0 Paper Modern 手写体验重构):
 /// - `PencilOverlayProvider` 经 `PDFView.pageOverlayViewProvider` 为**每一页**叠加一个画布容器;
 /// - 画布为 `PKCanvasView`(`drawingPolicy = .pencilOnly`),只接受 Pencil;
@@ -148,20 +154,31 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
     }
 
+    /// 当前连续排布方向(纵向 = 上下翻页;横向 = 左右翻页)
+    var flowAxis: InkFlowAxis = .vertical
+
     /// 把这一页里越出页面矩形的笔迹切开:页内段留下,页外段搬到邻页
     /// (邻页还没建叠层就写进它的墨迹库)。
     /// 幂等:搬完之后这一页不再有越界段,重复调用不会再改任何东西。
     func settleOverflow(page: Int) {
         guard !settling, let overlay = overlays[page] else { return }
-        let pageHeight = overlay.bounds.height
-        guard pageHeight > 1 else { return }
-        let top = InkGeometry.pageTopY()
-        let bottom = top + pageHeight * InkGeometry.scale
+        let pageSize = overlay.bounds.size
+        guard pageSize.width > 1, pageSize.height > 1 else { return }
+        let rect = InkGeometry.pageRectInCanvas(pageSize: pageSize)
         var strokes = overlay.canvasSnapshot.strokes
         guard !strokes.isEmpty else { return }
 
-        func hasDown(_ s: PKStroke) -> Bool { s.path.contains { $0.location.y > bottom + 0.5 } }
-        func hasUp(_ s: PKStroke) -> Bool { s.path.contains { $0.location.y < top - 0.5 } }
+        // v0.33.0:沿排布方向切。横向排布时邻页在左右,按 y 切会把墨搬到"右边那一页"。
+        let axis: InkSplitAxis = flowAxis == .vertical ? .y : .x
+        let edgeMax: CGFloat = axis == .y ? rect.maxY : rect.maxX
+        let edgeMin: CGFloat = axis == .y ? rect.minY : rect.minX
+
+        func beyond(_ s: PKStroke) -> Bool {
+            s.path.contains { PencilStrokeTools.value($0, axis) > edgeMax + 0.5 }
+        }
+        func before(_ s: PKStroke) -> Bool {
+            s.path.contains { PencilStrokeTools.value($0, axis) < edgeMin - 0.5 }
+        }
 
         var changed = false
         var rounds = 0
@@ -170,59 +187,50 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
 
         while rounds < 32 {
             rounds += 1
-            guard let idx = strokes.firstIndex(where: { hasDown($0) || hasUp($0) }) else { break }
+            guard let idx = strokes.firstIndex(where: { beyond($0) || before($0) }) else { break }
             let stroke = strokes[idx]
-            if hasDown(stroke) {
-                let parts = PencilStrokeTools.splitDown(stroke, atY: bottom)
-                guard parts.outside.count >= 2,
-                      let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
-                      let moved = PencilStrokeTools.shifted(outside, dy: -pageHeight * InkGeometry.scale),
-                      handoff(page: page + 1, canvasStroke: moved) else {
-                    DiagLog.log("pencil: overflow down stuck page=\(page) pts=\(parts.outside.count)")
-                    break
-                }
-                if parts.inside.count >= 2,
-                   let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
-                    strokes[idx] = inside
-                } else {
-                    strokes.remove(at: idx)
-                }
-                changed = true
-                DiagLog.log("pencil: overflow down page \(page) -> \(page + 1) pts=\(parts.outside.count)")
-            } else {
-                // 向上搬运用**上一页**的页高(两页尺寸不同,如封面/插页)
-                let prevHeight = neighborHeight(page: page - 1) ?? pageHeight
-                let parts = PencilStrokeTools.splitUp(stroke, atY: top)
-                guard parts.outside.count >= 2,
-                      let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
-                      let moved = PencilStrokeTools.shifted(outside, dy: prevHeight * InkGeometry.scale),
-                      handoff(page: page - 1, canvasStroke: moved) else {
-                    DiagLog.log("pencil: overflow up stuck page=\(page) pts=\(parts.outside.count)")
-                    break
-                }
-                if parts.inside.count >= 2,
-                   let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
-                    strokes[idx] = inside
-                } else {
-                    strokes.remove(at: idx)
-                }
-                changed = true
-                DiagLog.log("pencil: overflow up page \(page) -> \(page - 1) pts=\(parts.outside.count)")
+            let forward = beyond(stroke)
+            let parts = forward
+                ? PencilStrokeTools.splitBeyond(stroke, threshold: edgeMax, axis: axis)
+                : PencilStrokeTools.splitBefore(stroke, threshold: edgeMin, axis: axis)
+            // 前进方向用本页尺寸,后退方向用邻页尺寸(封面/插页尺寸不同时不错位)
+            let ownSpan = axis == .y ? pageSize.height : pageSize.width
+            let span = forward ? ownSpan : (neighborSpan(page: page - 1, axis: axis) ?? ownSpan)
+            let delta = (forward ? -span : span) * InkGeometry.scale
+            guard parts.outside.count >= 2,
+                  let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
+                  let moved = PencilStrokeTools.shifted(outside,
+                                                        dx: axis == .x ? delta : 0,
+                                                        dy: axis == .y ? delta : 0),
+                  handoff(page: forward ? page + 1 : page - 1, canvasStroke: moved) else {
+                DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") stuck page=\(page) pts=\(parts.outside.count)")
+                break
             }
+            if parts.inside.count >= 2,
+               let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
+                strokes[idx] = inside
+            } else {
+                strokes.remove(at: idx)
+            }
+            changed = true
+            DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") page \(page) -> \(forward ? page + 1 : page - 1) pts=\(parts.outside.count)")
         }
         guard changed else { return }
         let settled = PKDrawing(strokes: strokes)
         overlay.applyCanvasSnapshot(settled)
         overlay.flushSave()
-        dryHost?.update(page: page, drawing: settled, pageSize: overlay.bounds.size)
+        dryHost?.update(page: page, drawing: settled, pageSize: pageSize)
     }
 
-    /// 邻页页高(叠层没建时问文档)
-    private func neighborHeight(page: Int) -> CGFloat? {
-        if let overlay = overlays[page] { return overlay.bounds.height }
+    /// 邻页在切分轴上的尺寸(叠层没建时问文档)
+    private func neighborSpan(page: Int, axis: InkSplitAxis) -> CGFloat? {
+        if let overlay = overlays[page] {
+            return axis == .y ? overlay.bounds.height : overlay.bounds.width
+        }
         guard let pdfView, let document = pdfView.document, page >= 0, page < document.pageCount,
               let target = document.page(at: page) else { return nil }
-        return target.bounds(for: pdfView.displayBox).height
+        let size = target.bounds(for: pdfView.displayBox).size
+        return axis == .y ? size.height : size.width
     }
 
     /// 把一段(源页画布坐标,已平移好)交给目标页
