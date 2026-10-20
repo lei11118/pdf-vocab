@@ -1,27 +1,28 @@
 import UIKit
 import PencilKit
 
-/// v0.20.0:跨页书写的笔迹工具 —— 按 y 切开一笔、整笔平移。
+/// 笔迹几何工具(重建一笔 / 跨页切分)。
 ///
-/// PencilKit 的每一页是独立画布,一笔写不出页边。做法:
-/// 画布向下多留 `InkGeometry.bleed` 点"出血区",笔尖可以越过页底继续写;
-/// 抬笔后把超出页底的部分切下来,平移到下一页画布的顶部(页面已设为无缝相接,坐标直接相减)。
+/// v0.32.0:跨页重新回到「抬笔后按页边切开、把越界段搬到邻页」这一条路上。
+/// v0.30 试过「只渲染不搬迁」(在 PDFView 上叠镜像画布),真机上那层会被 PDFKit
+/// 翻页重建的页视图压到下层,页缝处正好被裁成截断 —— 不可行。
 ///
-/// v0.24.0:切分改成**插值桥接** —— 原来直接取"阈值外的第一个采样点",两半之间会留下
-/// 一个采样间隔的缺口(慢写也有一两毫米、快写能到十几毫米),页缝处看起来就是断的。
-/// 现在用相邻两点按 y 插值出一个边界点(位置/时间/笔宽/压力/角度全部插值),
-/// 两半共享这同一个点,视觉上严丝合缝。
+/// 切分一律**按页边插值出边界点**,两半共享同一个点,页缝两侧才不会留半个采样间隔的缺口。
 enum PencilStrokeTools {
 
-    /// 用一组点重建一笔(保留原笔的 ink 与 transform)
-    static func makeStroke(points: [PKStrokePoint], template: PKStroke) -> PKStroke? {
+    /// 用一组点重建一笔(保留原笔的 ink / transform / 创建时间)。
+    ///
+    /// 保留 `creationDate` —— 一笔被部分擦除后仍是共享同一 `creationDate` 的多段,
+    /// 换成新日期会让「整笔橡皮」再也找不齐同一笔的其它段。
+    static func makeStroke(points: [PKStrokePoint], template: PKStroke,
+                           creationDate: Date? = nil) -> PKStroke? {
         guard points.count >= 2 else { return nil }
-        let path = PKStrokePath(controlPoints: points, creationDate: Date())
+        let path = PKStrokePath(controlPoints: points,
+                                creationDate: creationDate ?? template.path.creationDate)
         return PKStroke(ink: template.ink, path: path, transform: template.transform, mask: nil)
     }
 
-    /// 两点之间按 t(0…1)插值一个采样点。除位置外,笔宽/压力/倾角也一起插值,
-    /// 这样跨页接缝处的粗细不会突变。
+    /// 两点之间按 t(0…1)插值一个采样点;笔宽/压力/倾角一起插值,接缝处粗细不突变。
     static func interpolate(_ a: PKStrokePoint, _ b: PKStrokePoint, t: CGFloat) -> PKStrokePoint {
         let k = min(max(t, 0), 1)
         func mix(_ x: CGFloat, _ y: CGFloat) -> CGFloat { x + (y - x) * k }
@@ -44,13 +45,12 @@ enum PencilStrokeTools {
         return min(max((threshold - a.location.y) / dy, 0), 1)
     }
 
-    /// 把一笔按 y 切成「页内 / 溢出」两段(阈值单位 = 画布坐标)。
+    /// 向下越界:按 y 切成「页内 / 页外」两段(阈值 = 画布坐标的页底)。
     /// 返回的 inside 末尾与 outside 开头是**同一个边界点**。
-    static func split(_ stroke: PKStroke, atY threshold: CGFloat) -> (inside: [PKStrokePoint], outside: [PKStrokePoint]) {
+    static func splitDown(_ stroke: PKStroke, atY threshold: CGFloat) -> (inside: [PKStrokePoint], outside: [PKStrokePoint]) {
         let points = Array(stroke.path)
         guard let first = points.first else { return ([], []) }
-        // 整笔都在阈值以下:全部属于下一页
-        if first.location.y > threshold { return ([], points) }
+        if first.location.y > threshold { return ([], points) }   // 整笔都在页底以下
         guard let i = points.firstIndex(where: { $0.location.y > threshold }), i > 0 else {
             return (points, [])
         }
@@ -58,13 +58,11 @@ enum PencilStrokeTools {
         return (Array(points[..<i]) + [bridge], [bridge] + Array(points[i...]))
     }
 
-    /// v0.23.2:向上越界专用 —— 笔从页内往上写,先遇到 y ≤ 阈值。
-    /// 返回 (above: 页顶以上的段, below: 页内段);两段共享同一个边界点。
-    static func splitUpward(_ stroke: PKStroke, atY threshold: CGFloat) -> (above: [PKStrokePoint], below: [PKStrokePoint]) {
+    /// 向上越界:按 y 切成「页外(页顶以上)/ 页内」两段。两段共享同一个边界点。
+    static func splitUp(_ stroke: PKStroke, atY threshold: CGFloat) -> (outside: [PKStrokePoint], inside: [PKStrokePoint]) {
         let points = Array(stroke.path)
         guard let first = points.first else { return ([], []) }
-        // 整笔都在页顶以上:全部属于上一页
-        if first.location.y <= threshold { return (points, []) }
+        if first.location.y <= threshold { return (points, []) }   // 整笔都在页顶以上
         guard let i = points.firstIndex(where: { $0.location.y <= threshold }), i > 0 else {
             return ([], points)
         }
@@ -72,7 +70,7 @@ enum PencilStrokeTools {
         return ([bridge] + Array(points[i...]), Array(points[..<i]) + [bridge])
     }
 
-    /// 整笔沿 y 平移(用于把溢出段搬到下一页)
+    /// 整笔沿 y 平移(把越界段搬到邻页的画布坐标)
     static func shifted(_ stroke: PKStroke, dy: CGFloat) -> PKStroke? {
         let points = stroke.path.map { point in
             PKStrokePoint(

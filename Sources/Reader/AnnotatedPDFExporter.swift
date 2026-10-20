@@ -30,6 +30,19 @@ enum AnnotatedPDFExporter {
         fmt.scale = 1
         fmt.opaque = true
 
+        /// 读某页手写并归一化到**页面坐标(y 向下,页面点,左上原点)**。
+        /// v0.30.0:墨迹归属落笔页,可能越出页面矩形;导出时把相邻页的越界段补画回来。
+        func loadPageInk(_ index: Int) -> PKDrawing? {
+            guard let record = ink.drawing(docSha: docSha, page: index),
+                  var drawing = try? PKDrawing(data: record.data),
+                  !drawing.strokes.isEmpty else { return nil }
+            if record.scale > 0.001, abs(record.scale - 1) > 0.001 {
+                let factor = CGFloat(1 / record.scale)
+                drawing.transform(using: CGAffineTransform(scaleX: factor, y: factor))
+            }
+            return drawing
+        }
+
         try renderer.writePDF(to: outURL) { context in
             for i in 0..<doc.pageCount {
                 autoreleasepool {
@@ -51,16 +64,36 @@ enum AnnotatedPDFExporter {
                             VocabStore.highlightColor(named: colorName).withAlphaComponent(0.4).setFill()
                             imageContext.cgContext.fill(mapped)
                         }
-                        // Pencil 手写(画布坐标 = 页面点 × scale;导出前归一化到页面坐标)
-                        if let record = ink.drawing(docSha: docSha, page: i),
-                           var drawing = try? PKDrawing(data: record.data),
-                           !drawing.strokes.isEmpty {
-                            if record.scale > 0.001, abs(record.scale - 1) > 0.001 {
-                                let factor = CGFloat(1 / record.scale)
-                                drawing.transform(using: CGAffineTransform(scaleX: factor, y: factor))
-                            }
-                            let inkImage = drawing.image(from: CGRect(origin: .zero, size: pageBounds.size), scale: scale)
+                        // Pencil 手写(导出前归一化到页面坐标)
+                        if let own = loadPageInk(i) {
+                            let inkImage = own.image(from: CGRect(origin: .zero, size: pageBounds.size), scale: scale)
                             inkImage.draw(in: CGRect(origin: .zero, size: pixelSize))
+                        }
+                        // v0.30.0:上一页写在页底之外的墨 → 本页顶部
+                        if i > 0, let prev = loadPageInk(i - 1),
+                           let prevPage = doc.page(at: i - 1) {
+                            let pb = prevPage.bounds(for: .cropBox)
+                            guard pb.width > 1, pb.height > 1 else { return }
+                            let strip = prev.image(
+                                from: CGRect(x: 0, y: pb.height, width: pb.width, height: InkGeometry.bleed),
+                                scale: scale
+                            )
+                            strip.draw(in: CGRect(x: 0, y: 0,
+                                                  width: pb.width * scale,
+                                                  height: InkGeometry.bleed * scale))
+                        }
+                        // v0.30.0:下一页写在页顶之外的墨 → 本页底部
+                        if i + 1 < doc.pageCount, let next = loadPageInk(i + 1),
+                           let nextPage = doc.page(at: i + 1) {
+                            let nb = nextPage.bounds(for: .cropBox)
+                            guard nb.width > 1, nb.height > 1 else { return }
+                            let strip = next.image(
+                                from: CGRect(x: 0, y: -InkGeometry.bleedTop, width: nb.width, height: InkGeometry.bleedTop),
+                                scale: scale
+                            )
+                            strip.draw(in: CGRect(x: 0, y: pageBounds.height * scale,
+                                                  width: nb.width * scale,
+                                                  height: InkGeometry.bleedTop * scale))
                         }
                     }
                     context.beginPage(withBounds: pageBounds, pageInfo: [:])
