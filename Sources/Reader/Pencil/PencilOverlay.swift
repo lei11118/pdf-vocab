@@ -29,6 +29,14 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var shapeConfig: (active: Bool, kind: PencilShapeKind, color: UIColor, width: CGFloat) = (false, .line, .label, 2)
     /// v0.24.0:书法笔配置(新页画布创建时继承)
     private var calligraphyConfig: (active: Bool, color: UIColor, width: CGFloat, nib: CGFloat, smooth: Bool) = (false, .label, 4, 45, true)
+    /// v0.28.0:最近一次完整工具状态 —— 新页叠层创建时一次性继承,不再逐个 config 拼装。
+    private(set) var modeState = PencilToolState()
+    /// v0.28.0:全局湿墨层(书法/形状预览也走它,页缝外不再被邻页遮挡)
+    weak var wetHost: PencilWetInkHost? {
+        didSet {
+            for (_, overlay) in overlays { overlay.wetHost = wetHost }
+        }
+    }
     /// v0.14.0:最近落笔的画布(撤销 / 重做目标)
     private weak var activeCanvas: PKCanvasView?
 
@@ -78,15 +86,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             overlay.onActionEnd = { [weak self] in
                 self?.scheduleInkActionCommit()
             }
-            // v0.22.0:新页画布继承当前橡皮配置
-            overlay.setEraserMode(active: eraserConfig.active, whole: eraserConfig.whole, radius: eraserConfig.radius)
-            // v0.23.0:新页画布继承激光笔 / 形状配置
-            overlay.setLaserMode(laserActive)
-            overlay.setShapeMode(active: shapeConfig.active, kind: shapeConfig.kind, color: shapeConfig.color, width: shapeConfig.width)
-            // v0.24.0:新页画布继承书法笔配置
-            overlay.setCalligraphyMode(active: calligraphyConfig.active, color: calligraphyConfig.color,
-                                       width: calligraphyConfig.width, nib: calligraphyConfig.nib,
-                                       smoothing: calligraphyConfig.smooth)
+            // v0.28.0:新页画布一次性继承完整工具状态(橡皮/激光/形状/书法/直尺)
+            overlay.wetHost = wetHost
+            overlay.applyModeState(modeState)
             overlays[index] = overlay
             DiagLog.log("pencil: overlay created page=\(index)")
             // v0.13.3:落位后确保叠层在页内容之上(墨水可见、命中优先)
@@ -100,6 +102,16 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
 
     func pdfView(_ view: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFPage) {
         (overlayView as? InkOverlayView)?.flushSave()
+    }
+
+    /// v0.28.0:**同步**套用整份模式状态(直尺/橡皮/激光/形状/书法/预览配置)。
+    /// 这一步只改标志位与手势开关,不碰 `PKCanvasView.tool`,所以可以立即执行 ——
+    /// 用户选完形状后下一次拖动就是新形状,不必等异步那一段。
+    func applyModeState(_ state: PencilToolState) {
+        modeState = state
+        for (_, overlay) in overlays {
+            overlay.applyModeState(state)
+        }
     }
 
     /// v0.14.0:把当前笔具套用到全部页画布(幂等)。
@@ -167,6 +179,11 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     /// 现在改为**直接写进目标页的墨迹库**,叠层创建时 `loadInk` 自然带出来 —— 不丢墨、不错位。
     private func moveOverflow(from index: Int, stroke: PKStroke) -> Bool {
         guard let current = overlays[index] else { return false }
+        // 最后一页页底之外的墨没有"下一页"可放,直接拒绝(源页保留整笔,不丢墨)。
+        if let count = pdfView?.document?.pageCount, index + 1 >= count {
+            DiagLog.log("pencil: overflow down dropped (last page \(index))")
+            return false
+        }
         let pageHeight = current.bounds.height
         guard pageHeight > 1 else { return false }
         let shift = pageHeight * InkGeometry.scale
@@ -175,6 +192,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         notePagesInAction([index, index + 1])
 
         if let next = overlays[index + 1] {
+            // v0.28.0:目标页自己的 drawingDidChange 会再排一次跨页检查 —— 先静一会儿,
+            // 否则刚搬过来的段会被当成“新笔”再切一次。
+            next.suppressInkPostProcessing(for: 0.5)
             next.canvas.drawing = PKDrawing(strokes: next.canvas.drawing.strokes + [moved])
             next.flushSave()
             DiagLog.log("pencil: overflow moved page \(index) -> \(index + 1)")
@@ -206,6 +226,7 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         notePagesInAction([index - 1, index])
 
         if let prev = overlays[index - 1] {
+            prev.suppressInkPostProcessing(for: 0.5)
             prev.canvas.drawing = PKDrawing(strokes: prev.canvas.drawing.strokes + [moved])
             prev.flushSave()
             DiagLog.log("pencil: overflow up page \(index) -> \(index - 1)")
@@ -421,6 +442,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     // MARK: - v0.24.0 书法笔(自研可变笔宽;笔锋角度 + 稳定化)
 
+    /// v0.28.0:全局湿墨层(由 provider 注入)。书法/形状预览改画在这里。
+    weak var wetHost: PencilWetInkHost?
     private let inkSampler = InkSampleGestureRecognizer()
     private var calligraphyActive = false
     private var calliColor: UIColor = .label
@@ -438,9 +461,13 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private var overflowCheckWork: DispatchWorkItem?
     /// v0.27.0:在这个时刻之前,不做跨页切分/直线吸附(撤销装回快照后要静一会儿)
     private var postProcessSuppressUntil: CFAbsoluteTime = 0
-    private var pendingOverflowIndex: Int?
+    /// v0.28.0:本次动作新增笔迹的**起始下标**。书法/形状一次会生成多笔(书法是分段),
+    /// 只看一笔会漏掉后面越界的段,所以这里是范围的起点而不是单个下标。
+    private var pendingOverflowStart: Int?
     /// 防止「切分 → 写回 drawing → drawingDidChange → 再切分」的递归
     private var transferring = false
+    /// v0.28.0:PencilKit 正在书写时不做后处理(避免把进行中的一笔中途切开)
+    private var strokeInProgress = false
 
     private var marking = false
     private var loaded = false
@@ -611,10 +638,57 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         canvas.drawingGestureRecognizer.isEnabled = !custom
         eraserPan.isEnabled = custom && !calligraphyActive
         inkSampler.isEnabled = custom && calligraphyActive
-        if !custom {
+        if custom {
+            // 自研工具接管绘制手势,PencilKit 不会再有"进行中的一笔"。
+            strokeInProgress = false
+        } else {
             lastErasePoint = nil
             eraseUndoSnapshot = nil
         }
+    }
+
+    /// v0.28.0:一次装填整份模式状态。与逐项 setXxxMode 的差别是:
+    /// 只算一次手势状态、只打一行日志,并且形状/书法参数在**同一次调用**里就位。
+    func applyModeState(_ state: PencilToolState) {
+        let wasLaser = laserActive
+        let wasShape = shapeActive
+        let wasCalligraphy = calligraphyActive
+        if canvas.isRulerActive != state.rulerActive {
+            canvas.isRulerActive = state.rulerActive
+        }
+        eraserActive = state.kind == .eraser && state.useCustomEraser
+        eraserWhole = state.eraserWhole
+        eraserRadiusCanvas = max(state.eraserRadius * InkGeometry.scale, 2)
+        laserActive = state.kind == .laser
+        shapeActive = state.kind == .shape
+        shapeKind = state.shapeKind
+        shapeColor = state.currentUIColor
+        shapeWidth = max(state.width, 0.8)
+        calligraphyActive = state.kind == .calligraphy
+        calliColor = state.currentUIColor
+        calliWidth = max(state.width, 0.6)
+        calliNibDegrees = state.nibAngle
+        calliSmoothing = state.calligraphySmoothing
+
+        if wasLaser && !laserActive {
+            laserLayer?.removeFromSuperlayer()
+            laserLayer = nil
+            laserPoints = []
+        }
+        if wasShape && !shapeActive {
+            shapePreviewLayer?.removeFromSuperlayer()
+            shapePreviewLayer = nil
+            shapeStartCanvas = nil
+            shapeUndoSnapshot = nil
+            wetHost?.clear()
+        }
+        if wasCalligraphy && !calligraphyActive {
+            calliBaseStrokes = []
+            calliUndoSnapshot = nil
+            removeCalligraphyPreview()
+        }
+        applyToolGestureState()
+        DiagLog.log("pencil: page \(pageIndex) mode applied kind=\(state.kind.rawValue) shape=\(state.shapeKind.rawValue) eraser=\(eraserActive ? 1 : 0) laser=\(laserActive ? 1 : 0) calli=\(calligraphyActive ? 1 : 0)")
     }
 
     // MARK: - 书法笔手势
@@ -654,12 +728,24 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             nibDegrees: calliNibDegrees,
             smoothing: calliSmoothing
         ) else { return }
-        let layer = calliPreviewLayer ?? makeCalligraphyPreviewLayer()
         // 画布坐标 → 页面坐标(与 pagePoint(fromCanvas:) 同一口径)
         var t = CGAffineTransform(scaleX: 1 / InkGeometry.scale, y: 1 / InkGeometry.scale)
         t = t.concatenating(CGAffineTransform(translationX: 0, y: -InkGeometry.bleedTop))
         path.apply(t)
-        layer.path = path.cgPath
+        // v0.28.0:整段预览画在全局湿墨层 —— 越过页缝也不会被下一页的页视图挡住。
+        if let wetHost {
+            wetHost.show(PencilWetStroke(
+                pageIndex: pageIndex,
+                path: path,
+                color: calliColor,
+                lineWidth: calliWidth,
+                filled: true,
+                clipOutsidePage: false
+            ))
+        } else {
+            let layer = calliPreviewLayer ?? makeCalligraphyPreviewLayer()
+            layer.path = path.cgPath
+        }
     }
 
     private func makeCalligraphyPreviewLayer() -> CAShapeLayer {
@@ -675,33 +761,41 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private func removeCalligraphyPreview() {
         calliPreviewLayer?.removeFromSuperlayer()
         calliPreviewLayer = nil
+        wetHost?.clear()
     }
 
-    /// 抬笔:把整笔提交成真正的 PKStroke(与预览同宽同形),登记撤销,落盘,再处理跨页切分。
+    /// 抬笔:把整笔提交成真正的 PKStroke,登记撤销,落盘,再处理跨页切分。
+    /// v0.28.0:改为**分段定宽**提交(见 CalligraphyInkBuilder.segmentStrokes),
+    /// 不再依赖 PencilKit 是否遵守逐点 `size`。
     private func commitCalligraphy(_ samples: [InkSample]) {
         defer {
             calliUndoSnapshot = nil
             calliBaseStrokes = []
         }
-        guard let stroke = CalligraphyInkBuilder.stroke(
+        let segments = CalligraphyInkBuilder.segmentStrokes(
             samples: samples,
             color: calliColor,
             baseWidth: calliWidth * InkGeometry.scale,
             nibDegrees: calliNibDegrees,
             smoothing: calliSmoothing
-        ) else { return }
-        canvas.drawing = PKDrawing(strokes: calliBaseStrokes + [stroke])
+        )
+        guard !segments.isEmpty else {
+            DiagLog.log("pencil: page \(pageIndex) calli skipped (no segments)")
+            return
+        }
+        canvas.drawing = PKDrawing(strokes: calliBaseStrokes + segments)
         if let undo = canvas.undoManager, let snapshot = calliUndoSnapshot {
             undo.registerUndo(withTarget: self) { target in
                 target.canvas.drawing = snapshot
             }
         }
         flushSave()
-        let idx = calliBeginIndex
-        // 书法笔走的是自研手势,不会触发 canvasViewDidEndUsingTool —— 跨页切分要自己收尾
-        pendingOverflowIndex = idx
+        // 书法笔走的是自研手势,不会触发 canvasViewDidEndUsingTool —— 跨页切分要自己收尾。
+        // 起点 = 本次落笔前的笔数;跨页检查会处理这之后的**所有**分段。
+        pendingOverflowStart = calliBeginIndex
         scheduleOverflowCheck()
         onActionEnd?()
+        DiagLog.log("pencil: page \(pageIndex) calli segments=\(segments.count) begin=\(calliBeginIndex) baseW=\(String(format: "%.1f", calliWidth * InkGeometry.scale))")
     }
 
     // MARK: - 自研工具手势(橡皮 / 激光笔 / 形状共用一个 pan)
@@ -764,6 +858,26 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             width: abs(to.x - from.x) + radius * 2,
             height: abs(to.y - from.y) + radius * 2
         )
+
+        // v0.28.0:整笔擦除按 `creationDate` 分组 —— 书法笔是一组同日期分段,
+        // 擦到任意一段就把整条书法一起删掉,而不是只少一段。
+        if eraserWhole {
+            var groups: [Date] = []
+            for stroke in canvas.drawing.strokes {
+                guard stroke.renderBounds.insetBy(dx: -radius, dy: -radius).intersects(box) else { continue }
+                if strokeIntersects(stroke, from: from, to: to, radius: radius) {
+                    groups.append(stroke.path.creationDate)
+                }
+            }
+            guard !groups.isEmpty else { return }
+            let kept = canvas.drawing.strokes.filter { stroke in
+                !groups.contains { abs($0.timeIntervalSince(stroke.path.creationDate)) < 0.0005 }
+            }
+            guard kept.count != canvas.drawing.strokes.count else { return }
+            canvas.drawing = PKDrawing(strokes: kept)
+            return
+        }
+
         var changed = false
         var result: [PKStroke] = []
         result.reserveCapacity(canvas.drawing.strokes.count)
@@ -772,24 +886,18 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
                 result.append(stroke)
                 continue
             }
-            if eraserWhole {
-                if strokeIntersects(stroke, from: from, to: to, radius: radius) {
-                    changed = true
-                } else {
-                    result.append(stroke)
-                }
+            let runs = remainingRuns(of: stroke, from: from, to: to, radius: radius)
+            if runs.isEmpty {
+                changed = true
+            } else if runs.count == 1, runs[0].count == stroke.path.count {
+                result.append(stroke)
             } else {
-                let runs = remainingRuns(of: stroke, from: from, to: to, radius: radius)
-                if runs.isEmpty {
-                    changed = true
-                } else if runs.count == 1, runs[0].count == stroke.path.count {
-                    result.append(stroke)
-                } else {
-                    changed = true
-                    for run in runs where run.count >= 2 {
-                        if let piece = PencilStrokeTools.makeStroke(points: run, template: stroke) {
-                            result.append(piece)
-                        }
+                changed = true
+                for run in runs where run.count >= 2 {
+                    if let piece = PencilStrokeTools.makeStroke(
+                        points: run, template: stroke, creationDate: stroke.path.creationDate
+                    ) {
+                        result.append(piece)
                     }
                 }
             }
@@ -901,6 +1009,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             shapeStartCanvas = nil
             shapePreviewLayer?.removeFromSuperlayer()
             shapePreviewLayer = nil
+            wetHost?.clear()
             guard let start else { return }
             commitShape(from: start, to: point)
             onActionEnd?()
@@ -942,7 +1051,20 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
                 path.addLine(to: head)
             }
         }
-        layer.path = path.cgPath
+        // v0.28.0:形状预览同样走全局湿墨层,跨页时不会被邻页遮住。
+        if let wetHost {
+            wetHost.show(PencilWetStroke(
+                pageIndex: pageIndex,
+                path: path,
+                color: UIColor.systemBlue.withAlphaComponent(0.9),
+                lineWidth: 1.5,
+                filled: false,
+                clipOutsidePage: false,
+                dashed: true
+            ))
+        } else {
+            layer.path = path.cgPath
+        }
     }
 
     private func commitShape(from: CGPoint, to: CGPoint) {
@@ -963,7 +1085,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         shapeUndoSnapshot = nil
         flushSave()
         // v0.25.1:形状也可能跨页,交给统一的跨页检查
-        pendingOverflowIndex = canvas.drawing.strokes.count - 1
+        pendingOverflowStart = canvas.drawing.strokes.count - 1
         scheduleOverflowCheck()
         DiagLog.log("pencil: shape \(shapeKind.rawValue) committed points=\(points.count)")
     }
@@ -1109,6 +1231,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     // v0.14.0:落笔回调(撤销目标)+ 真机诊断
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        strokeInProgress = true
         onCanvasBecameActive?(canvasView)
         // v0.27.0:动作开始 —— 此刻 drawing 还不含这一笔,正好是"之前"的快照
         onActionBegin?("笔画", canvasSnapshot)
@@ -1119,6 +1242,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        strokeInProgress = false
         DiagLog.log("pencil: tool END page=\(pageIndex) strokes=\(canvasView.drawing.strokes.count)")
         NSLog("[yuewen/pencil] tool end page=%d strokes=%d", pageIndex, canvasView.drawing.strokes.count)
         let beginIndex = strokeIndexAtBegin
@@ -1129,7 +1253,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         // `canvasViewDidEndUsingTool` **返回之后**才把这一笔并进 `canvas.drawing` 的,于是
         // `idx < strokes.count` 常常不成立 → 跨页那一段永远搬不走(真机"页缝上半段消失")。
         // 现在只记下下标,由 `scheduleOverflowCheck()`(drawing 变化 / 0.1s 兜底)去执行。
-        pendingOverflowIndex = beginIndex
+        pendingOverflowStart = beginIndex
         scheduleOverflowCheck()
         // v0.27.0:动作结束(真正入栈要等跨页切分/吸附完成后再拍"之后"的快照)
         onActionEnd?()
@@ -1139,13 +1263,15 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     private func scheduleOverflowCheck() {
         // v0.27.0:撤销/重做装回快照后短时间内不做后处理,否则「撤销跨页一笔」会被立刻重新切开
         guard CFAbsoluteTimeGetCurrent() >= postProcessSuppressUntil else { return }
+        // v0.28.0:书写中 drawing 可能含半成品,先不切;抬笔后的 END 会重新排一次。
+        guard !strokeInProgress else { return }
         overflowCheckWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            let index = self.pendingOverflowIndex
-            self.pendingOverflowIndex = nil
-            self.snapStraightIfNeeded(at: index)
-            self.transferOverflowIfNeeded(preferredIndex: index)
+            let start = self.pendingOverflowStart
+            self.pendingOverflowStart = nil
+            self.snapStraightIfNeeded(at: start)
+            self.transferOverflowIfNeeded(rangeStart: start)
         }
         overflowCheckWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
@@ -1178,7 +1304,9 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
         let tolerance = max(1.2 * InkGeometry.scale, length * 0.02)
         guard maxDeviation < tolerance else { return }
-        guard let snapped = PencilStrokeTools.makeStroke(points: [first, lastPoint], template: target) else { return }
+        guard let snapped = PencilStrokeTools.makeStroke(
+            points: [first, lastPoint], template: target, creationDate: target.path.creationDate
+        ) else { return }
         var updated = strokes
         updated[idx] = snapped
         canvas.drawing = PKDrawing(strokes: updated)
@@ -1187,100 +1315,93 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
     /// v0.20.0:把越过页底的那一段切下来交给下一页。
     /// v0.23.2:同时处理**向上**越过页顶的段(从下一页往回写到上一页)。
-    /// v0.24.0:只处理"本次落笔的那一笔"(下标由 didBeginUsingTool 记录),慢写长笔也能正确切分。
-    func transferOverflowIfNeeded(preferredIndex: Int?) {
+    /// v0.28.0:处理**一段范围**而不是单笔 —— 书法笔一次提交多段、形状也可能多笔;
+    /// 旧实现只看一个下标,后面的段越过页缝时永远搬不走(真机"跨页书法断成两截")。
+    func transferOverflowIfNeeded(rangeStart: Int?) {
         guard bounds.height > 1, !transferring else { return }
-        let strokes = canvas.drawing.strokes
+        var strokes = canvas.drawing.strokes
         guard !strokes.isEmpty else { return }
         let top = InkGeometry.pageTopY()
         let bottom = top + bounds.height * InkGeometry.scale
 
-        func hasOverflow(_ stroke: PKStroke) -> Bool {
-            for point in stroke.path {
-                if point.location.y < top - 0.5 || point.location.y > bottom + 0.5 { return true }
-            }
-            return false
-        }
-
-        // 指定下标优先(落笔时记录的那一笔);它可能还没进 drawing、或者被直线吸附重建过,
-        // 所以退化为「从最后一笔往前找」(只看最后 8 笔,避免误伤旧墨迹)。
-        var candidate: Int?
-        if let preferred = preferredIndex, preferred >= 0, preferred < strokes.count, hasOverflow(strokes[preferred]) {
-            candidate = preferred
+        // 本次动作新增笔迹的起点;拿不到有效起点时只回看最后一笔(避免误伤旧墨)。
+        let lowerBound: Int
+        if let start = rangeStart, start >= 0, start < strokes.count {
+            lowerBound = start
         } else {
-            let lowerBound = max(0, strokes.count - 8)
-            var i = strokes.count - 1
-            while i >= lowerBound {
-                if hasOverflow(strokes[i]) {
-                    candidate = i
-                    break
-                }
-                i -= 1
-            }
+            lowerBound = max(0, strokes.count - 1)
         }
-        guard let idx = candidate else { return }
-
-        let last = strokes[idx]
-        let points = Array(last.path)
-        // v0.25.0:真机"截断"复现时用来分辨是画布边界裁掉、还是切分/搬运出错
-        if InkGeometry.touchesCanvasEdge(last, pageHeight: bounds.height) {
-            DiagLog.log("pencil: page \(pageIndex) stroke hit canvas edge (bleed exhausted) — 墨迹已被画布边界裁掉")
-        }
-        let overflowDown = points.contains { $0.location.y > bottom }
-        let overflowUp = points.contains { $0.location.y < top }
-        guard overflowUp || overflowDown else { return }
-        DiagLog.log("pencil: page \(pageIndex) overflow check idx=\(idx)/\(strokes.count) up=\(overflowUp ? 1 : 0) down=\(overflowDown ? 1 : 0)")
 
         transferring = true
         defer { transferring = false }
 
-        // 向下:页内段保留,溢出段交给下一页
-        if overflowDown {
-            let parts = PencilStrokeTools.split(last, atY: bottom)
-            guard parts.outside.count >= 2,
-                  let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: last) else {
-                DiagLog.log("pencil: page \(pageIndex) overflow down aborted (outside=\(parts.outside.count)pts)")
-                return
+        var changed = false
+        var index = strokes.count - 1
+        while index >= lowerBound {
+            let stroke = strokes[index]
+            let points = Array(stroke.path)
+            if InkGeometry.touchesCanvasEdge(stroke, pageHeight: bounds.height) {
+                DiagLog.log("pencil: page \(pageIndex) stroke hit canvas edge (bleed exhausted) — 墨迹已被画布边界裁掉")
             }
-            guard onOverflow?(pageIndex, outside) == true else {
-                DiagLog.log("pencil: page \(pageIndex) overflow down rejected by page \(pageIndex + 1)")
-                return
+            let overflowDown = points.contains { $0.location.y > bottom + 0.5 }
+            let overflowUp = points.contains { $0.location.y < top - 0.5 }
+            if !overflowDown && !overflowUp {
+                index -= 1
+                continue
             }
-            var updated = strokes
-            if parts.inside.count >= 2,
-               let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: last) {
-                updated[idx] = inside
-            } else {
-                updated.remove(at: idx)
+            DiagLog.log("pencil: page \(pageIndex) overflow check idx=\(index)/\(strokes.count) up=\(overflowUp ? 1 : 0) down=\(overflowDown ? 1 : 0)")
+
+            if overflowDown {
+                let parts = PencilStrokeTools.split(stroke, atY: bottom)
+                if parts.outside.count >= 2,
+                   let outside = PencilStrokeTools.makeStroke(
+                       points: parts.outside, template: stroke,
+                       creationDate: stroke.path.creationDate
+                   ),
+                   onOverflow?(pageIndex, outside) == true {
+                    if parts.inside.count >= 2,
+                       let inside = PencilStrokeTools.makeStroke(
+                           points: parts.inside, template: stroke,
+                           creationDate: stroke.path.creationDate
+                       ) {
+                        strokes[index] = inside
+                    } else {
+                        strokes.remove(at: index)
+                    }
+                    changed = true
+                    DiagLog.log("pencil: page \(pageIndex) overflow \(parts.outside.count)pts trimmed")
+                } else {
+                    DiagLog.log("pencil: page \(pageIndex) overflow down skipped (outside=\(parts.outside.count)pts)")
+                }
+            } else if overflowUp {
+                let parts = PencilStrokeTools.splitUpward(stroke, atY: top)   // above = 页顶以上(溢出), below = 页内
+                if parts.above.count >= 2,
+                   let above = PencilStrokeTools.makeStroke(
+                       points: parts.above, template: stroke,
+                       creationDate: stroke.path.creationDate
+                   ),
+                   onOverflowUp?(pageIndex, above) == true {
+                    if parts.below.count >= 2,
+                       let inside = PencilStrokeTools.makeStroke(
+                           points: parts.below, template: stroke,
+                           creationDate: stroke.path.creationDate
+                       ) {
+                        strokes[index] = inside
+                    } else {
+                        strokes.remove(at: index)
+                    }
+                    changed = true
+                    DiagLog.log("pencil: page \(pageIndex) top overflow \(parts.above.count)pts trimmed")
+                } else {
+                    DiagLog.log("pencil: page \(pageIndex) overflow up skipped (above=\(parts.above.count)pts)")
+                }
             }
-            canvas.drawing = PKDrawing(strokes: updated)
-            flushSave()
-            DiagLog.log("pencil: page \(pageIndex) overflow \(parts.outside.count)pts trimmed")
-            return
+            index -= 1
         }
 
-        // 向上:y < 页顶 的段交给上一页底部
-        if overflowUp {
-            let parts = PencilStrokeTools.splitUpward(last, atY: top)   // above = 页顶以上(溢出), below = 页内
-            guard parts.above.count >= 2,
-                  let above = PencilStrokeTools.makeStroke(points: parts.above, template: last) else {
-                DiagLog.log("pencil: page \(pageIndex) overflow up aborted (above=\(parts.above.count)pts)")
-                return
-            }
-            guard onOverflowUp?(pageIndex, above) == true else {
-                DiagLog.log("pencil: page \(pageIndex) overflow up rejected by page \(pageIndex - 1)")
-                return
-            }
-            var updated = strokes
-            if parts.below.count >= 2,
-               let inside = PencilStrokeTools.makeStroke(points: parts.below, template: last) {
-                updated[idx] = inside
-            } else {
-                updated.remove(at: idx)
-            }
-            canvas.drawing = PKDrawing(strokes: updated)
+        if changed {
+            canvas.drawing = PKDrawing(strokes: strokes)
             flushSave()
-            DiagLog.log("pencil: page \(pageIndex) top overflow \(parts.above.count)pts trimmed")
         }
     }
 

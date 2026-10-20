@@ -13,10 +13,15 @@ import PencilKit
 /// 两半共享这同一个点,视觉上严丝合缝。
 enum PencilStrokeTools {
 
-    /// 用一组点重建一笔(保留原笔的 ink 与 transform)
-    static func makeStroke(points: [PKStrokePoint], template: PKStroke) -> PKStroke? {
+    /// 用一组点重建一笔(保留原笔的 ink / transform / 创建时间)。
+    ///
+    /// v0.28.0:保留 `creationDate` —— 书法笔的整笔是共享同一 `creationDate` 的多段,
+    /// 切页/吸附/部分擦除后用新日期会让"整笔橡皮"再也找不齐这条书法。
+    static func makeStroke(points: [PKStrokePoint], template: PKStroke,
+                           creationDate: Date? = nil) -> PKStroke? {
         guard points.count >= 2 else { return nil }
-        let path = PKStrokePath(controlPoints: points, creationDate: Date())
+        let path = PKStrokePath(controlPoints: points,
+                                creationDate: creationDate ?? template.path.creationDate)
         return PKStroke(ink: template.ink, path: path, transform: template.transform, mask: nil)
     }
 
@@ -86,6 +91,7 @@ enum PencilStrokeTools {
                 secondaryScale: point.secondaryScale
             )
         }
-        return makeStroke(points: Array(points), template: stroke)
+        return makeStroke(points: Array(points), template: stroke,
+                          creationDate: stroke.path.creationDate)
     }
 }

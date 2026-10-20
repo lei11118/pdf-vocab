@@ -119,6 +119,68 @@ enum CalligraphyInkBuilder {
         return PKStroke(ink: PKInk(.pen, color: color), path: path, transform: .identity, mask: nil)
     }
 
+    /// v0.28.0:**分段定宽**提交。
+    ///
+    /// 单条 PKStroke 靠逐点 `size` 做变宽,但 PencilKit 不保证程序化创建的笔迹会吃这个值;
+    /// 真机上若被忽略,整条书法会退化成发丝线(用户反馈"书法笔迹无法正常显现")。
+    /// 这里把同一中心线切成若干短段、每段用固定宽度,渲染必然可见;
+    /// 所有段共享同一个 `creationDate`,整笔橡皮据此把整条书法一起删除。
+    ///
+    /// 预览仍用 `previewPath`(连续可变宽),与分段结果的视觉差异在换段阈值内。
+    static func segmentStrokes(
+        samples: [InkSample],
+        color: UIColor,
+        baseWidth: CGFloat,
+        nibDegrees: CGFloat,
+        smoothing: Bool
+    ) -> [PKStroke] {
+        guard let points = prepared(samples, smoothing: smoothing), points.count >= 2 else { return [] }
+        let sizes = widths(for: points, baseWidth: baseWidth, nibDegrees: nibDegrees)
+        let creationDate = Date()
+        var output: [PKStroke] = []
+        var start = 0
+        let maxPointsPerSegment = 36
+
+        while start < points.count - 1 {
+            var end = start
+            let segmentWidth = sizes[start]
+            while end + 1 < points.count {
+                let next = end + 1
+                let widthJump = abs(sizes[next] - segmentWidth) > baseWidth * 0.12
+                if widthJump || (next - start) >= maxPointsPerSegment { break }
+                end = next
+            }
+            if end <= start { end = min(start + 1, points.count - 1) }
+
+            let slice = Array(points[start...end])
+            let widthSlice = sizes[start...end]
+            let average = widthSlice.reduce(CGFloat(0), +) / CGFloat(max(widthSlice.count, 1))
+            let timeBase = points[start].time
+            var strokePoints: [PKStrokePoint] = []
+            strokePoints.reserveCapacity(slice.count)
+            for (offset, point) in slice.enumerated() {
+                strokePoints.append(PKStrokePoint(
+                    location: point.location,
+                    timeOffset: TimeInterval(point.time - timeBase) + TimeInterval(offset) * 0.000001,
+                    size: CGSize(width: average, height: average),
+                    opacity: 1,
+                    force: point.force,
+                    azimuth: point.azimuth,
+                    altitude: point.altitude,
+                    secondaryScale: 1
+                ))
+            }
+            if strokePoints.count >= 2 {
+                let path = PKStrokePath(controlPoints: strokePoints, creationDate: creationDate)
+                output.append(PKStroke(ink: PKInk(.pen, color: color),
+                                       path: path, transform: .identity, mask: nil))
+            }
+            if end >= points.count - 1 { break }
+            start = end   // 相邻段共享边界点,圆帽重叠后无缺口
+        }
+        return output
+    }
+
     /// v0.25.0:书写过程中的实时轮廓(画布坐标,交给 overlay 转成页面坐标)。
     /// 用"左右两侧偏移点 + 两端圆帽"围成一个填充多边形 —— 与最终笔迹同宽同形。
     static func previewPath(
