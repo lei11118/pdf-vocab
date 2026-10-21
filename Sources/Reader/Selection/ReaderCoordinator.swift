@@ -1535,10 +1535,9 @@ final class ReaderCoordinator: NSObject {
            let saved = try? PKDrawing(data: record.data) {
             surface.drawing = saved
             DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
-        } else if let store = inkStore, var merged = surface.drawing.strokes as [PKStroke]?,
-                  let document = view.document {
+        } else if let store = inkStore, let document = view.document {
             // ② 旧数据迁移:每页画布 → 文档坐标(加上该页在内容坐标里的原点)
-            merged = []
+            var merged: [PKStroke] = []
             var migrated = 0
             for index in 0..<document.pageCount {
                 guard let record = store.drawing(docSha: docSha, page: index),
@@ -1571,7 +1570,9 @@ final class ReaderCoordinator: NSObject {
     func applyToolSession(force: Bool = false) {
         guard let session = toolSession else { return }
         // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
-        inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
+        if let tool = session.makeTool(scale: DocumentInkSurface.scale) {
+            inkSurface?.applyTool(tool)
+        }
         if !wetToolIsRegular { clearWetInk() }
         let revision = session.stateRevision
         if !force, revision == appliedToolRevision { return }
