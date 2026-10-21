@@ -154,6 +154,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var overflowWork: DispatchWorkItem?
     /// 防止「切分 → 写回 drawing → 再次触发检查」的递归
     private var settling = false
+    /// v0.36.0:最近一次搬页记录(键 = creationDate),用来拦住"刚搬过来又要搬回去"的反弹
+    private var handoffHistory: [TimeInterval: (from: Int, to: Int, at: CFAbsoluteTime)] = [:]
 
     func scheduleOverflowSettle(page: Int) {
         guard !settling, let overlay = overlays[page], !overlay.inkPostProcessingSuppressed else { return }
@@ -183,10 +185,10 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         let edgeMin: CGFloat = axis == .y ? rect.minY : rect.minX
 
         func beyond(_ s: PKStroke) -> Bool {
-            s.path.contains { PencilStrokeTools.value($0, axis) > edgeMax + 0.5 }
+            s.path.contains { PencilStrokeTools.value($0, axis) > edgeMax + 1.5 }
         }
         func before(_ s: PKStroke) -> Bool {
-            s.path.contains { PencilStrokeTools.value($0, axis) < edgeMin - 0.5 }
+            s.path.contains { PencilStrokeTools.value($0, axis) < edgeMin - 1.5 }
         }
 
         var changed = false
@@ -203,23 +205,50 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             let parts = forward
                 ? PencilStrokeTools.splitBeyond(stroke, threshold: edgeMax, axis: axis)
                 : PencilStrokeTools.splitBefore(stroke, threshold: edgeMin, axis: axis)
-            // 前进方向用本页尺寸,后退方向用邻页尺寸(封面/插页尺寸不同时不错位)
-            let ownSpan = axis == .y ? pageSize.height : pageSize.width
-            let span = forward ? ownSpan : (neighborSpan(page: page - 1, axis: axis) ?? ownSpan)
-            let delta = (forward ? -span : span) * InkGeometry.scale
-            let guardTarget = forward ? page + 1 : page - 1
+            let target = forward ? page + 1 : page - 1
+            // v0.36.0:**按两页的真实页矩形对齐**,不再按"一页高/一页宽"平移。
+            // 真机上 page 0 画布高 6070、其余 6069(页尺寸差 0.33pt),按页高平移会多出 1pt,
+            // 目标页判定"还越界"又搬回来 —— 两页之间来回弹,每弹一次复制一份,
+            // 表现就是笔迹重影 + 笔数一路上涨(日志里 page 12 从 6 笔涨到 49 笔)。
+            guard let targetRect = canvasPageRect(page: target) else {
+                DiagLog.log("pencil: overflow target page \(target) unavailable")
+                break
+            }
+            let dx: CGFloat
+            let dy: CGFloat
+            if axis == .y {
+                dx = 0
+                dy = forward ? (targetRect.minY - rect.maxY) : (targetRect.maxY - rect.minY)
+            } else {
+                dx = forward ? (targetRect.minX - rect.maxX) : (targetRect.maxX - rect.minX)
+                dy = 0
+            }
+            // v0.36.0:防弹回 —— 同一块墨 1 秒内要从对面页搬回来,说明两边对边界的判定只差一点点。
+            // 直接把越界段丢掉(保留页内段),绝不再来回搬、也不再复制。
+            let familyKey = stroke.path.creationDate.timeIntervalSinceReferenceDate
+            if let last = handoffHistory[familyKey], last.from == target, last.to == page,
+               CFAbsoluteTimeGetCurrent() - last.at < 1.0 {
+                if parts.inside.count >= 2,
+                   let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
+                    strokes[idx] = inside
+                } else {
+                    strokes.remove(at: idx)
+                }
+                changed = true
+                DiagLog.log("pencil: overflow bounce blocked page=\(page) <-> \(target) pts=\(parts.outside.count)")
+                continue
+            }
+            handoffHistory[familyKey] = (page, target, CFAbsoluteTimeGetCurrent())
             // v0.35.0:搬页后两页并进同一条撤销记录 —— 撤销一次,整笔跨页墨迹一起消失
-            notePagesInAction([page, guardTarget])
+            notePagesInAction([page, target])
             guard parts.outside.count >= 2,
                   let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
-                  let moved = PencilStrokeTools.shifted(outside,
-                                                        dx: axis == .x ? delta : 0,
-                                                        dy: axis == .y ? delta : 0),
-                  handoff(page: guardTarget, canvasStroke: moved) else {
+                  let moved = PencilStrokeTools.shifted(outside, dx: dx, dy: dy),
+                  handoff(page: target, canvasStroke: moved) else {
                 DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") stuck page=\(page) pts=\(parts.outside.count)")
                 break
             }
-            touched.insert(guardTarget)   // v0.34.0:邻页若还有越界段,接着往下一页传(3 页以上)
+            touched.insert(target)   // v0.34.0:邻页若还有越界段,接着往下一页传(3 页以上)
             if parts.inside.count >= 2,
                let inside = PencilStrokeTools.makeStroke(points: parts.inside, template: stroke) {
                 strokes[idx] = inside
@@ -227,7 +256,7 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
                 strokes.remove(at: idx)
             }
             changed = true
-            DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") page \(page) -> \(forward ? page + 1 : page - 1) pts=\(parts.outside.count)")
+            DiagLog.log("pencil: overflow \(axis == .y ? "y" : "x")\(forward ? "+" : "-") page \(page) -> \(target) pts=\(parts.outside.count)")
         }
         guard changed else { return }
         let settled = PKDrawing(strokes: strokes)
@@ -269,6 +298,17 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         return !changedPages.isEmpty
     }
 
+    /// 目标页在**画布坐标**里的页面矩形(叠层没建时按文档页面尺寸算)。
+    /// v0.36.0:跨页对齐必须用这个,不能用"一页高/一页宽"——两页尺寸可能差不到 1pt。
+    private func canvasPageRect(page: Int) -> CGRect? {
+        if let overlay = overlays[page] {
+            return InkGeometry.pageRectInCanvas(pageSize: overlay.bounds.size)
+        }
+        guard let pdfView, let document = pdfView.document, page >= 0, page < document.pageCount,
+              let target = document.page(at: page) else { return nil }
+        return InkGeometry.pageRectInCanvas(pageSize: target.bounds(for: pdfView.displayBox).size)
+    }
+
     /// 邻页在切分轴上的尺寸(叠层没建时问文档)
     private func neighborSpan(page: Int, axis: InkSplitAxis) -> CGFloat? {
         if let overlay = overlays[page] {
@@ -286,6 +326,20 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
               target >= 0, target < document.pageCount,
               let page = document.page(at: target) else { return false }
         if let next = overlays[target] {
+            // v0.36.0:同一家族(同 creationDate)且位置几乎相同的段已经在目标页上 →
+            // 视为已送达,不再追加。这是重影的最后一道防线(弹回时不会复制第二份)。
+            let incoming = canvasStroke.renderBounds
+            let exists = next.canvasSnapshot.strokes.contains { existing in
+                abs(existing.path.creationDate.timeIntervalSince(canvasStroke.path.creationDate)) < 0.0005
+                    && abs(existing.renderBounds.minX - incoming.minX) < 2
+                    && abs(existing.renderBounds.minY - incoming.minY) < 2
+                    && abs(existing.renderBounds.width - incoming.width) < 2
+                    && abs(existing.renderBounds.height - incoming.height) < 2
+            }
+            if exists {
+                DiagLog.log("pencil: handoff dedupe page=\(target)")
+                return true
+            }
             next.canvas.drawing = PKDrawing(strokes: next.canvas.drawing.strokes + [canvasStroke])
             next.flushSave()
             return true
@@ -1198,6 +1252,23 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
         }
         // v0.23.2:存储坐标 = 页面坐标(无四周出血);画布左上角外扩,载入时整体内移
         drawing.transform(using: InkGeometry.canvasFromPage)
+        // v0.36.0:清掉历史上"跨页弹回"造成的重复段(同 creationDate + 位置几乎重合)。
+        // 之前每次弹回都会在页面里多留一份,页面上看起来就是重影。
+        let before = drawing.strokes.count
+        var seen = Set<String>()
+        var unique: [PKStroke] = []
+        unique.reserveCapacity(before)
+        for stroke in drawing.strokes {
+            let b = stroke.renderBounds
+            let key = String(format: "%.0f|%.0f|%.0f|%.0f|%.3f",
+                             b.minX.rounded(), b.minY.rounded(), b.width.rounded(),
+                             b.height.rounded(), stroke.path.creationDate.timeIntervalSinceReferenceDate)
+            if seen.insert(key).inserted { unique.append(stroke) }
+        }
+        if unique.count != before {
+            drawing = PKDrawing(strokes: unique)
+            DiagLog.log("pencil: page \(pageIndex) dedupe \(before) -> \(unique.count) strokes")
+        }
         canvas.drawing = drawing
         DiagLog.log("pencil: page \(pageIndex) ink loaded \(canvas.drawing.strokes.count) strokes (scale \(Int(target))x)")
     }

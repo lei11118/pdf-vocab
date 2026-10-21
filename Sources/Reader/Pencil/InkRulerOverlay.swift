@@ -46,26 +46,49 @@ final class InkRulerOverlay: UIView {
         let y = guideY
         let ink = UIColor.black
 
-        // 主尺线:1.5pt,半透明,纸面固定暖白所以不需要跟随深浅色
-        ctx.setStrokeColor(ink.withAlphaComponent(0.32).cgColor)
-        ctx.setLineWidth(1.5)
-        ctx.move(to: CGPoint(x: 0, y: y))
-        ctx.addLine(to: CGPoint(x: bounds.width, y: y))
-        ctx.strokePath()
+        // v0.37.0:做成"尺身"而不是一条线 —— 半透明条 + 长短刻度 + 每 150pt 一个数字,
+        // 形状与 Notability 那把一致,但完全自绘、固定在视口中线。
+        let barHeight: CGFloat = 22
+        let bar = CGRect(x: 0, y: y - barHeight / 2, width: bounds.width, height: barHeight)
+        let path = UIBezierPath(roundedRect: bar, cornerRadius: 6)
+        UIColor.white.withAlphaComponent(0.55).setFill()
+        path.fill()
+        ink.withAlphaComponent(0.10).setStroke()
+        path.lineWidth = 0.8
+        path.stroke()
 
-        // 刻度:每 60pt 一小格,两端各再画一条端标,让它一眼能认出是"尺子"
-        ctx.setStrokeColor(ink.withAlphaComponent(0.18).cgColor)
-        ctx.setLineWidth(1)
-        var x: CGFloat = 40
-        while x < bounds.width {
-            ctx.move(to: CGPoint(x: x, y: y - 5))
-            ctx.addLine(to: CGPoint(x: x, y: y + 5))
-            x += 60
+        ctx.setStrokeColor(ink.withAlphaComponent(0.34).cgColor)
+        var x: CGFloat = 0
+        var index = 0
+        while x <= bounds.width {
+            let kind = index % 5      // 0 = 长刻度(带数字)
+            let tick: CGFloat = kind == 0 ? 11 : (kind == 2 ? 7 : 4)
+            ctx.setLineWidth(kind == 0 ? 1.1 : 0.8)
+            ctx.move(to: CGPoint(x: x, y: y - barHeight / 2 + 1))
+            ctx.addLine(to: CGPoint(x: x, y: y - barHeight / 2 + 1 + tick))
+            ctx.strokePath()
+
+            if kind == 0, x > 6 {
+                let label = "\(Int(x))"
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.monospacedDigitSystemFont(ofSize: 8, weight: .medium),
+                    .foregroundColor: ink.withAlphaComponent(0.42)
+                ]
+                let size = (label as NSString).size(withAttributes: attrs)
+                (label as NSString).draw(at: CGPoint(x: x + 2, y: y + barHeight / 2 - size.height - 1),
+                                         withAttributes: attrs)
+            }
+            x += 30
+            index += 1
         }
-        ctx.move(to: CGPoint(x: 12, y: y - 9))
-        ctx.addLine(to: CGPoint(x: 12, y: y + 9))
-        ctx.move(to: CGPoint(x: bounds.width - 12, y: y - 9))
-        ctx.addLine(to: CGPoint(x: bounds.width - 12, y: y + 9))
+
+        // 两端的握把记号,让它一眼看出是"一把尺子"
+        ctx.setStrokeColor(ink.withAlphaComponent(0.22).cgColor)
+        ctx.setLineWidth(1.4)
+        for ex in [CGFloat(10), bounds.width - 10] {
+            ctx.move(to: CGPoint(x: ex, y: y - 5))
+            ctx.addLine(to: CGPoint(x: ex, y: y + 5))
+        }
         ctx.strokePath()
     }
 }
