@@ -26,9 +26,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var overlays: [Int: InkOverlayView] = [:]
     /// v0.14.0:当前笔具(新页画布创建时套用;调色盘变化时由协调器 setTool 更新)
     var currentTool: PKTool?
-    /// v0.35.0:屏幕固定尺子在本页**画布坐标**里的 y(协调器注入:视口中线 → 页面 → 画布)。
-    /// 返回 nil 表示这一页与尺子不相交(或尺子没开),不吸附。
-    var rulerCanvasY: ((Int, CGSize) -> CGFloat?)?
+    /// v0.38.0:沿尺绘图的吸附器(协调器注入,负责画布↔视口坐标换算)。
+    /// 返回投影到尺子上的新笔迹;nil 表示不吸附。
+    var rulerSnapper: ((PKStroke, Int) -> PKStroke?)?
     /// v0.16.0:直尺辅助层状态(对所有页同一口径)
     private(set) var rulerActive = false
     /// v0.32.0:直尺当前挂在哪一页(-1 = 还没算过)。PencilKit 的直尺是**每块画布各带一把**,
@@ -1332,39 +1332,16 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     /// 画出来与尺子完全平行。
     @discardableResult
     private func snapToRulerIfNeeded(at index: Int?) -> Bool {
-        guard let rulerY = toolProvider?.rulerCanvasY?(pageIndex, bounds.size) else { return false }
+        guard let snapper = toolProvider?.rulerSnapper else { return false }
         let strokes = canvas.drawing.strokes
         guard let idx = index ?? (strokes.isEmpty ? nil : strokes.count - 1), idx < strokes.count else {
             return false
         }
-        let target = strokes[idx]
-        let points = Array(target.path)
-        guard points.count >= 2 else { return false }
-        let tolerance = 30 * InkGeometry.scale
-        var minY = CGFloat.greatestFiniteMagnitude
-        var maxY = -CGFloat.greatestFiniteMagnitude
-        for point in points {
-            guard abs(point.location.y - rulerY) <= tolerance else { return false }
-            minY = min(minY, point.location.y)
-            maxY = max(maxY, point.location.y)
-        }
-        // 纵向几乎没动(点一下/短撇)不处理,别把"点"压成一条线
-        guard maxY - minY > 0.5 * InkGeometry.scale else { return false }
-        let snapped = points.map { point in
-            PKStrokePoint(location: CGPoint(x: point.location.x, y: rulerY),
-                          timeOffset: point.timeOffset, size: point.size, opacity: point.opacity,
-                          force: point.force, azimuth: point.azimuth, altitude: point.altitude,
-                          secondaryScale: point.secondaryScale)
-        }
-        guard let stroke = PencilStrokeTools.makeStroke(points: snapped, template: target,
-                                                        creationDate: target.path.creationDate) else {
-            return false
-        }
+        guard let snapped = snapper(strokes[idx], pageIndex) else { return false }
         var updated = strokes
-        updated[idx] = stroke
+        updated[idx] = snapped
         canvas.drawing = PKDrawing(strokes: updated)
         notifyDrawingChanged()
-        DiagLog.log("pencil: ruler snap page \(pageIndex) y=\(Int(rulerY)) pts=\(points.count)")
         return true
     }
 
