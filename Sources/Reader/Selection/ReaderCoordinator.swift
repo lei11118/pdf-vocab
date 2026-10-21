@@ -80,8 +80,8 @@ final class ReaderCoordinator: NSObject {
     private var wetHost: PencilWetInkHost?
     /// v0.30.0:跨页干墨层 —— 每页墨迹里越过页面矩形的部分画在邻页上(不切分、不搬迁)
     private var dryHost: PencilDryInkHost?
-    /// v0.35.0:屏幕固定的自绘直尺
-    private var rulerOverlay: InkRulerOverlay?
+    /// v0.38.0:可拖动/可旋转的自研直尺(视口坐标,不随滚动移动)
+    private var rulerOverlay: SmartRulerView?
     private var wetActive = false
     private var wetPageIndex = 0
     private var wetStrokePoints: [CGPoint] = []   // 页面本地坐标(y 向下)
@@ -511,25 +511,52 @@ final class ReaderCoordinator: NSObject {
         dry.aboveView = wet
         overlayProvider?.wetHost = wet
 
-        // v0.35.0:屏幕固定的自绘直尺(PencilKit 的直尺无法编程定位,见 InkRulerOverlay 注释)。
-        // 加在最上面,不参与命中;位置永远是视口中线,滚动/缩放都不动。
-        let ruler = InkRulerOverlay(frame: view.bounds)
-        ruler.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // v0.38.0:自研智能直尺 —— 可拖动、可双指旋转、8 档角度吸附 + 触觉。
+        // 它挂在 PDFView 上、用视口坐标,所以滚动/缩放页面时尺子原地不动;
+        // 命中区只有尺身那一条,尺子以外的手指全部穿透给画布。
+        let ruler = SmartRulerView(length: min(view.bounds.width * 0.9, 760), host: view)
         view.addSubview(ruler)
         view.bringSubviewToFront(ruler)
         rulerOverlay = ruler
-        // 尺子在本页画布坐标里的 y:视口中线 → 页面坐标 → 画布坐标
-        overlayProvider?.rulerCanvasY = { [weak self] index, _ in
+        // 沿尺绘图:把一笔投影到尺线(画布 ↔ 视口两套坐标互转后做几何判定)
+        overlayProvider?.rulerSnapper = { [weak self] stroke, index in
             guard let self, let pdfView = self.pdfView, let ruler = self.rulerOverlay, ruler.isOn,
-                  let document = pdfView.document,
-                  index >= 0, index < document.pageCount,
+                  let document = pdfView.document, index >= 0, index < document.pageCount,
                   let page = document.page(at: index) else { return nil }
-            let mid = CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY)
-            let inPage = pdfView.convert(mid, to: page)
             let box = page.bounds(for: pdfView.displayBox)
-            let localY = box.maxY - inPage.y           // 页面坐标(左上原点、y 向下)
-            guard localY >= -InkGeometry.bleedTop, localY <= box.height + InkGeometry.bleed else { return nil }
-            return localY * InkGeometry.scale + InkGeometry.pageTopY()
+            let points = Array(stroke.path)
+            guard points.count >= 2 else { return nil }
+
+            func canvasToView(_ p: CGPoint) -> CGPoint {
+                let pagePoint = p.applying(InkGeometry.canvasFromPage.inverted())
+                let pdfPoint = CGPoint(x: box.minX + pagePoint.x, y: box.maxY - pagePoint.y)
+                return pdfView.convert(pdfPoint, from: page)
+            }
+            func viewToCanvas(_ v: CGPoint) -> CGPoint {
+                let pdfPoint = pdfView.convert(v, to: page)
+                let local = CGPoint(x: pdfPoint.x - box.minX, y: box.maxY - pdfPoint.y)
+                return local.applying(InkGeometry.canvasFromPage)
+            }
+
+            // 所有采样点都要贴着尺线才吸附,避免把普通字迹拉直
+            let tolerance: CGFloat = 18
+            for point in points where ruler.distanceToLine(from: canvasToView(point.location)) > tolerance {
+                return nil
+            }
+            let firstView = canvasToView(points[0].location)
+            let lastView = canvasToView(points[points.count - 1].location)
+            guard hypot(lastView.x - firstView.x, lastView.y - firstView.y) > 8 else { return nil }
+
+            let projected = points.map { point -> PKStrokePoint in
+                let onLine = viewToCanvas(ruler.projectOnLine(canvasToView(point.location)))
+                return PKStrokePoint(location: onLine, timeOffset: point.timeOffset,
+                                     size: point.size, opacity: point.opacity, force: point.force,
+                                     azimuth: point.azimuth, altitude: point.altitude,
+                                     secondaryScale: point.secondaryScale)
+            }
+            DiagLog.log("pencil: ruler snap page=\(index) angle=\(Int(ruler.angleDegrees))")
+            let path = PKStrokePath(controlPoints: projected, creationDate: stroke.path.creationDate)
+            return PKStroke(ink: stroke.ink, path: path, transform: .identity, mask: nil)
         }
 
         suppressNativeSelection(in: view)
@@ -1533,6 +1560,8 @@ final class ReaderCoordinator: NSObject {
     /// 滚动/缩放都不动,关闭再打开也不改位置(它没有位置状态)。
     private func setRulerOverlayVisible(_ on: Bool) {
         guard let ruler = rulerOverlay else { return }
+        // v0.38.0:关闭→开启时回到屏幕正中、角度归零(需求:只有重开才重置位置)
+        if on, !ruler.isOn { ruler.resetInHost() }
         ruler.isOn = on
         if on { pdfView?.bringSubviewToFront(ruler) }
     }
