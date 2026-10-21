@@ -1547,7 +1547,12 @@ final class ReaderCoordinator: NSObject {
                 let inContent = view.convert(page.bounds(for: view.displayBox), from: page)
                 let shift = CGAffineTransform(translationX: inContent.minX * DocumentInkSurface.scale,
                                               y: inContent.minY * DocumentInkSurface.scale)
-                merged.append(contentsOf: pageDrawing.strokes.map { $0.applying(shift) })
+                // PKStroke 没有 applying(_:);平移要写进 transform,并与已有 transform 合并
+                merged.append(contentsOf: pageDrawing.strokes.map { stroke in
+                    PKStroke(ink: stroke.ink, path: stroke.path,
+                             transform: stroke.transform.concatenating(shift),
+                             mask: stroke.mask)
+                })
                 migrated += pageDrawing.strokes.count
             }
             if !merged.isEmpty {
@@ -1570,9 +1575,7 @@ final class ReaderCoordinator: NSObject {
     func applyToolSession(force: Bool = false) {
         guard let session = toolSession else { return }
         // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
-        if let tool = session.makeTool(scale: DocumentInkSurface.scale) {
-            inkSurface?.applyTool(tool)
-        }
+        inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
         if !wetToolIsRegular { clearWetInk() }
         let revision = session.stateRevision
         if !force, revision == appliedToolRevision { return }
