@@ -26,6 +26,9 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
     private var overlays: [Int: InkOverlayView] = [:]
     /// v0.14.0:当前笔具(新页画布创建时套用;调色盘变化时由协调器 setTool 更新)
     var currentTool: PKTool?
+    /// v0.35.0:屏幕固定尺子在本页**画布坐标**里的 y(协调器注入:视口中线 → 页面 → 画布)。
+    /// 返回 nil 表示这一页与尺子不相交(或尺子没开),不吸附。
+    var rulerCanvasY: ((Int, CGSize) -> CGFloat?)?
     /// v0.16.0:直尺辅助层状态(对所有页同一口径)
     private(set) var rulerActive = false
     /// v0.32.0:直尺当前挂在哪一页(-1 = 还没算过)。PencilKit 的直尺是**每块画布各带一把**,
@@ -87,6 +90,10 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
         } else {
             overlay = InkOverlayView(pageIndex: index, docSha: docSha, inkStore: inkStore, markMode: markMode, tool: currentTool, rulerActive: rulerActive && index == focusedPageIndex)
             overlay.toolProvider = self
+            // v0.35.0:整笔橡皮跨页 —— 交给 provider 按 creationDate 家族统一删除
+            overlay.onEraseStrokes = { [weak self] page, dates in
+                self?.eraseStrokeFamily(from: page, dates: dates) ?? false
+            }
             let size = page.bounds(for: view.displayBox).size
             overlay.frame = CGRect(origin: .zero, size: size)
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -201,6 +208,8 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
             let span = forward ? ownSpan : (neighborSpan(page: page - 1, axis: axis) ?? ownSpan)
             let delta = (forward ? -span : span) * InkGeometry.scale
             let guardTarget = forward ? page + 1 : page - 1
+            // v0.35.0:搬页后两页并进同一条撤销记录 —— 撤销一次,整笔跨页墨迹一起消失
+            notePagesInAction([page, guardTarget])
             guard parts.outside.count >= 2,
                   let outside = PencilStrokeTools.makeStroke(points: parts.outside, template: stroke),
                   let moved = PencilStrokeTools.shifted(outside,
@@ -235,6 +244,29 @@ final class PencilOverlayProvider: NSObject, PDFPageOverlayViewProvider {
                 for page in pages.sorted() { self.scheduleOverflowSettle(page: page) }
             }
         }
+    }
+
+    /// v0.35.0:整笔橡皮跨页删除。一笔跨页后被切成多段,各段共享同一个 `creationDate`,
+    /// 所以按"家族"把**所有页**上的同源段一起删掉;每页在改动前拍快照,整次擦除仍只占一条撤销。
+    func eraseStrokeFamily(from page: Int, dates: [Date]) -> Bool {
+        guard !dates.isEmpty else { return false }
+        func matches(_ stroke: PKStroke) -> Bool {
+            dates.contains { abs($0.timeIntervalSince(stroke.path.creationDate)) < 0.0005 }
+        }
+        var changedPages: [Int] = []
+        for (index, overlay) in overlays {
+            let strokes = overlay.canvasSnapshot.strokes
+            guard strokes.contains(where: matches) else { continue }
+            notePagesInAction([index])          // 必须先拍快照再改
+            let kept = strokes.filter { !matches($0) }
+            overlay.applyCanvasSnapshot(PKDrawing(strokes: kept))
+            overlay.flushSave()
+            changedPages.append(index)
+        }
+        if !changedPages.isEmpty {
+            DiagLog.log("pencil: whole erase page=\(page) families=\(dates.count) pages=\(changedPages.sorted())")
+        }
+        return !changedPages.isEmpty
     }
 
     /// 邻页在切分轴上的尺寸(叠层没建时问文档)
@@ -499,6 +531,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     weak var toolProvider: PencilOverlayProvider?
     /// v0.30.0:画布内容变化(落笔/擦除/撤销/清空/吸附)→ provider 同步干墨跨页层。
     var onDrawingChanged: ((PKDrawing) -> Void)?
+    /// v0.35.0:整笔橡皮跨页 —— 把命中的 creationDate 家族交给 provider 统一删除
+    var onEraseStrokes: ((Int, [Date]) -> Bool)?
     /// v0.27.0:一次用户动作(落笔/橡皮/形状/清空)的开始与结束 —— provider 用它把
     /// 涉及到的页合成**一条**撤销记录。
     var onActionBegin: ((String, PKDrawing?) -> Void)?
@@ -806,6 +840,12 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
                 }
             }
             guard !groups.isEmpty else { return }
+            // v0.35.0:一笔跨页被切成多段后,各段共享同一个 creationDate。整笔橡皮必须把
+            // 整族一起删掉(含邻页上的那几段),否则用户会看到"只擦掉一半"。
+            if onEraseStrokes?(pageIndex, groups) == true {
+                DiagLog.log("pencil: whole erase page \(pageIndex) families=\(groups.count)")
+                return
+            }
             let kept = canvas.drawing.strokes.filter { stroke in
                 !groups.contains { abs($0.timeIntervalSince(stroke.path.creationDate)) < 0.0005 }
             }
@@ -1206,11 +1246,55 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
             guard let self else { return }
             let start = self.pendingPostProcessStart
             self.pendingPostProcessStart = nil
-            self.snapStraightIfNeeded(at: start)
+            // v0.35.0:贴着直尺画的这一笔先压到尺子线上;没贴尺子才走原来的直线吸附
+            if !self.snapToRulerIfNeeded(at: start) {
+                self.snapStraightIfNeeded(at: start)
+            }
             self.logIfInkHitCanvasEdge()
         }
         postProcessWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
+    }
+
+    /// v0.35.0:直尺吸附 —— 自绘尺子固定在视口中间,`provider.rulerCanvasY` 给出它在**本页画布**
+    /// 坐标里的 y。抬手的这一笔若整条都贴着尺子,就把所有采样点的 y 压到尺子线上,
+    /// 画出来与尺子完全平行。
+    @discardableResult
+    private func snapToRulerIfNeeded(at index: Int?) -> Bool {
+        guard let rulerY = toolProvider?.rulerCanvasY?(pageIndex, bounds.size) else { return false }
+        let strokes = canvas.drawing.strokes
+        guard let idx = index ?? (strokes.isEmpty ? nil : strokes.count - 1), idx < strokes.count else {
+            return false
+        }
+        let target = strokes[idx]
+        let points = Array(target.path)
+        guard points.count >= 2 else { return false }
+        let tolerance = 30 * InkGeometry.scale
+        var minY = CGFloat.greatestFiniteMagnitude
+        var maxY = -CGFloat.greatestFiniteMagnitude
+        for point in points {
+            guard abs(point.location.y - rulerY) <= tolerance else { return false }
+            minY = min(minY, point.location.y)
+            maxY = max(maxY, point.location.y)
+        }
+        // 纵向几乎没动(点一下/短撇)不处理,别把"点"压成一条线
+        guard maxY - minY > 0.5 * InkGeometry.scale else { return false }
+        let snapped = points.map { point in
+            PKStrokePoint(location: CGPoint(x: point.location.x, y: rulerY),
+                          timeOffset: point.timeOffset, size: point.size, opacity: point.opacity,
+                          force: point.force, azimuth: point.azimuth, altitude: point.altitude,
+                          secondaryScale: point.secondaryScale)
+        }
+        guard let stroke = PencilStrokeTools.makeStroke(points: snapped, template: target,
+                                                        creationDate: target.path.creationDate) else {
+            return false
+        }
+        var updated = strokes
+        updated[idx] = stroke
+        canvas.drawing = PKDrawing(strokes: updated)
+        notifyDrawingChanged()
+        DiagLog.log("pencil: ruler snap page \(pageIndex) y=\(Int(rulerY)) pts=\(points.count)")
+        return true
     }
 
     /// v0.30.0:墨迹顶到画布边界 = 超出出血区,再写就会被裁掉。只用于诊断日志。

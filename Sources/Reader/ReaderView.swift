@@ -349,8 +349,6 @@ struct ReaderView: View {
                     }
                     Menu {
                         Button("适应宽度") { readerHandle.coordinator?.zoomToFitWidth() }
-                        Button("50%") { readerHandle.coordinator?.zoomToPercent(50) }
-                        Button("75%") { readerHandle.coordinator?.zoomToPercent(75) }
                         Button("100%") { readerHandle.coordinator?.zoomToPercent(100) }
                         Button("200%") { readerHandle.coordinator?.zoomToPercent(200) }
                         Button("400%") { readerHandle.coordinator?.zoomToPercent(400) }
