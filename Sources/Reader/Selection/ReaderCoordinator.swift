@@ -80,6 +80,8 @@ final class ReaderCoordinator: NSObject {
     private var wetHost: PencilWetInkHost?
     /// v0.30.0:跨页干墨层 —— 每页墨迹里越过页面矩形的部分画在邻页上(不切分、不搬迁)
     private var dryHost: PencilDryInkHost?
+    /// v0.35.0:屏幕固定的自绘直尺
+    private var rulerOverlay: InkRulerOverlay?
     private var wetActive = false
     private var wetPageIndex = 0
     private var wetStrokePoints: [CGPoint] = []   // 页面本地坐标(y 向下)
@@ -508,6 +510,27 @@ final class ReaderCoordinator: NSObject {
         wetHost = wet
         dry.aboveView = wet
         overlayProvider?.wetHost = wet
+
+        // v0.35.0:屏幕固定的自绘直尺(PencilKit 的直尺无法编程定位,见 InkRulerOverlay 注释)。
+        // 加在最上面,不参与命中;位置永远是视口中线,滚动/缩放都不动。
+        let ruler = InkRulerOverlay(frame: view.bounds)
+        ruler.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(ruler)
+        view.bringSubviewToFront(ruler)
+        rulerOverlay = ruler
+        // 尺子在本页画布坐标里的 y:视口中线 → 页面坐标 → 画布坐标
+        overlayProvider?.rulerCanvasY = { [weak self] index, _ in
+            guard let self, let pdfView = self.pdfView, let ruler = self.rulerOverlay, ruler.isOn,
+                  let document = pdfView.document,
+                  index >= 0, index < document.pageCount,
+                  let page = document.page(at: index) else { return nil }
+            let mid = CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY)
+            let inPage = pdfView.convert(mid, to: page)
+            let box = page.bounds(for: pdfView.displayBox)
+            let localY = box.maxY - inPage.y           // 页面坐标(左上原点、y 向下)
+            guard localY >= -InkGeometry.bleedTop, localY <= box.height + InkGeometry.bleed else { return nil }
+            return localY * InkGeometry.scale + InkGeometry.pageTopY()
+        }
 
         suppressNativeSelection(in: view)
         observeScrolling()
@@ -1431,6 +1454,11 @@ final class ReaderCoordinator: NSObject {
             if wetHost.superview == nil { pdfView.addSubview(wetHost) }
             pdfView.bringSubviewToFront(wetHost)
         }
+        // v0.35.0:尺子层也要每次重新置顶(它必须盖在墨迹之上,否则被墨盖住)
+        if let rulerOverlay, let pdfView {
+            if rulerOverlay.superview == nil { pdfView.addSubview(rulerOverlay) }
+            pdfView.bringSubviewToFront(rulerOverlay)
+        }
         let changed = markMode != on
         markMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
@@ -1443,6 +1471,7 @@ final class ReaderCoordinator: NSObject {
         if !on {
             stopAutoScroll()
             clearWetInk()
+            setRulerOverlayVisible(false)   // v0.35.0:退出书写时收起尺子
         }
         overlayProvider?.setMarkMode(on)
         // v0.25.1:进入书写时**强制**套用一次工具 —— 只靠签名去重的话,重进文档时
@@ -1491,11 +1520,21 @@ final class ReaderCoordinator: NSObject {
         // ② 笔具本身(同步赋值;签名/版本去重已在上面,不会每帧重设)
         let tool = session.makeTool(scale: InkGeometry.scale)
         provider.setTool(tool)
-        // ③ 直尺(只挂焦点页)
-        provider.setRulerActive(session.rulerActive)
+        // ③ 直尺:自绘、固定在视口中线(v0.35.0)。PencilKit 自带直尺没有定位 API、
+        //    只会跟着页面一起滚,所以永久关掉它,改用我们自己的尺子层。
+        provider.setRulerActive(false)
+        setRulerOverlayVisible(session.rulerActive && markMode)
 
         let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
         DiagLog.log("pencil: apply ink=\(Self.inkSummary(tool)) kind=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
+    }
+
+    /// v0.35.0:显示/隐藏屏幕固定尺子。只在书写模式里显示;位置永远是视口中线,
+    /// 滚动/缩放都不动,关闭再打开也不改位置(它没有位置状态)。
+    private func setRulerOverlayVisible(_ on: Bool) {
+        guard let ruler = rulerOverlay else { return }
+        ruler.isOn = on
+        if on { pdfView?.bringSubviewToFront(ruler) }
     }
 
     /// 诊断用:把真正赋给画布的笔具打印出来(墨型 + 颜色 + 宽度),
@@ -1568,7 +1607,9 @@ final class ReaderCoordinator: NSObject {
         /// v0.23.2:PDFKit 在设置 document / 切换 displayMode 之后会把 `maxScaleFactor` 重置回
         /// 内部默认值(真机反馈「800% 以上无区别」就是被夹回上限)。任何改缩放前先重设上下限。
         private func applyZoomLimits(_ view: PDFView) {
-            if abs(view.minScaleFactor - 0.2) > 0.001 { view.minScaleFactor = 0.2 }
+            // v0.35.0:用户要求「缩进最低只有 100%」—— 下限就是 1.0,不许再小。
+            // 之前是 0.2;PDFKit 还会把下限悄悄恢复成 1.0,所以每次缩放都要重新钉一遍。
+            if abs(view.minScaleFactor - 1.0) > 0.001 { view.minScaleFactor = 1.0 }
             if abs(view.maxScaleFactor - 40) > 0.001 { view.maxScaleFactor = 40 }
         }
 
@@ -1963,6 +2004,9 @@ final class ReaderCoordinator: NSObject {
             self.refreshHandles()
             self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
             self.dryHost?.refresh()                      // v0.30.0:跨页干墨跟随滚动
+            if let ruler = self.rulerOverlay, ruler.isOn, let pdfView = self.pdfView {
+                pdfView.bringSubviewToFront(ruler)       // v0.35.0:尺子永远在最上层
+            }
             self.overlayProvider?.refreshRulerFocus()    // v0.32.0:直尺跟随焦点页
             if sv.isDragging || sv.isDecelerating {
                 self.hasUserInteracted = true

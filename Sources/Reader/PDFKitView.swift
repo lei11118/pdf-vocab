@@ -79,7 +79,8 @@ struct PDFKitView: UIViewRepresentable {
         view.pageShadowsEnabled = false
         view.displaysPageBreaks = false
         // v0.19.0:大幅放大到 1500%(读小字/扫描书);PDFKit 默认上限只有 4 倍
-        view.minScaleFactor = 0.2
+        // v0.35.0:用户要求下限就是 100%,不允许缩得更小
+        view.minScaleFactor = 1.0
         // v0.23.0:最大 4000%(看清扫描件的像素点);实际清晰度取决于 PDF 自身栅格
         view.maxScaleFactor = 40
         // v0.19.0:页面之间不留缝,视觉上连成一张长纸(配合书写贴边滚动)
@@ -104,7 +105,7 @@ struct PDFKitView: UIViewRepresentable {
     func updateUIView(_ uiView: PDFView, context: Context) {
         // v0.23.2:PDFKit 会在文档/布局变化后重置缩放上下限 —— 每次更新都重新放开
         if abs(uiView.maxScaleFactor - 40) > 0.001 { uiView.maxScaleFactor = 40 }
-        if abs(uiView.minScaleFactor - 0.2) > 0.001 { uiView.minScaleFactor = 0.2 }
+        if abs(uiView.minScaleFactor - 1.0) > 0.001 { uiView.minScaleFactor = 1.0 }
         context.coordinator.onPageChanged = onPageChanged
         context.coordinator.onSelectionInfo = onSelectionInfo
         context.coordinator.onTranslate = onTranslate
