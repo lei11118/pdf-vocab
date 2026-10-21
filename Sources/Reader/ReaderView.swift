@@ -188,6 +188,26 @@ struct ReaderView: View {
             .onChange(of: layoutMode) { _, mode in
                 readerHandle.coordinator?.setLayoutMode(mode)
             }
+            // v0.37.0:胶囊词卡与其它窗口互斥 —— 任何弹层出现就先收起卡片,
+            // 否则两个窗叠在一起,卡片被压住连拖都拖不出来。
+            .onChange(of: anySheetOpen) { _, open in
+                if open { dismissFloatingCard() }
+            }
+            // 进入书写模式同理:底下是工具条,卡片压在上面同样拉不出来
+            .onChange(of: markMode) { _, writing in
+                if writing { dismissFloatingCard() }
+            }
+    }
+
+    /// 当前是否有任何弹层/面板打开(词卡之外的一切)
+    private var anySheetOpen: Bool {
+        showPageJump || showSettings || showVocab || showOutline || showSearch || showAnalyze
+    }
+
+    /// 收起悬浮词卡与弧形工具盘(v0.37.0)
+    private func dismissFloatingCard() {
+        if cardContent != nil { cardContent = nil }
+        arcAnchor = nil
     }
 
     private var primarySheetContent: some View {
