@@ -436,7 +436,14 @@ final class ReaderCoordinator: NSObject {
         provider.flowAxis = view.displayDirection == .horizontal ? .horizontal : .vertical
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
-        view.pageOverlayViewProvider = provider
+        // v0.40.0:文档级单画布 —— 整份文档只有 1 块 PKCanvasView,跨页一笔就是一笔。
+        // 旧路径(每页一块画布)保留在设置里,出问题可一键切回,不用等新包。
+        let useSurface = UserDefaults.standard.object(forKey: "documentInkSurface") as? Bool ?? true
+        if useSurface {
+            installInkSurface(on: view, docSha: docSha)
+        } else {
+            view.pageOverlayViewProvider = provider
+        }
         // v0.30.0:干墨层接手后立刻撤湿墨预览(同一段墨不重复画)
         provider.onInkCommitted = { [weak self] in self?.clearWetAfterCommit() }
         // v0.25.1:新 provider 的橡皮/激光/形状配置默认全是"关",必须把当前会话状态推一次,
@@ -1515,8 +1522,56 @@ final class ReaderCoordinator: NSObject {
     /// ① **签名去重**——工具没变就完全不碰 PencilKit(此前 `updateUIView` 每帧都重建工具);
     /// ② **延迟到下一个 runloop**——绝不在 SwiftUI 更新/手势回调里同步改 `PKCanvasView.tool`
     ///    (在 PencilKit 自己的回调里改工具、或在布局过程中改,都可能把主线程锁死)。
+    private var inkSurface: DocumentInkSurface?
+
+    /// v0.40.0:装上文档级单画布,并把历史"每页一画布"的墨迹合并进文档坐标系。
+    private func installInkSurface(on view: PDFView, docSha: String) {
+        let surface = DocumentInkSurface()
+        inkSurface = surface
+        surface.attach(to: view)
+
+        // ① 读文档级墨迹(page = -1 是文档级哨兵)
+        if let record = inkStore?.drawing(docSha: docSha, page: -1),
+           let saved = try? PKDrawing(data: record.data) {
+            surface.drawing = saved
+            DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
+        } else if let store = inkStore, var merged = surface.drawing.strokes as [PKStroke]?,
+                  let document = view.document {
+            // ② 旧数据迁移:每页画布 → 文档坐标(加上该页在内容坐标里的原点)
+            merged = []
+            var migrated = 0
+            for index in 0..<document.pageCount {
+                guard let record = store.drawing(docSha: docSha, page: index),
+                      let pageDrawing = try? PKDrawing(data: record.data),
+                      !pageDrawing.strokes.isEmpty,
+                      let page = document.page(at: index) else { continue }
+                let inContent = view.convert(page.bounds(for: view.displayBox), from: page)
+                let shift = CGAffineTransform(translationX: inContent.minX * DocumentInkSurface.scale,
+                                              y: inContent.minY * DocumentInkSurface.scale)
+                merged.append(contentsOf: pageDrawing.strokes.map { $0.applying(shift) })
+                migrated += pageDrawing.strokes.count
+            }
+            if !merged.isEmpty {
+                surface.drawing = PKDrawing(strokes: merged)
+                DiagLog.log("surface: migrated \(migrated) strokes from per-page ink")
+            }
+        }
+
+        // ③ 变化 → 落库(文档级)
+        surface.onDrawingChanged = { [weak self] drawing in
+            guard let self, let store = self.inkStore else { return }
+            store.save(docSha: docSha, page: -1,
+                       data: drawing.dataRepresentation(),
+                       scale: Double(DocumentInkSurface.scale))
+            DiagLog.log("surface: saved doc ink strokes=\(drawing.strokes.count)")
+        }
+        DiagLog.log("surface: enabled (single canvas)")
+    }
+
     func applyToolSession(force: Bool = false) {
         guard let session = toolSession else { return }
+        // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
+        inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
         if !wetToolIsRegular { clearWetInk() }
         let revision = session.stateRevision
         if !force, revision == appliedToolRevision { return }
@@ -1658,10 +1713,13 @@ final class ReaderCoordinator: NSObject {
         }
 
     func undoInk() {
+        // v0.40.0:单画布有自己的 undoManager(一笔一步),优先用它
+        if let surface = inkSurface { surface.undo(); return }
         clearWetInk()
         overlayProvider?.undo()
     }
     func redoInk() {
+        if let surface = inkSurface { surface.redo(); return }
         clearWetInk()
         overlayProvider?.redo()
     }
