@@ -238,6 +238,27 @@ final class SmartRulerView: UIView {
             x += 10
             index += 1
         }
+
+        // v0.39.0:尺线(投影基准线)+ 实时角度读数。
+        // 投影用的是尺身中线,所以必须把它画出来,否则"吸到哪"看不见。
+        ctx.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.55).cgColor)
+        ctx.setLineWidth(1)
+        ctx.move(to: CGPoint(x: 4, y: bounds.midY))
+        ctx.addLine(to: CGPoint(x: bounds.width - 4, y: bounds.midY))
+        ctx.strokePath()
+
+        let angleText = "\(Int(angleDegrees.rounded()))°"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: UIColor.systemBlue.withAlphaComponent(0.85)
+        ]
+        let size = (angleText as NSString).size(withAttributes: attrs)
+        let pill = CGRect(x: bounds.width - size.width - 14, y: bounds.midY - size.height / 2 - 1,
+                          width: size.width + 8, height: size.height + 2)
+        UIColor.white.withAlphaComponent(0.85).setFill()
+        UIBezierPath(roundedRect: pill, cornerRadius: 5).fill()
+        (angleText as NSString).draw(at: CGPoint(x: pill.minX + 4, y: pill.minY + 1),
+                                    withAttributes: attrs)
     }
 
     // 只命中尺身本身,其余穿透

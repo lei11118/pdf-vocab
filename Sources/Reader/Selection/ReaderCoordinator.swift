@@ -493,28 +493,15 @@ final class ReaderCoordinator: NSObject {
         view.addGestureRecognizer(observer)
         pencilObserver = observer
 
-        // v0.30.0:跨页干墨层(先加,湿墨层在它之上)
-        let dry = PencilDryInkHost(frame: view.bounds)
-        dry.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        dry.pdfView = view
-        view.addSubview(dry)
-        dryHost = dry
-        overlayProvider?.dryHost = dry
+        // v0.39.0:**删掉湿墨层与干墨镜像层**。
+        // 它们是 v0.28–v0.30「只渲染不搬迁」方案的产物;现在跨页靠抬笔切分(v0.32+),
+        // 这两层只会在书写过程中反复叠画同一段墨 —— 真机表现就是页缝处闪烁、断续。
+        // 形状预览在 wetHost 为 nil 时会自动退回 CAShapeLayer(见 updateShapePreview)。
+        overlayProvider?.wetHost = nil
+        overlayProvider?.dryHost = nil
 
-        // v0.28.0:全局湿墨层(直接挂在 PDFView 上,固定在视口坐标,盖住所有页)
-        let wet = PencilWetInkHost(frame: view.bounds)
-        wet.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        wet.pdfView = view
-        view.addSubview(wet)
-        view.bringSubviewToFront(wet)
-        wetHost = wet
-        dry.aboveView = wet
-        overlayProvider?.wetHost = wet
-
-        // v0.38.0:自研智能直尺 —— 可拖动、可双指旋转、8 档角度吸附 + 触觉。
-        // 它挂在 PDFView 上、用视口坐标,所以滚动/缩放页面时尺子原地不动;
-        // 命中区只有尺身那一条,尺子以外的手指全部穿透给画布。
-        let ruler = SmartRulerView(length: min(view.bounds.width * 0.9, 760), host: view)
+        // v0.39.0:尺长取屏幕对角线 —— 横竖都铺满,视觉上就是"无限长"的直尺。
+        let ruler = SmartRulerView(length: hypot(view.bounds.width, view.bounds.height), host: view)
         view.addSubview(ruler)
         view.bringSubviewToFront(ruler)
         rulerOverlay = ruler
