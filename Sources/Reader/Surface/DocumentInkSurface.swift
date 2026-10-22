@@ -2,71 +2,86 @@ import UIKit
 import PDFKit
 import PencilKit
 
-/// v0.40.0:**文档级单画布**(替代"每页一块 PKCanvasView")。
+/// v0.41.0:**文档级墨迹 + 滑动窗口画布**。
 ///
-/// ## 为什么必须换架构
-/// 旧实现把每页的页矩形当成一块 `PKCanvasView` 的裁切框。笔一旦越过页边界,
-/// 越界的那截墨**不在任何画布里**,于是必然"间断";抬笔后再切分/搬页补回来,
-/// 于是必然"闪一下"。这不是参数问题,是容器问题 —— 一页一个墨迹容器,
-/// 就不可能画出一条跨页连续的墨。
+/// ## 两次失败的教训
+/// - 每页一块画布:页矩形就是裁切框,越界那截墨不在任何画布里 → 跨页**必然间断**,
+///   抬笔切分搬页 → **必然闪**;
+/// - 一整块铺满全文档:221 页横排并集 290000×5569 点,×3 超采样后 87 万×1.7 万点,
+///   PencilKit 的 tiled renderer 栅格化不了 → 真机**所有工具都不出墨**
+///   (日志 `surface: attached size=290663x5569`)。
 ///
-/// ## 新模型
-/// - 整个文档只有 **1 块** `PKCanvasView`,挂在 `PDFView.documentView` 里,
-///   frame 覆盖全部页(1:1 页面点),`bounds` 放大 3 倍用于超采样(与旧 ink 存储同比例);
-/// - 墨迹坐标 = **文档坐标系**(全文档统一,与页码无关),存一次就够,不需要按页切/搬;
-/// - PDFKit 只负责**渲染页面与取词**,不再承载任何墨迹;
-/// - 一笔就是一笔:跨 1、2、3、N 页都是同一条 `PKStroke`,不切分 → 无接缝、无闪烁;
-/// - 撤销用画布原生 `undoManager`,笔级粒度,不需要页级撤销栈。
-///
-/// ## 与 PDFView 的坐标关系
-/// 画布是 `documentView` 的子视图:`documentView` 已被 PDFView 的 scrollView 缩放,
-/// 所以画布只需关心**内容坐标**(1:1 页面点),缩放由父视图完成。
-/// 页面点 `(px, py)`(文档左上原点、y 向下)→ 画布坐标 `(px*scale, py*scale)`。
+/// ## 现在的模型(墨迹在文档坐标系,画布是一扇窗口)
+/// - 墨迹存 **文档坐标**(`docDrawing`,单位 = docView 点 × scale),与窗口无关;
+/// - 画布只覆盖 **当前页 ±1 页**(一笔跨 3 页够用),典型 2000×2400 点,可栅格化;
+/// - 窗口内容 = 文档级墨迹**平移**到窗口原点后的副本,窗口外的笔迹落在 bounds 外被裁掉;
+/// - 抬笔把窗口画布回写成文档级墨迹并落库;翻页只换窗口原点,不搬墨迹、不切分;
+/// - 因此在窗口内,"一笔跨页"始终是**同一条 `PKStroke`** —— 无接缝、无复制、无闪烁。
 final class DocumentInkSurface: UIView {
 
-    // MARK: - 常量
-
-    /// 与历史 ink 数据一致的超采样倍率(旧数据 3x)
+    /// 与历史 ink 数据一致的超采样倍率
     static let scale: CGFloat = 3
 
     // MARK: - 对外
 
+    /// 文档级墨迹(文档坐标 = docView 点 × scale)
+    private(set) var docDrawing = PKDrawing()
     /// 墨迹变化(抬笔/擦除/撤销后)→ 调用方负责落库
     var onDrawingChanged: ((PKDrawing) -> Void)?
     /// 落库防抖(秒)
     var saveDebounce: TimeInterval = 0.8
 
-    /// 文档级墨迹(画布坐标 = 页面点 × scale)
+    /// 读写文档级墨迹
     var drawing: PKDrawing {
-        get { canvas.drawing }
+        get { docDrawing }
         set {
-            guard newValue != canvas.drawing else { return }
-            suppressNotify += 1
-            canvas.drawing = newValue
-            suppressNotify -= 1
-            layoutIfNeeded()
+            docDrawing = newValue
+            renderDocIntoCanvas()
         }
     }
 
-    /// 页面点 → 画布坐标
-    static func canvasPoint(fromPagePoint p: CGPoint) -> CGPoint {
-        CGPoint(x: p.x * scale, y: p.y * scale)
-    }
-
-    /// 画布坐标 → 页面点
-    static func pagePoint(fromCanvasPoint p: CGPoint) -> CGPoint {
-        CGPoint(x: p.x / scale, y: p.y / scale)
-    }
+    /// 窗口原点(docView 坐标,单位=点)
+    private(set) var windowOrigin: CGPoint = .zero
 
     // MARK: - 内部
 
-    private(set) var canvas: PKCanvasView
+    private(set) var canvas = PKCanvasView()
     private weak var pdfView: PDFView?
     private var suppressNotify = 0
     private var saveTask: Task<Void, Never>?
     private var observationTokens: [NSKeyValueObservation] = []
-    /// 书写模式(标记模式)才让画布吃触摸;选词模式下整层穿透给 PDFView
+    /// 书写模式才让画布吃触摸;选词模式整层穿透
     private var drawingEnabled = false
+
+    // MARK: - 生命周期
+
+    init() {
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = true
+
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+        canvas.isScrollEnabled = false          // 滚动交给 PDFView
+        canvas.alwaysBounceVertical = false
+        canvas.alwaysBounceHorizontal = false
+        canvas.drawingPolicy = .anyInput
+        canvas.delegate = self
+        canvas.overrideUserInterfaceStyle = .light
+        addSubview(canvas)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        observationTokens.forEach { $0.invalidate() }
+        saveTask?.cancel()
+    }
+
+    // MARK: - 触摸门控
 
     /// 切换是否接管触摸。**选词模式必须关掉**,否则会挡住长按选词、拖柄与 Pencil 悬停。
     func setDrawingEnabled(_ enabled: Bool) {
@@ -82,45 +97,15 @@ final class DocumentInkSurface: UIView {
         return super.hitTest(point, with: event)
     }
 
-    deinit {
-        observationTokens.forEach { $0.invalidate() }
-        saveTask?.cancel()
-    }
+    // MARK: - 挂载
 
-    // MARK: - 生命周期
-
-    init() {
-        canvas = PKCanvasView(frame: .zero)
-        super.init(frame: .zero)
-        backgroundColor = .clear
-        isUserInteractionEnabled = false        // 容器不吃事件,只做布局
-        isOpaque = false
-
-        canvas.backgroundColor = .clear
-        canvas.isOpaque = false
-        canvas.alwaysBounceVertical = false
-        canvas.alwaysBounceHorizontal = false
-        canvas.isScrollEnabled = false          // 滚动交给 PDFView
-        canvas.drawingPolicy = .anyInput
-        canvas.delegate = self
-        canvas.overrideUserInterfaceStyle = .light
-        addSubview(canvas)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// 挂到 PDFView:画布成为 documentView 的子视图,铺满整份文档。
     func attach(to pdfView: PDFView) {
         self.pdfView = pdfView
         installObserversIfNeeded(pdfView)
         ensureAttached()
     }
 
-    /// 文档装载前 `pdfView.documentView` 是 nil —— 必须可重试。
-    /// v0.40.2:v0.40.x 在这里只 `return`,而 `installInkSurface` 又发生在文档装载之前,
-    /// 于是画布**从未挂上视图树**,真机表现就是「手写全哑、选词正常」。
+    /// 文档装载前 `documentView` 是 nil —— 必须可重试(v0.40.2 修)。
     func ensureAttached() {
         guard let pdfView else { return }
         guard let docView = pdfView.documentView else {
@@ -131,57 +116,67 @@ final class DocumentInkSurface: UIView {
             return
         }
         if superview !== docView { docView.addSubview(self) }
-        // ⚠️ 容器必须可交互,否则整棵子树(含画布)收不到触摸 —— v0.40.0 写成 false,
-        // 真机表现就是「所有工具都写不出字」。穿透由 setDrawingEnabled(false) 控制。
         isUserInteractionEnabled = true
-        layoutSurface()
-        // 页布局可能还没算完,补一次对齐
+        refreshWindow()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.layoutSurface()
+            self?.refreshWindow()
         }
-        DiagLog.log("surface: attached size=\(Int(bounds.width))x\(Int(bounds.height))")
+        DiagLog.log("surface: attached window=\(Int(bounds.width))x\(Int(bounds.height))")
     }
 
     private func installObserversIfNeeded(_ pdfView: PDFView) {
         guard observationTokens.isEmpty else { return }
         observationTokens.append(pdfView.observe(\.scaleFactor, options: [.new]) { [weak self] _, _ in
-            self?.layoutSurface()
+            self?.refreshWindow()
         })
         observationTokens.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
-            self?.layoutSurface()
+            self?.refreshWindow()
         })
-        // 文档装载/替换后重新挂载(此时 documentView 才存在)
         observationTokens.append(pdfView.observe(\.document, options: [.new]) { [weak self] _, _ in
             self?.ensureAttached()
         })
     }
 
-    /// 页面/缩放变化后重新对齐(由协调器在 layout 观察者里调用)
-    func layoutSurface() {
-        guard let pdfView, let docView = pdfView.documentView else { return }
+    // MARK: - 窗口
 
-        // 文档内容矩形:PDFView 的所有页在 **docView 坐标系**里的并集
-        // (pdfView.convert 给的是视口坐标,必须再转进 docView,否则滚动/缩放后整体错位)
-        var docRect = CGRect.null
-        if let document = pdfView.document {
-            for index in 0..<document.pageCount {
-                guard let page = document.page(at: index) else { continue }
-                let inView = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
-                let inDoc = docView.convert(inView, from: pdfView)
-                docRect = docRect.union(inDoc)
-            }
+    /// 重新计算窗口(当前页 ±1)并把文档级墨迹平移进来。翻页/缩放/旋转都要调。
+    func refreshWindow() {
+        guard let pdfView, let docView = pdfView.documentView, let document = pdfView.document else { return }
+        guard document.pageCount > 0 else { return }
+
+        let current: Int
+        if let page = pdfView.currentPage { current = document.index(for: page) } else { current = 0 }
+        let lo = max(0, current - 1)
+        let hi = min(document.pageCount - 1, current + 1)
+
+        var windowRect = CGRect.null
+        for index in lo...max(lo, hi) {
+            guard let page = document.page(at: index) else { continue }
+            // page → docView 直接换算(不要绕 pdfView.convert,那是视口坐标)
+            windowRect = windowRect.union(docView.convert(page.bounds(for: pdfView.displayBox), from: page))
         }
-        if docRect.isNull { docRect = docView.bounds }
-        docRect = docRect.insetBy(dx: -InkGeometry.bleedTop, dy: -InkGeometry.bleedTop)
+        guard !windowRect.isNull, windowRect.width > 1, windowRect.height > 1 else { return }
 
-        frame = docRect
-        // PDFKit 翻页会重建页视图并把它们压到上层 —— 每次对齐都重新置顶,否则墨迹被页盖住
-        if let superview { superview.bringSubviewToFront(self) }
-        // bounds 放大 scale 倍:画布内部按 3x 页面点绘制,显示时缩回 1x
+        // 出血:笔尖贴窗口边缘时不被裁
+        windowRect = windowRect.insetBy(dx: -InkGeometry.bleedTop, dy: -InkGeometry.bleedTop)
+
+        let needsResize = abs(windowRect.width * Self.scale - bounds.width) > 1 ||
+                          abs(windowRect.height * Self.scale - bounds.height) > 1
+        let moved = abs(windowRect.minX - windowOrigin.x) > 0.5 ||
+                    abs(windowRect.minY - windowOrigin.y) > 0.5
+        guard needsResize || moved else { return }
+
+        // 换窗口前先把画布上的改动回收到文档坐标
+        commitCanvasToDoc()
+        windowOrigin = windowRect.origin
+        frame = windowRect
         bounds = CGRect(x: 0, y: 0,
-                        width: max(1, docRect.width * Self.scale),
-                        height: max(1, docRect.height * Self.scale))
+                        width: max(1, windowRect.width * Self.scale),
+                        height: max(1, windowRect.height * Self.scale))
         canvas.frame = bounds
+        // PDFKit 翻页会重建页视图并压到上层 —— 每次换窗口都重新置顶
+        if let superview { superview.bringSubviewToFront(self) }
+        renderDocIntoCanvas()
 
         // 缩放后按新倍率重新栅格化,避免高倍放大发虚
         let factor = UIScreen.main.scale * max(1, pdfView.scaleFactor)
@@ -189,31 +184,39 @@ final class DocumentInkSurface: UIView {
             canvas.contentScaleFactor = factor
             canvas.setNeedsDisplay()
         }
+        DiagLog.log("surface: window page \(lo)...\(hi) size=\(Int(bounds.width))x\(Int(bounds.height))")
+    }
+
+    // MARK: - 文档 ↔ 窗口
+
+    private func renderDocIntoCanvas() {
+        suppressNotify += 1
+        var copy = docDrawing
+        copy.transform(using: CGAffineTransform(translationX: -windowOrigin.x * Self.scale,
+                                                y: -windowOrigin.y * Self.scale))
+        canvas.drawing = copy
+        suppressNotify -= 1
+    }
+
+    private func commitCanvasToDoc() {
+        var copy = canvas.drawing
+        copy.transform(using: CGAffineTransform(translationX: windowOrigin.x * Self.scale,
+                                                y: windowOrigin.y * Self.scale))
+        docDrawing = copy
     }
 
     // MARK: - 工具
 
     func applyTool(_ tool: PKTool) {
         canvas.tool = tool
-        // PKCanvasView.tool 赋值会重建内部手势识别器,重开后要再关一次选择手势
-        canvas.drawingGestureRecognizer.isEnabled = true
-    }
-
-    func setEraser(_ eraser: PKEraserTool) {
-        canvas.tool = eraser
+        // 赋值会重建内部手势识别器,重开后要再开一次绘制手势
         canvas.drawingGestureRecognizer.isEnabled = true
     }
 
     // MARK: - 撤销
 
-    func undo() {
-        if canvas.undoManager?.canUndo == true { canvas.undoManager?.undo() }
-    }
-
-    func redo() {
-        if canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() }
-    }
-
+    func undo() { if canvas.undoManager?.canUndo == true { canvas.undoManager?.undo() } }
+    func redo() { if canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() } }
     var canUndo: Bool { canvas.undoManager?.canUndo ?? false }
     var canRedo: Bool { canvas.undoManager?.canRedo ?? false }
 
@@ -222,7 +225,7 @@ final class DocumentInkSurface: UIView {
     private func scheduleSave() {
         guard suppressNotify == 0 else { return }
         saveTask?.cancel()
-        let snapshot = canvas.drawing
+        let snapshot = docDrawing
         saveTask = Task { [weak self] in
             guard let self else { return }
             let delay = self.saveDebounce
@@ -236,6 +239,7 @@ final class DocumentInkSurface: UIView {
 extension DocumentInkSurface: PKCanvasViewDelegate {
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard suppressNotify == 0 else { return }
+        commitCanvasToDoc()
         scheduleSave()
     }
 }
