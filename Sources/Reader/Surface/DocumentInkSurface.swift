@@ -31,13 +31,10 @@ final class DocumentInkSurface: UIView {
     /// 落库防抖(秒)
     var saveDebounce: TimeInterval = 0.8
 
-    /// 读写文档级墨迹
+    /// 文档级墨迹 = 画布墨迹(绝对坐标 = docView 点 × scale),窗口只换取景原点
     var drawing: PKDrawing {
-        get { docDrawing }
-        set {
-            docDrawing = newValue
-            renderDocIntoCanvas()
-        }
+        get { canvas.drawing }
+        set { canvas.drawing = newValue }
     }
 
     /// 窗口原点(docView 坐标,单位=点)
@@ -66,7 +63,7 @@ final class DocumentInkSurface: UIView {
         canvas.isScrollEnabled = false          // 滚动交给 PDFView
         canvas.alwaysBounceVertical = false
         canvas.alwaysBounceHorizontal = false
-        canvas.drawingPolicy = .anyInput
+        canvas.drawingPolicy = .pencilOnly        // iPad:Pencil 落墨,手指只滚动/选词
         canvas.delegate = self
         canvas.overrideUserInterfaceStyle = .light
         addSubview(canvas)
@@ -129,12 +126,10 @@ final class DocumentInkSurface: UIView {
         observationTokens.append(pdfView.observe(\.scaleFactor, options: [.new]) { [weak self] _, _ in
             self?.refreshWindow()
         })
-        observationTokens.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
-            self?.refreshWindow()
-        })
         observationTokens.append(pdfView.observe(\.document, options: [.new]) { [weak self] _, _ in
             self?.ensureAttached()
         })
+        // ⚠️ 不要监听 bounds:滚动时重算窗口会重设 drawing,打断实时渲染(真机=抖动/写完才出来)
     }
 
     // MARK: - 窗口
@@ -167,25 +162,20 @@ final class DocumentInkSurface: UIView {
                     abs(windowRect.minY - windowOrigin.y) > 0.5
         guard needsResize || moved else { return }
 
-        // 换窗口前先把画布上的改动回收到文档坐标
-        commitCanvasToDoc()
+        // ⚠️ 只改 frame / bounds.origin,绝不重设 canvas.drawing ——
+        // 重设 drawing 会打断 PencilKit 的实时渲染,真机表现就是"写完才出来"+"抖动"。
         windowOrigin = windowRect.origin
         frame = windowRect
-        bounds = CGRect(x: 0, y: 0,
-                        width: max(1, windowRect.width * Self.scale),
-                        height: max(1, windowRect.height * Self.scale))
+        bounds = CGRect(x: 0, y: 0, width: windowRect.width, height: windowRect.height)
         canvas.frame = bounds
+        // 取景窗:bounds.origin 指向墨迹坐标,size 放大 3 倍做超采样
+        canvas.bounds = CGRect(x: windowRect.minX * Self.scale,
+                               y: windowRect.minY * Self.scale,
+                               width: max(1, windowRect.width * Self.scale),
+                               height: max(1, windowRect.height * Self.scale))
         // PDFKit 翻页会重建页视图并压到上层 —— 每次换窗口都重新置顶
         if let superview { superview.bringSubviewToFront(self) }
-        renderDocIntoCanvas()
-
-        // 缩放后按新倍率重新栅格化,避免高倍放大发虚
-        let factor = UIScreen.main.scale * max(1, pdfView.scaleFactor)
-        if canvas.contentScaleFactor < factor {
-            canvas.contentScaleFactor = factor
-            canvas.setNeedsDisplay()
-        }
-        DiagLog.log("surface: window page \(lo)...\(hi) size=\(Int(bounds.width))x\(Int(bounds.height))")
+        DiagLog.log("surface: window page \(lo)...\(hi) size=\(Int(canvas.bounds.width))x\(Int(canvas.bounds.height))")
     }
 
     // MARK: - 文档 ↔ 窗口
@@ -224,9 +214,8 @@ final class DocumentInkSurface: UIView {
     // MARK: - 持久化
 
     private func scheduleSave() {
-        guard suppressNotify == 0 else { return }
         saveTask?.cancel()
-        let snapshot = docDrawing
+        let snapshot = canvas.drawing
         saveTask = Task { [weak self] in
             guard let self else { return }
             let delay = self.saveDebounce
@@ -240,7 +229,6 @@ final class DocumentInkSurface: UIView {
 extension DocumentInkSurface: PKCanvasViewDelegate {
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard suppressNotify == 0 else { return }
-        commitCanvasToDoc()
         scheduleSave()
     }
 }
