@@ -152,8 +152,9 @@ final class DocumentInkSurface: UIView {
         var windowRect = CGRect.null
         for index in lo...max(lo, hi) {
             guard let page = document.page(at: index) else { continue }
-            // page → docView 直接换算(不要绕 pdfView.convert,那是视口坐标)
-            windowRect = windowRect.union(docView.convert(page.bounds(for: pdfView.displayBox), from: page))
+            // PDFPage 不是 UICoordinateSpace:先转进 pdfView 视口坐标,再转进 docView
+            let inView = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+            windowRect = windowRect.union(docView.convert(inView, from: pdfView))
         }
         guard !windowRect.isNull, windowRect.width > 1, windowRect.height > 1 else { return }
 
