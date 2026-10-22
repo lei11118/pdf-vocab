@@ -227,6 +227,9 @@ final class ReaderCoordinator: NSObject {
 
     /// 文档加载完成后调用(压制内置手势 + 挂滚动观察 + 恢复阅读位置)
     func documentDidLoad(_ document: PDFDocument) {
+        // v0.40.2:文档装载后 documentView 才存在 —— 单画布在这里补挂,并补做旧墨迹迁移
+        inkSurface?.ensureAttached()
+        loadSurfaceInkIfNeeded(docSha: surfaceDocSha ?? "")
         DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
         docScanned = OCRService.isScanned(document: document)
         ocrWordsCache.removeAll()
@@ -1525,12 +1528,49 @@ final class ReaderCoordinator: NSObject {
     /// ① **签名去重**——工具没变就完全不碰 PencilKit(此前 `updateUIView` 每帧都重建工具);
     /// ② **延迟到下一个 runloop**——绝不在 SwiftUI 更新/手势回调里同步改 `PKCanvasView.tool`
     ///    (在 PencilKit 自己的回调里改工具、或在布局过程中改,都可能把主线程锁死)。
+    private var surfaceDocSha: String?
+    private var surfaceInkLoaded = false
+
+    /// v0.40.2:文档装载后再补一次旧墨迹迁移 —— install 阶段 `view.document` 还是 nil,
+    /// 逐页迁移循环会被整体跳过(用户的老笔记会看起来「全丢了」)。
+    private func loadSurfaceInkIfNeeded(docSha: String) {
+        guard !surfaceInkLoaded, !docSha.isEmpty, let surface = inkSurface,
+              let store = inkStore, let view = pdfView, let document = view.document else { return }
+        surfaceInkLoaded = true
+        if let record = store.drawing(docSha: docSha, page: -1),
+           let saved = try? PKDrawing(data: record.data) {
+            if surface.drawing.strokes.isEmpty { surface.drawing = saved }
+            DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
+            return
+        }
+        var merged: [PKStroke] = []
+        for index in 0..<document.pageCount {
+            guard let record = store.drawing(docSha: docSha, page: index),
+                  let pageDrawing = try? PKDrawing(data: record.data),
+                  !pageDrawing.strokes.isEmpty,
+                  let page = document.page(at: index) else { continue }
+            let inView = view.convert(page.bounds(for: view.displayBox), from: page)
+            let inDoc = (view.documentView?.convert(inView, from: view)) ?? inView
+            let shift = CGAffineTransform(translationX: inDoc.minX * DocumentInkSurface.scale,
+                                          y: inDoc.minY * DocumentInkSurface.scale)
+            merged.append(contentsOf: pageDrawing.strokes.map { stroke in
+                PKStroke(ink: stroke.ink, path: stroke.path,
+                         transform: stroke.transform.concatenating(shift), mask: stroke.mask)
+            })
+        }
+        if !merged.isEmpty {
+            surface.drawing = PKDrawing(strokes: merged)
+            DiagLog.log("surface: migrated \(merged.count) strokes from per-page ink")
+        }
+    }
+
     private var inkSurface: DocumentInkSurface?
 
     /// v0.40.0:装上文档级单画布,并把历史"每页一画布"的墨迹合并进文档坐标系。
     private func installInkSurface(on view: PDFView, docSha: String) {
         let surface = DocumentInkSurface()
         inkSurface = surface
+        surfaceDocSha = docSha
         surface.attach(to: view)
         surface.setDrawingEnabled(markMode)
 
@@ -1573,6 +1613,7 @@ final class ReaderCoordinator: NSObject {
                        scale: Double(DocumentInkSurface.scale))
             DiagLog.log("surface: saved doc ink strokes=\(drawing.strokes.count)")
         }
+        if !surface.drawing.strokes.isEmpty { surfaceInkLoaded = true }
         DiagLog.log("surface: enabled (single canvas)")
     }
 
