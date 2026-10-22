@@ -114,8 +114,20 @@ final class DocumentInkSurface: UIView {
     /// 挂到 PDFView:画布成为 documentView 的子视图,铺满整份文档。
     func attach(to pdfView: PDFView) {
         self.pdfView = pdfView
+        installObserversIfNeeded(pdfView)
+        ensureAttached()
+    }
+
+    /// 文档装载前 `pdfView.documentView` 是 nil —— 必须可重试。
+    /// v0.40.2:v0.40.x 在这里只 `return`,而 `installInkSurface` 又发生在文档装载之前,
+    /// 于是画布**从未挂上视图树**,真机表现就是「手写全哑、选词正常」。
+    func ensureAttached() {
+        guard let pdfView else { return }
         guard let docView = pdfView.documentView else {
-            DiagLog.log("surface: attach failed (no documentView)")
+            DiagLog.log("surface: waiting for documentView")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.ensureAttached()
+            }
             return
         }
         if superview !== docView { docView.addSubview(self) }
@@ -123,14 +135,25 @@ final class DocumentInkSurface: UIView {
         // 真机表现就是「所有工具都写不出字」。穿透由 setDrawingEnabled(false) 控制。
         isUserInteractionEnabled = true
         layoutSurface()
-        // 缩放/滚动都会改变文档内容在 docView 里的位置,跟着重新对齐
+        // 页布局可能还没算完,补一次对齐
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.layoutSurface()
+        }
+        DiagLog.log("surface: attached size=\(Int(bounds.width))x\(Int(bounds.height))")
+    }
+
+    private func installObserversIfNeeded(_ pdfView: PDFView) {
+        guard observationTokens.isEmpty else { return }
         observationTokens.append(pdfView.observe(\.scaleFactor, options: [.new]) { [weak self] _, _ in
             self?.layoutSurface()
         })
         observationTokens.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.layoutSurface()
         })
-        DiagLog.log("surface: attached size=\(Int(bounds.width))x\(Int(bounds.height))")
+        // 文档装载/替换后重新挂载(此时 documentView 才存在)
+        observationTokens.append(pdfView.observe(\.document, options: [.new]) { [weak self] _, _ in
+            self?.ensureAttached()
+        })
     }
 
     /// 页面/缩放变化后重新对齐(由协调器在 layout 观察者里调用)
