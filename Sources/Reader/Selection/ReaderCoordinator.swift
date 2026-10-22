@@ -1590,10 +1590,9 @@ final class ReaderCoordinator: NSObject {
                       let pageDrawing = try? PKDrawing(data: record.data),
                       !pageDrawing.strokes.isEmpty,
                       let page = document.page(at: index) else { continue }
-                // page → docView 直接换算(不能用 pdfView.convert,那是视口坐标,
-                // 会把整份文档的墨迹按滚动位置错位 —— v0.40.2 的迁移就是错在这一步)
-                let inDoc = view.documentView?.convert(page.bounds(for: view.displayBox), from: page)
-                    ?? page.bounds(for: view.displayBox)
+                // PDFPage 不是 UICoordinateSpace:视口坐标再过一层 docView
+                let inView = view.convert(page.bounds(for: view.displayBox), from: page)
+                let inDoc = view.documentView?.convert(inView, from: view) ?? inView
                 let shift = CGAffineTransform(translationX: inDoc.minX * DocumentInkSurface.scale,
                                               y: inDoc.minY * DocumentInkSurface.scale)
                 // PKStroke 没有 applying(_:);平移要写进 transform,并与已有 transform 合并
