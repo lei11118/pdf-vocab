@@ -314,6 +314,8 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func pageDidChange() {
+        // v0.41.0:翻页要把单画布的窗口挪到新页(墨迹留在文档坐标,只换窗口原点)
+        inkSurface?.refreshWindow()
         guard let pdfView, let page = pdfView.currentPage else { return }
         let index = pdfView.document?.index(for: page) ?? 0
         let now = CFAbsoluteTimeGetCurrent()
@@ -1588,9 +1590,12 @@ final class ReaderCoordinator: NSObject {
                       let pageDrawing = try? PKDrawing(data: record.data),
                       !pageDrawing.strokes.isEmpty,
                       let page = document.page(at: index) else { continue }
-                let inContent = view.convert(page.bounds(for: view.displayBox), from: page)
-                let shift = CGAffineTransform(translationX: inContent.minX * DocumentInkSurface.scale,
-                                              y: inContent.minY * DocumentInkSurface.scale)
+                // page → docView 直接换算(不能用 pdfView.convert,那是视口坐标,
+                // 会把整份文档的墨迹按滚动位置错位 —— v0.40.2 的迁移就是错在这一步)
+                let inDoc = view.documentView?.convert(page.bounds(for: view.displayBox), from: page)
+                    ?? page.bounds(for: view.displayBox)
+                let shift = CGAffineTransform(translationX: inDoc.minX * DocumentInkSurface.scale,
+                                              y: inDoc.minY * DocumentInkSurface.scale)
                 // PKStroke 没有 applying(_:);平移要写进 transform,并与已有 transform 合并
                 merged.append(contentsOf: pageDrawing.strokes.map { stroke in
                     PKStroke(ink: stroke.ink, path: stroke.path,
