@@ -1480,6 +1480,9 @@ final class ReaderCoordinator: NSObject {
             if rulerOverlay.superview == nil { pdfView.addSubview(rulerOverlay) }
             pdfView.bringSubviewToFront(rulerOverlay)
         }
+        // v0.40.1:单画布只在书写模式接管触摸;选词模式整层穿透,
+        // 否则会挡住长按选词、拖柄拖动与 Pencil 悬停查词。
+        inkSurface?.setDrawingEnabled(on)
         let changed = markMode != on
         markMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
@@ -1529,6 +1532,7 @@ final class ReaderCoordinator: NSObject {
         let surface = DocumentInkSurface()
         inkSurface = surface
         surface.attach(to: view)
+        surface.setDrawingEnabled(markMode)
 
         // ① 读文档级墨迹(page = -1 是文档级哨兵)
         if let record = inkStore?.drawing(docSha: docSha, page: -1),

@@ -65,6 +65,22 @@ final class DocumentInkSurface: UIView {
     private var suppressNotify = 0
     private var saveTask: Task<Void, Never>?
     private var observationTokens: [NSKeyValueObservation] = []
+    /// 书写模式(标记模式)才让画布吃触摸;选词模式下整层穿透给 PDFView
+    private var drawingEnabled = false
+
+    /// 切换是否接管触摸。**选词模式必须关掉**,否则会挡住长按选词、拖柄与 Pencil 悬停。
+    func setDrawingEnabled(_ enabled: Bool) {
+        guard drawingEnabled != enabled else { return }
+        drawingEnabled = enabled
+        canvas.isUserInteractionEnabled = enabled
+        isUserInteractionEnabled = enabled
+        DiagLog.log("surface: drawing \(enabled ? "on" : "off")")
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard drawingEnabled else { return nil }   // 选词模式:整层不参与命中
+        return super.hitTest(point, with: event)
+    }
 
     deinit {
         observationTokens.forEach { $0.invalidate() }
@@ -103,7 +119,9 @@ final class DocumentInkSurface: UIView {
             return
         }
         if superview !== docView { docView.addSubview(self) }
-        isUserInteractionEnabled = false
+        // ⚠️ 容器必须可交互,否则整棵子树(含画布)收不到触摸 —— v0.40.0 写成 false,
+        // 真机表现就是「所有工具都写不出字」。穿透由 setDrawingEnabled(false) 控制。
+        isUserInteractionEnabled = true
         layoutSurface()
         // 缩放/滚动都会改变文档内容在 docView 里的位置,跟着重新对齐
         observationTokens.append(pdfView.observe(\.scaleFactor, options: [.new]) { [weak self] _, _ in
@@ -134,6 +152,8 @@ final class DocumentInkSurface: UIView {
         docRect = docRect.insetBy(dx: -InkGeometry.bleedTop, dy: -InkGeometry.bleedTop)
 
         frame = docRect
+        // PDFKit 翻页会重建页视图并把它们压到上层 —— 每次对齐都重新置顶,否则墨迹被页盖住
+        if let superview { superview.bringSubviewToFront(self) }
         // bounds 放大 scale 倍:画布内部按 3x 页面点绘制,显示时缩回 1x
         bounds = CGRect(x: 0, y: 0,
                         width: max(1, docRect.width * Self.scale),
