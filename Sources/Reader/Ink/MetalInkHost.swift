@@ -51,11 +51,10 @@ final class MetalInkHost: UIView {
         set { canvas.isDrawingEnabled = newValue && canvas.isReady }
     }
 
-    /// 宿主本身不吃触摸(交给内部画布判断是否为 Pencil)
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard canvas.isDrawingEnabled, canvas.isReady else { return nil }
-        return super.hitTest(point, with: event)
-    }
+    /// v0.47.1:宿主是**纯渲染层**,永不接触摸。
+    /// 手指直接落到 PDFView 的原生滚动/捏合/选词上;笔由挂在 PDFView 上的
+    /// `InkPencilGrabRecognizer` 抓取后转给内部画布 —— 不再靠命中判定猜触摸类型。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
 
     // MARK: - 挂载
 
@@ -78,6 +77,8 @@ final class MetalInkHost: UIView {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         pdfView.addSubview(self)
         isAttached = true
+        // v0.47.1:笔从 PDFView 上"抓",不靠命中 —— 手指永远走原生滚动
+        installPencilGrab(on: pdfView)
         observeScroll()
         refresh()
         DiagLog.log("metal ink: attached size=\(Int(bounds.width))x\(Int(bounds.height))")
@@ -88,6 +89,35 @@ final class MetalInkHost: UIView {
         canvas.frame = bounds
         if let pdfView, frame != pdfView.bounds { frame = pdfView.bounds }
         scheduleRefresh()
+    }
+
+    // MARK: - 抓笔(只接 Pencil,手指完全不经它手)
+
+    private var pencilGrab: InkPencilGrabRecognizer?
+
+    private func installPencilGrab(on pdfView: PDFView) {
+        guard pencilGrab == nil else { return }
+        let grab = InkPencilGrabRecognizer(target: nil, action: nil)
+        // 只有"书写模式 + 渲染器就绪"才吃笔;否则这个识别器什么都不做(它本来就不取消触摸)
+        grab.isActive = { [weak self] in
+            guard let self else { return false }
+            return self.canvas.isDrawingEnabled && self.canvas.isReady
+        }
+        grab.onBegan = { [weak self] touch, _ in
+            self?.canvas.handleBegan(touch)
+        }
+        grab.onMoved = { [weak self] touches, event in
+            self?.canvas.handleMoved(touches, event: event)
+        }
+        grab.onEnded = { [weak self] touches, event in
+            self?.canvas.handleEnded(touches, event: event)
+        }
+        grab.onCancelled = { [weak self] in
+            self?.canvas.handleCancelled()
+        }
+        pdfView.addGestureRecognizer(grab)
+        pencilGrab = grab
+        DiagLog.log("metal ink: pencil grab installed")
     }
 
     // MARK: - 跟着 PDFView 滚动 / 缩放
