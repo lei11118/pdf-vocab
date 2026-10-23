@@ -60,7 +60,7 @@ final class InkMetalCanvasView: MTKView {
         buildPipeline(device: dev)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: - 管线
 
@@ -121,10 +121,10 @@ final class InkMetalCanvasView: MTKView {
         let coalesced = event?.coalescedTouches(for: touch) ?? [touch]
         for t in coalesced { append(t) }
         // 预测点:只画不落库,减少跟手延迟
-        if let predicted = event?.predictedTouches(for: touch), !predicted.isEmpty {
-            var preview = liveStroke
+        if let predicted = event?.predictedTouches(for: touch), !predicted.isEmpty,
+           var preview = liveStroke {
             for t in predicted { appendPoint(from: t, into: &preview) }
-            if let s = preview { liveStroke = s }
+            liveStroke = preview
         }
         rebuildVertices()
     }
