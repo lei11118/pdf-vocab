@@ -61,6 +61,7 @@ final class InkMetalCanvasView: MTKView {
     private var penDown = false
     private var lastTimestamp: TimeInterval = 0
     private var lastSampleTime: TimeInterval = 0
+    private var warnedEmptyClips = false
 
     // MARK: - 初始化
 
@@ -77,6 +78,8 @@ final class InkMetalCanvasView: MTKView {
         enableSetNeedsDisplay = true
         delegate = self
         isMultipleTouchEnabled = true
+        // v0.47.1:纯渲染层,不接触摸(手指滚动/笔的落点都不靠命中判定)
+        isUserInteractionEnabled = false
         commandQueue = dev?.makeCommandQueue()
         buildPipeline(device: dev)
     }
@@ -136,26 +139,18 @@ final class InkMetalCanvasView: MTKView {
         }
     }
 
-    // MARK: - 命中(v0.47.0:笔落墨、手指穿透给 PDFView 滚动)
+    // MARK: - 输入(v0.47.1:由 `InkPencilGrabRecognizer` 从 PDFView 上抓笔后转进来)
 
-    /// 只有 Pencil 才接管命中;手指直接返回 nil,让 PDFView 自己的滚动/捏合/选词照常工作。
-    /// v0.46.0 无条件 `return super.hitTest` 会把手指也吞掉 —— 真机表现是"单指滑不动"。
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard isDrawingEnabled, isReady, let event else { return nil }
-        let touches = event.allTouches ?? []
-        guard touches.contains(where: { $0.type == .pencil }) else { return nil }
-        return super.hitTest(point, with: event)
-    }
-
-    // MARK: - 输入
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard isDrawingEnabled, let touch = touches.first, touch.type == .pencil else { return }
+    /// 本视图**完全不接触摸**:它是纯渲染层。通过 `isUserInteractionEnabled = false`
+    /// 让所有触摸穿透给 PDFView → 手指滚动/缩放/选词永远是原生行为;
+    /// 笔的落点由挂在 PDFView 上的 `InkPencilGrabRecognizer` 转进来。
+    func handleBegan(_ touch: UITouch) {
+        guard isDrawingEnabled, isReady, touch.type == .pencil else { return }
         begin(at: touch)
     }
 
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard isDrawingEnabled, penDown, let touch = touches.first, touch.type == .pencil else { return }
+    func handleMoved(_ touches: Set<UITouch>, event: UIEvent?) {
+        guard isDrawingEnabled, penDown, let touch = touches.first(where: { $0.type == .pencil }) else { return }
         // 合并采样:优先 coalesced(真实历史点),否则用当前点
         let samples = event?.coalescedTouches(for: touch) ?? [touch]
         for t in samples where t.timestamp > lastSampleTime {
@@ -166,14 +161,17 @@ final class InkMetalCanvasView: MTKView {
         rebuildVertices(predicted: event?.predictedTouches(for: touch) ?? [])
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    func handleEnded(_ touches: Set<UITouch>, event: UIEvent?) {
         guard penDown else { return }
-        if let t = touches.first, t.type == .pencil { appendSample(t) }
+        if let t = touches.first(where: { $0.type == .pencil }), t.timestamp > lastSampleTime {
+            appendSample(t)
+        }
         flushDraft()
         endStroke()
     }
 
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+    func handleCancelled() {
+        guard penDown || !draft.points.isEmpty else { return }
         flushDraft()
         endStroke()
     }
@@ -203,7 +201,13 @@ final class InkMetalCanvasView: MTKView {
         guard penDown else { return }
         guard touch.timestamp > lastSampleTime else { return }
         let viewPoint = touch.location(in: self)
-        guard clipRects.contains(where: { $0.contains(viewPoint) }) else {
+        // 兜底:宿主还没算过页矩形时用画布范围裁剪 —— 宁可暂时不裁,也不能一个字都不出
+        let clips: [CGRect] = clipRects.isEmpty ? (bounds.width > 1 ? [bounds] : []) : clipRects
+        if clips.isEmpty, !warnedEmptyClips {
+            warnedEmptyClips = true
+            DiagLog.log("metal ink: no clip rects yet canvas=\(Int(bounds.width))x\(Int(bounds.height))")
+        }
+        guard clips.contains(where: { $0.contains(viewPoint) }) else {
             // 页外:当前段到此为止(已在页面内的部分保留)
             flushDraft()
             lastTimestamp = touch.timestamp
@@ -254,7 +258,8 @@ final class InkMetalCanvasView: MTKView {
             var live = draft
             for t in predicted {
                 let p = t.location(in: self)
-                guard clipRects.contains(where: { $0.contains(p) }) else { continue }
+                let allowed = clipRects.isEmpty ? (bounds.width > 1 ? [bounds] : []) : clipRects
+                guard allowed.contains(where: { $0.contains(p) }) else { continue }
                 let last = live.points.last
                 let d = last.map { hypot(CGFloat(p.x) - CGFloat($0.x), CGFloat(p.y) - CGFloat($0.y)) } ?? 0
                 guard d > 0.35 else { continue }
@@ -265,7 +270,8 @@ final class InkMetalCanvasView: MTKView {
                                             azimuth: Double(t.azimuthAngle(in: self)),
                                             time: t.timestamp))
             }
-            let clip = clipRects.first(where: { $0.contains(live.points[0].cg) }) ?? .zero
+            let clip = clipRects.first(where: { $0.contains(live.points[0].cg) })
+                ?? (bounds.width > 1 ? bounds : .zero)
             if !clip.isEmpty { appendVertices(live, clip: clip, into: &verts) }
         }
         vertexCount = verts.count
