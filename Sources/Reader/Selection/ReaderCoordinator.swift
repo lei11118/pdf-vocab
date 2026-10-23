@@ -316,6 +316,7 @@ final class ReaderCoordinator: NSObject {
     private func pageDidChange() {
         // v0.41.0:翻页要把单画布的窗口挪到新页(墨迹留在文档坐标,只换窗口原点)
         inkSurface?.refreshWindow()
+        metalHost?.refresh()
         guard let pdfView, let page = pdfView.currentPage else { return }
         let index = pdfView.document?.index(for: page) ?? 0
         let now = CFAbsoluteTimeGetCurrent()
@@ -1488,6 +1489,7 @@ final class ReaderCoordinator: NSObject {
         // v0.40.1:单画布只在书写模式接管触摸;选词模式整层穿透,
         // 否则会挡住长按选词、拖柄拖动与 Pencil 悬停查词。
         inkSurface?.setDrawingEnabled(on)
+        metalHost?.isDrawingEnabled = on
         let changed = markMode != on
         markMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
@@ -1544,9 +1546,22 @@ final class ReaderCoordinator: NSObject {
     }
 
     private var inkSurface: DocumentInkSurface?
+    /// v0.46.0:自研 Metal 墨迹宿主(设置开关 metalInk)
+    private var metalHost: MetalInkHost?
 
     /// v0.40.0:装上文档级单画布,并把历史"每页一画布"的墨迹合并进文档坐标系。
     private func installInkSurface(on view: PDFView, docSha: String) {
+        // v0.46.0:自研 Metal 墨迹(默认关,设置里可开)
+        if UserDefaults.standard.bool(forKey: "metalInk") {
+            let host = MetalInkHost()
+            metalHost = host
+            host.attach(to: view, store: inkStore, docSha: docSha)
+            host.isDrawingEnabled = markMode
+            surfaceDocSha = docSha
+            surfaceInkLoaded = true
+            DiagLog.log("surface: metal engine enabled")
+            return
+        }
         let surface = DocumentInkSurface()
         inkSurface = surface
         surfaceDocSha = docSha
