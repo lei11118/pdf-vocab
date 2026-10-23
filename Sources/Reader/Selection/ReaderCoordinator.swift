@@ -1539,8 +1539,12 @@ final class ReaderCoordinator: NSObject {
         guard !surfaceInkLoaded, !docSha.isEmpty, let surface = inkSurface,
               let store = inkStore, let view = pdfView, let document = view.document else { return }
         surfaceInkLoaded = true
+        // 旧数据是 ×3 画布坐标,现在墨迹按 1:1 页面点存 —— 读回时统一缩回
         if let record = store.drawing(docSha: docSha, page: -1),
-           let saved = try? PKDrawing(data: record.data) {
+           var saved = try? PKDrawing(data: record.data) {
+            if record.scale >= 2.5, DocumentInkSurface.scale < 2.5 {
+                saved.transform(using: CGAffineTransform(scaleX: 1.0 / 3.0, y: 1.0 / 3.0))
+            }
             if surface.drawing.strokes.isEmpty { surface.drawing = saved }
             DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
             return
