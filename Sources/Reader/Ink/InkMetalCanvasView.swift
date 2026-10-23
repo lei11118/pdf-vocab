@@ -26,6 +26,8 @@ final class InkMetalCanvasView: MTKView {
     /// 基础笔宽(页面点)
     var baseWidth: CGFloat = 3.0
     var isDrawingEnabled = false
+    /// 管线编译成功才允许接管触摸 —— 否则会"吞掉所有输入但什么都不画"
+    var isReady: Bool { pipeline != nil }
 
     // MARK: - Metal
 
@@ -72,20 +74,20 @@ final class InkMetalCanvasView: MTKView {
         let src = """
         #include <metal_stdlib>
         using namespace metal;
-        struct VIn  { float2 pos; float d; float half; float4 color; };
-        struct VOut { float4 position [[position]]; float d; float half; float4 color; };
+        struct VIn  { float2 pos; float d; float hw; float4 color; };
+        struct VOut { float4 position [[position]]; float d; float hw; float4 color; };
         vertex VOut v_main(uint vid [[vertex_id]],
                            constant VIn *v [[buffer(0)]],
                            constant float2 &size [[buffer(1)]]) {
             VOut o;
             float2 p = v[vid].pos;
             o.position = float4(p.x / size.x * 2.0 - 1.0, 1.0 - p.y / size.y * 2.0, 0.0, 1.0);
-            o.d = v[vid].d; o.half = v[vid].half; o.color = v[vid].color;
+            o.d = v[vid].d; o.hw = v[vid].hw; o.color = v[vid].color;
             return o;
         }
         fragment float4 f_main(VOut in [[stage_in]]) {
             float aa = max(fwidth(in.d), 0.75);
-            float cov = 1.0 - smoothstep(in.half - aa, in.half, abs(in.d));
+            float cov = 1.0 - smoothstep(in.hw - aa, in.hw, abs(in.d));
             return float4(in.color.rgb, in.color.a * cov);
         }
         """
@@ -210,7 +212,7 @@ final class InkMetalCanvasView: MTKView {
         setNeedsDisplay()
     }
 
-    private struct Vertex { var pos: SIMD2<Float>; var d: Float; var half: Float; var color: SIMD4<Float> }
+    private struct Vertex { var pos: SIMD2<Float>; var d: Float; var hw: Float; var color: SIMD4<Float> }
 
     private func appendVertices(for stroke: InkStroke, into verts: inout [Vertex]) {
         guard stroke.points.count >= 2 else { return }
@@ -229,12 +231,12 @@ final class InkMetalCanvasView: MTKView {
             let b2 = SIMD2<Float>(Float(b.x - nx * wb), Float(b.y - ny * wb))
             let fa = Float(wa), fb = Float(wb)
             // 两三角形:a1,a2,b1 / a2,b2,b1
-            verts.append(Vertex(pos: a1, d: fa, half: fa, color: c))
-            verts.append(Vertex(pos: a2, d: -fa, half: fa, color: c))
-            verts.append(Vertex(pos: b1, d: fb, half: fb, color: c))
-            verts.append(Vertex(pos: a2, d: -fa, half: fa, color: c))
-            verts.append(Vertex(pos: b2, d: -fb, half: fb, color: c))
-            verts.append(Vertex(pos: b1, d: fb, half: fb, color: c))
+            verts.append(Vertex(pos: a1, d: fa, hw: fa, color: c))
+            verts.append(Vertex(pos: a2, d: -fa, hw: fa, color: c))
+            verts.append(Vertex(pos: b1, d: fb, hw: fb, color: c))
+            verts.append(Vertex(pos: a2, d: -fa, hw: fa, color: c))
+            verts.append(Vertex(pos: b2, d: -fb, hw: fb, color: c))
+            verts.append(Vertex(pos: b1, d: fb, hw: fb, color: c))
         }
         // 关节补丁:每点画一个小方块,避免折角缺口
         for p in stroke.points.dropLast() {
@@ -244,12 +246,12 @@ final class InkMetalCanvasView: MTKView {
             let c1 = SIMD2<Float>(Float(v.x) + w, Float(v.y) - w)
             let c2 = SIMD2<Float>(Float(v.x) - w, Float(v.y) + w)
             let c3 = SIMD2<Float>(Float(v.x) + w, Float(v.y) + w)
-            verts.append(Vertex(pos: c0, d: -w, half: w, color: c))
-            verts.append(Vertex(pos: c1, d: -w, half: w, color: c))
-            verts.append(Vertex(pos: c3, d: w, half: w, color: c))
-            verts.append(Vertex(pos: c0, d: -w, half: w, color: c))
-            verts.append(Vertex(pos: c3, d: w, half: w, color: c))
-            verts.append(Vertex(pos: c2, d: w, half: w, color: c))
+            verts.append(Vertex(pos: c0, d: -w, hw: w, color: c))
+            verts.append(Vertex(pos: c1, d: -w, hw: w, color: c))
+            verts.append(Vertex(pos: c3, d: w, hw: w, color: c))
+            verts.append(Vertex(pos: c0, d: -w, hw: w, color: c))
+            verts.append(Vertex(pos: c3, d: w, hw: w, color: c))
+            verts.append(Vertex(pos: c2, d: w, hw: w, color: c))
         }
     }
 

@@ -21,12 +21,14 @@ final class MetalInkHost: UIView {
 
     var isDrawingEnabled: Bool {
         get { canvas.isDrawingEnabled }
-        set { canvas.isDrawingEnabled = newValue }
+        set { canvas.isDrawingEnabled = newValue && canvas.isReady }
     }
 
     /// 宿主自己不吃触摸,触摸交给内部画布(选词模式下整体关闭)
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard canvas.isDrawingEnabled else { return nil }
+        // v0.46.1:必须同时满足"书写模式"与"渲染器就绪",
+        // 否则会吞掉所有触摸(真机:写不了字且单指也滑不动)
+        guard canvas.isDrawingEnabled, canvas.isReady else { return nil }
         return super.hitTest(point, with: event)
     }
 
