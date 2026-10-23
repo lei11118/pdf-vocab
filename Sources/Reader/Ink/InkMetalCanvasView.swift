@@ -370,10 +370,11 @@ extension InkMetalCanvasView: MTKViewDelegate {
         var size = SIMD2<Float>(Float(max(1, bounds.width)), Float(max(1, bounds.height)))
         let px = SIMD2<Float>(Float(drawable.texture.width) / size.x,
                               Float(drawable.texture.height) / size.y)
+        var pxBytes = px
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(buffer, offset: 0, index: 0)
         enc.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        enc.setFragmentBytes(&px, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setFragmentBytes(&pxBytes, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
         enc.endEncoding()
         cmd.present(drawable)
