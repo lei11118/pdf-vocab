@@ -1536,38 +1536,11 @@ final class ReaderCoordinator: NSObject {
     /// v0.40.2:文档装载后再补一次旧墨迹迁移 —— install 阶段 `view.document` 还是 nil,
     /// 逐页迁移循环会被整体跳过(用户的老笔记会看起来「全丢了」)。
     private func loadSurfaceInkIfNeeded(docSha: String) {
-        guard !surfaceInkLoaded, !docSha.isEmpty, let surface = inkSurface,
-              let store = inkStore, let view = pdfView, let document = view.document else { return }
+        // v0.44.0:墨迹按页存(页面坐标),由 surface.pageDrawingProvider 懒加载,
+        // 这里只负责在文档就绪后重算一次窗口。
+        guard !surfaceInkLoaded else { return }
         surfaceInkLoaded = true
-        // 旧数据是 ×3 画布坐标,现在墨迹按 1:1 页面点存 —— 读回时统一缩回
-        if let record = store.drawing(docSha: docSha, page: -1),
-           var saved = try? PKDrawing(data: record.data) {
-            if record.scale >= 2.5, DocumentInkSurface.scale < 2.5 {
-                saved.transform(using: CGAffineTransform(scaleX: 1.0 / 3.0, y: 1.0 / 3.0))
-            }
-            if surface.drawing.strokes.isEmpty { surface.drawing = saved }
-            DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
-            return
-        }
-        var merged: [PKStroke] = []
-        for index in 0..<document.pageCount {
-            guard let record = store.drawing(docSha: docSha, page: index),
-                  let pageDrawing = try? PKDrawing(data: record.data),
-                  !pageDrawing.strokes.isEmpty,
-                  let page = document.page(at: index) else { continue }
-            let inView = view.convert(page.bounds(for: view.displayBox), from: page)
-            let inDoc = (view.documentView?.convert(inView, from: view)) ?? inView
-            let shift = CGAffineTransform(translationX: inDoc.minX * DocumentInkSurface.scale,
-                                          y: inDoc.minY * DocumentInkSurface.scale)
-            merged.append(contentsOf: pageDrawing.strokes.map { stroke in
-                PKStroke(ink: stroke.ink, path: stroke.path,
-                         transform: stroke.transform.concatenating(shift), mask: stroke.mask)
-            })
-        }
-        if !merged.isEmpty {
-            surface.drawing = PKDrawing(strokes: merged)
-            DiagLog.log("surface: migrated \(merged.count) strokes from per-page ink")
-        }
+        inkSurface?.refreshWindow()
     }
 
     private var inkSurface: DocumentInkSurface?
@@ -1580,49 +1553,22 @@ final class ReaderCoordinator: NSObject {
         surface.attach(to: view)
         surface.setDrawingEnabled(markMode)
 
-        // ① 读文档级墨迹(page = -1 是文档级哨兵)
-        if let record = inkStore?.drawing(docSha: docSha, page: -1),
-           let saved = try? PKDrawing(data: record.data) {
-            surface.drawing = saved
-            DiagLog.log("surface: loaded doc ink strokes=\(saved.strokes.count)")
-        } else if let store = inkStore, let document = view.document {
-            // ② 旧数据迁移:每页画布 → 文档坐标(加上该页在内容坐标里的原点)
-            var merged: [PKStroke] = []
-            var migrated = 0
-            for index in 0..<document.pageCount {
-                guard let record = store.drawing(docSha: docSha, page: index),
-                      let pageDrawing = try? PKDrawing(data: record.data),
-                      !pageDrawing.strokes.isEmpty,
-                      let page = document.page(at: index) else { continue }
-                // PDFPage 不是 UICoordinateSpace:视口坐标再过一层 docView
-                let inView = view.convert(page.bounds(for: view.displayBox), from: page)
-                let inDoc = view.documentView?.convert(inView, from: view) ?? inView
-                let shift = CGAffineTransform(translationX: inDoc.minX * DocumentInkSurface.scale,
-                                              y: inDoc.minY * DocumentInkSurface.scale)
-                // PKStroke 没有 applying(_:);平移要写进 transform,并与已有 transform 合并
-                merged.append(contentsOf: pageDrawing.strokes.map { stroke in
-                    PKStroke(ink: stroke.ink, path: stroke.path,
-                             transform: stroke.transform.concatenating(shift),
-                             mask: stroke.mask)
-                })
-                migrated += pageDrawing.strokes.count
-            }
-            if !merged.isEmpty {
-                surface.drawing = PKDrawing(strokes: merged)
-                DiagLog.log("surface: migrated \(migrated) strokes from per-page ink")
-            }
+        // 每页墨迹(页面坐标)懒加载
+        surface.pageDrawingProvider = { [weak self] page in
+            guard let self, let store = self.inkStore,
+                  let record = store.drawing(docSha: docSha, page: page),
+                  let saved = try? PKDrawing(data: record.data) else { return nil }
+            return saved
         }
-
-        // ③ 变化 → 落库(文档级)
-        surface.onDrawingChanged = { [weak self] drawing in
-            guard let self, let store = self.inkStore else { return }
-            store.save(docSha: docSha, page: -1,
-                       data: drawing.dataRepresentation(),
-                       scale: Double(DocumentInkSurface.scale))
-            DiagLog.log("surface: saved doc ink strokes=\(drawing.strokes.count)")
+        // 抬笔切割后按页落库
+        surface.onPageInkChanged = { [weak self] page, drawing in
+            self?.inkStore?.save(docSha: docSha, page: page,
+                                 data: drawing.dataRepresentation(),
+                                 scale: Double(DocumentInkSurface.scale))
+            DiagLog.log("surface: saved page \(page) strokes=\(drawing.strokes.count)")
         }
-        if !surface.drawing.strokes.isEmpty { surfaceInkLoaded = true }
-        DiagLog.log("surface: enabled (single canvas)")
+        surface.refreshWindow()
+        DiagLog.log("surface: enabled (per-page ink)")
     }
 
     func applyToolSession(force: Bool = false) {
