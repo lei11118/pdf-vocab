@@ -19,8 +19,10 @@ import PencilKit
 /// - 因此在窗口内,"一笔跨页"始终是**同一条 `PKStroke`** —— 无接缝、无复制、无闪烁。
 final class DocumentInkSurface: UIView {
 
-    /// 与历史 ink 数据一致的超采样倍率
-    static let scale: CGFloat = 3
+    /// 墨迹坐标 = **页面点**(1:1)。v0.43.0 去掉 ×3 超采样:
+    /// 那是用「bounds 比 frame 大」实现的隐式缩放,叠上 PDFView 的非整数缩放后
+    /// 有效变换是分数 → PencilKit 实时笔画亚像素对不齐 = 真机「轻微抖动」。
+    static let scale: CGFloat = 1
 
     // MARK: - 对外
 
@@ -124,7 +126,13 @@ final class DocumentInkSurface: UIView {
     private func installObserversIfNeeded(_ pdfView: PDFView) {
         guard observationTokens.isEmpty else { return }
         observationTokens.append(pdfView.observe(\.scaleFactor, options: [.new]) { [weak self] _, _ in
-            self?.refreshWindow()
+            // 只提高栅格化密度(不改几何,不会抖),几何交给 PDFView 的缩放
+            guard let self, let pdfView = self.pdfView else { return }
+            let target = UIScreen.main.scale * max(1, min(3, pdfView.scaleFactor))
+            if self.canvas.contentScaleFactor < target {
+                self.canvas.contentScaleFactor = target
+                self.canvas.setNeedsDisplay()
+            }
         })
         observationTokens.append(pdfView.observe(\.document, options: [.new]) { [weak self] _, _ in
             self?.ensureAttached()
@@ -162,17 +170,17 @@ final class DocumentInkSurface: UIView {
                     abs(windowRect.minY - windowOrigin.y) > 0.5
         guard needsResize || moved else { return }
 
-        // ⚠️ 只改 frame / bounds.origin,绝不重设 canvas.drawing ——
-        // 重设 drawing 会打断 PencilKit 的实时渲染,真机表现就是"写完才出来"+"抖动"。
+        // ⚠️ 只改滚动窗口,绝不重设 canvas.drawing,也不让 bounds ≠ frame:
+        // 隐式缩放会让实时笔画亚像素抖动(Apple: 放大绘制区要用 contentSize/contentOffset)。
         windowOrigin = windowRect.origin
         frame = windowRect
         bounds = CGRect(x: 0, y: 0, width: windowRect.width, height: windowRect.height)
-        canvas.frame = bounds
-        // 取景窗:bounds.origin 指向墨迹坐标,size 放大 3 倍做超采样
-        canvas.bounds = CGRect(x: windowRect.minX * Self.scale,
-                               y: windowRect.minY * Self.scale,
-                               width: max(1, windowRect.width * Self.scale),
-                               height: max(1, windowRect.height * Self.scale))
+        canvas.frame = CGRect(origin: .zero, size: bounds.size)
+        canvas.bounds = CGRect(origin: .zero, size: bounds.size)     // 恒等变换
+        let origin = CGPoint(x: windowRect.minX * Self.scale, y: windowRect.minY * Self.scale)
+        canvas.contentSize = CGSize(width: origin.x + bounds.width * Self.scale,
+                                    height: origin.y + bounds.height * Self.scale)
+        canvas.contentOffset = origin
         // PDFKit 翻页会重建页视图并压到上层 —— 每次换窗口都重新置顶
         if let superview { superview.bringSubviewToFront(self) }
         DiagLog.log("surface: window page \(lo)...\(hi) size=\(Int(canvas.bounds.width))x\(Int(canvas.bounds.height))")
