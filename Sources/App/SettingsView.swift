@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
+    /// v0.46.0:自研 Metal 墨迹引擎(矢量中心线 + 解析式描边,任意缩放都锐利)
+    @AppStorage("metalInk") private var metalInk = true
     /// v0.18.0:书写贴边自动滚动 + Pencil 手势映射
     @AppStorage("writingAutoScroll") private var writingAutoScroll = true
     @AppStorage("pencilLineSnap") private var pencilLineSnap = true
@@ -50,6 +52,7 @@ struct SettingsView: View {
                     Text("开启后:选中的单词立即加入生词本并在页面上永久加亮,无需再点「加入生词本」。")
                 }
                 Section {
+                    Toggle("自研墨迹引擎(更清晰,实验)", isOn: $metalInk)
                     Toggle("Pencil 悬停预览", isOn: $pencilHoverPreview)
                     Toggle("触觉反馈", isOn: $pencilHaptics)
                     Toggle("书写时贴边自动滚动", isOn: $writingAutoScroll)
