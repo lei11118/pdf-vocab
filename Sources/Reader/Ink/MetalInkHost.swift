@@ -1,5 +1,6 @@
 import UIKit
 import PDFKit
+import PencilKit
 
 /// v0.46.0:自研墨迹引擎的宿主层 —— 把 `InkMetalCanvasView` 接到 PDFView 上。
 ///
@@ -71,7 +72,7 @@ final class MetalInkHost: UIView {
             let viewRect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
             let pageWidth = page.bounds(for: pdfView.displayBox).width
             guard pageWidth > 1 else { continue }
-            rects.append((index, viewRect, viewRect.width / pageWidth))
+            rects.append((index: index, rect: viewRect, scale: viewRect.width / pageWidth))
         }
         pageRects = rects
         canvas.clipRects = rects.map { $0.1 }
