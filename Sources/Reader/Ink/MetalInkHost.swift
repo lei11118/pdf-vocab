@@ -3,31 +3,56 @@ import PDFKit
 import PencilKit
 
 /// v0.46.0:自研墨迹引擎的宿主层 —— 把 `InkMetalCanvasView` 接到 PDFView 上。
+/// v0.47.0:补齐"墨跟着 PDF 走"与"页外零墨"两条铁律。
 ///
 /// 职责边界:
-/// - **坐标**:PDFView 会把页面缩放/平移,这里每次布局重算「每页在屏幕上的矩形」,
-///   把每页墨迹(页面坐标)映射成视图坐标后交给渲染器 → 渲染器永远按设备像素画,
-///   不存在位图放大,所以任意倍率都锐利;
-/// - **页边硬裁剪**:`clipRects` = 每页在屏幕上的矩形,墨迹越出即被丢弃(D2-A);
-/// - **落库**:一笔结束按页矩形换算回页面坐标,写回该页。
+/// - **坐标唯一真相 = 页面坐标**(页号 + 页内点,左上原点)。视图坐标只活在渲染的一瞬间;
+/// - **每次滚动/缩放重映射**:内部 `UIScrollView` 的 `contentOffset` / `zoomScale` 一变就重算
+///   每页的屏幕矩形,把页面坐标墨迹映射到视图坐标再画 → 滚动时墨贴着纸走;
+/// - **页外硬裁剪**:落库前按页矩形把一笔切成若干段,页外段直接丢弃;
+///   渲染时再把页矩形传进片元着色器,连半个笔宽都出不去;
+/// - **落库**:按页写 `InkPage`(JSON),切页懒加载。
 final class MetalInkHost: UIView {
 
+    // MARK: - 状态
+
     private weak var pdfView: PDFView?
-    private var pageRects: [(index: Int, rect: CGRect, scale: CGFloat)] = []
     private let canvas = InkMetalCanvasView()
     private var store: PencilInkStore?
     private var docSha: String = ""
+    /// 页号 → 墨迹(页面坐标)
     private var pages: [Int: InkPage] = [:]
+    /// 页号 → 当前屏幕矩形(视图坐标)
+    private var boxes: [Int: CGRect] = [:]
+    /// 页号 → 页面点 → 视图点缩放
+    private var scales: [Int: CGFloat] = [:]
+    private var observations: [NSKeyValueObservation] = []
+    private weak var observedScrollView: UIScrollView?
+    private var refreshScheduled = false
+    private(set) var isAttached = false
+    private var visibleRange: ClosedRange<Int>?
+
+    // MARK: - 撤销(v0.47.0:自研引擎自己管栈;PencilKit 的 undoManager 管不到这里)
+
+    private struct UndoEntry {
+        var group: Int
+        var page: Int
+        var before: InkPage
+        var after: InkPage
+    }
+    private var undoStack: [UndoEntry] = []
+    private var redoStack: [UndoEntry] = []
+    private var commitGroup = 0
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
 
     var isDrawingEnabled: Bool {
         get { canvas.isDrawingEnabled }
         set { canvas.isDrawingEnabled = newValue && canvas.isReady }
     }
 
-    /// 宿主自己不吃触摸,触摸交给内部画布(选词模式下整体关闭)
+    /// 宿主本身不吃触摸(交给内部画布判断是否为 Pencil)
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // v0.46.1:必须同时满足"书写模式"与"渲染器就绪",
-        // 否则会吞掉所有触摸(真机:写不了字且单指也滑不动)
         guard canvas.isDrawingEnabled, canvas.isReady else { return nil }
         return super.hitTest(point, with: event)
     }
@@ -35,21 +60,76 @@ final class MetalInkHost: UIView {
     // MARK: - 挂载
 
     func attach(to pdfView: PDFView, store: PencilInkStore?, docSha: String) {
+        if isAttached, self.pdfView === pdfView {
+            self.store = store
+            refresh()
+            return
+        }
         self.pdfView = pdfView
         self.store = store
         self.docSha = docSha
         backgroundColor = .clear
+        isOpaque = false
         canvas.frame = bounds
         canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        canvas.pageTransform = .identity
         canvas.onStrokeCommitted = { [weak self] stroke in self?.commit(stroke) }
         addSubview(canvas)
-        pdfView.addSubview(self)
         frame = pdfView.bounds
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        pdfView.bringSubviewToFront(self)
+        pdfView.addSubview(self)
+        isAttached = true
+        observeScroll()
         refresh()
-        DiagLog.log("metal ink: attached")
+        DiagLog.log("metal ink: attached size=\(Int(bounds.width))x\(Int(bounds.height))")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        canvas.frame = bounds
+        if let pdfView, frame != pdfView.bounds { frame = pdfView.bounds }
+        scheduleRefresh()
+    }
+
+    // MARK: - 跟着 PDFView 滚动 / 缩放
+
+    /// PDFView 不是 UIScrollView,内部滚动视图要从子树里找。
+    private func findScrollView(in view: UIView) -> UIScrollView? {
+        if let parent = view.documentView?.superview as? UIScrollView { return parent }
+        if let direct = view.subviews.first(where: { $0 is UIScrollView }) as? UIScrollView { return direct }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private func observeScroll() {
+        guard let pdfView else { return }
+        observations.removeAll()
+        guard let scroll = findScrollView(in: pdfView) else {
+            DiagLog.log("metal ink: no scroll view (fallback to layout refresh)")
+            return
+        }
+        observedScrollView = scroll
+        // v0.47.0 根因:滚动/缩放原先**没有任何观察者** → pageRects 只在 refresh() 时才更新,
+        // 屏幕上的墨钉在视图坐标里不动,翻页时才整块跳到新位置
+        // (用户:"不随 PDF 滑动、飘到其他地方")。
+        observations = [
+            scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() },
+            scroll.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() },
+            scroll.observe(\.contentSize, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() }
+        ]
+        DiagLog.log("metal ink: scroll observed zoom=\(String(format: "%.2f", scroll.zoomScale))")
+    }
+
+    /// 同一 runloop 内多次滚动回调合并成一次重算
+    private func scheduleRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refresh()
+        }
     }
 
     // MARK: - 工具
@@ -57,88 +137,204 @@ final class MetalInkHost: UIView {
     func applyTool(color: UIColor, baseWidth: CGFloat) {
         canvas.inkColor = color
         canvas.baseWidth = max(0.8, baseWidth)
+        canvas.viewScale = scales[currentIndex() ?? 0] ?? 1
     }
 
-    // MARK: - 布局
+    // MARK: - 布局 / 重映射
 
-    /// 重算每页屏幕矩形 + 重新映射墨迹(缩放结束/翻页/换排布时调用)
+    private func currentIndex() -> Int? {
+        guard let pdfView, let document = pdfView.document else { return nil }
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        guard let page = pdfView.page(for: center, nearest: true) else { return nil }
+        return document.index(for: page)
+    }
+
+    /// 重算可见页矩形 + 把页面坐标墨迹映射到视图坐标
     func refresh() {
         guard let pdfView, let document = pdfView.document, document.pageCount > 0 else { return }
-        frame = pdfView.bounds
-        let current = pdfView.currentPage.map { document.index(for: $0) } ?? 0
-        let lo = max(0, current - 1), hi = min(document.pageCount - 1, current + 1)
+        if frame != pdfView.bounds { frame = pdfView.bounds }
+        if canvas.frame != bounds { canvas.frame = bounds }
 
-        var rects: [(index: Int, rect: CGRect, scale: CGFloat)] = []
-        for index in lo...max(lo, hi) {
+        let current = currentIndex() ?? 0
+        let lo = max(0, current - 2)
+        let hi = min(document.pageCount - 1, current + 2)
+        visibleRange = lo...max(lo, hi)
+
+        var newBoxes: [Int: CGRect] = [:]
+        var newScales: [Int: CGFloat] = [:]
+        var items: [InkRenderItem] = []
+        for index in visibleRange ?? (0...0) {
             guard let page = document.page(at: index) else { continue }
-            let viewRect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
-            let pageWidth = page.bounds(for: pdfView.displayBox).width
-            guard pageWidth > 1 else { continue }
-            rects.append((index: index, rect: viewRect, scale: viewRect.width / pageWidth))
-        }
-        pageRects = rects
-        canvas.clipRects = rects.map { $0.1 }
-        canvas.frame = bounds
-
-        // 每页墨迹 → 视图坐标
-        var viewStrokes: [InkStroke] = []
-        for entry in rects {
-            let page = pageDrawing(entry.index) ?? InkPage()
-            for stroke in page.strokes {
+            let box = page.bounds(for: pdfView.displayBox)
+            guard box.width > 1, box.height > 1 else { continue }
+            let rect = pdfView.convert(box, from: page)
+            guard rect.width > 1, rect.height > 1 else { continue }
+            let scale = rect.width / box.width
+            newBoxes[index] = rect
+            newScales[index] = scale
+            guard let pageInk = pageInk(index) else { continue }
+            for stroke in pageInk.strokes {
                 var mapped = stroke
                 mapped.points = stroke.points.map { p in
-                    let v = CGPoint(x: p.x, y: p.y)
-                        .applying(CGAffineTransform(scaleX: entry.scale, y: entry.scale))
-                        .applying(CGAffineTransform(translationX: entry.rect.minX, y: entry.rect.minY))
-                    var q = p; q.x = Double(v.x); q.y = Double(v.y)
-                    q.width = p.width * Double(entry.scale)
+                    var q = p
+                    q.x = p.x * Double(scale) + Double(rect.minX)
+                    q.y = p.y * Double(scale) + Double(rect.minY)
+                    q.width = p.width * Double(scale)
                     return q
                 }
-                viewStrokes.append(mapped)
+                items.append(InkRenderItem(stroke: mapped, clip: rect))
             }
         }
-        canvas.pageStrokes = viewStrokes
-        DiagLog.log("metal ink: refresh pages=\(rects.count) strokes=\(viewStrokes.count)")
+        boxes = newBoxes
+        scales = newScales
+        canvas.clipRects = Array(newBoxes.values)
+        canvas.viewScale = newScales[current] ?? 1
+        canvas.renderItems = items
+        DiagLog.log("metal ink: refresh pages=\(newBoxes.count) strokes=\(items.count)")
     }
 
-    // MARK: - 落库
+    // MARK: - 读页(含旧数据迁移与污染清理)
 
-    private func pageDrawing(_ index: Int) -> InkPage? {
+    private func pageInk(_ index: Int) -> InkPage? {
         if let cached = pages[index] { return cached }
         guard let store, !docSha.isEmpty, let record = store.drawing(docSha: docSha, page: index) else { return nil }
-        // 新引擎数据:JSON;旧数据:二进制 PKDrawing(交给迁移)
-        if let page = InkPage.decode(record.data) { pages[index] = page; return page }
+        if let page = InkPage.decode(record.data) {
+            // v0.47.0:v0.46.x 写进去的"同一笔重复几百份"必须清掉,否则永远是一团重影
+            let cleaned = sanitize(page, index: index)
+            if cleaned.strokes.count != page.strokes.count {
+                DiagLog.log("metal ink: cleaned page \(index) \(page.strokes.count)->\(cleaned.strokes.count)")
+                store.save(docSha: docSha, page: index, data: cleaned.data(), scale: 1)
+            }
+            pages[index] = cleaned
+            return cleaned
+        }
         if let legacy = try? PKDrawing(data: record.data) {
             let scale = max(1, record.scale)
             let page = InkPage(strokes: InkLegacyMigration.strokes(from: legacy, scale: CGFloat(scale)))
-            pages[index] = page
-            DiagLog.log("metal ink: migrated page \(index) strokes=\(page.strokes.count)")
-            return page
+            let cleaned = sanitize(page, index: index)
+            pages[index] = cleaned
+            DiagLog.log("metal ink: migrated page \(index) strokes=\(cleaned.strokes.count)")
+            return cleaned
         }
         return nil
     }
 
+    /// 丢弃页外笔迹、退化笔迹与重复副本
+    private func sanitize(_ page: InkPage, index: Int) -> InkPage {
+        guard let pdfView, let document = pdfView.document, let pdfPage = document.page(at: index) else { return page }
+        let box = pdfPage.bounds(for: pdfView.displayBox)
+        let allowed = CGRect(x: -4, y: -4, width: box.width + 8, height: box.height + 8)
+        var kept: [InkStroke] = []
+        var signatures: Set<String> = []
+        for stroke in page.strokes {
+            guard stroke.points.count >= 2 else { continue }
+            let mid = stroke.points[stroke.points.count / 2].cg
+            guard allowed.contains(mid) else { continue }
+            // 同一笔的重复副本:点数相同且首尾点几乎重合
+            let first = stroke.points[0], last = stroke.points[stroke.points.count - 1]
+            let sig = "\(stroke.points.count)|\(Int(first.x / 2))|\(Int(first.y / 2))|\(Int(last.x / 2))|\(Int(last.y / 2))"
+            guard !signatures.contains(sig) else { continue }
+            signatures.insert(sig)
+            kept.append(stroke)
+        }
+        return InkPage(strokes: kept)
+    }
+
+    // MARK: - 落库
+
+    /// 提交一段墨(视图坐标):按页矩形切成若干段,页外段丢弃,每段换算回所属页的页面坐标
     private func commit(_ stroke: InkStroke) {
-        guard let first = stroke.points.first else { return }
-        let point = CGPoint(x: first.x, y: first.y)
-        guard let entry = pageRects.first(where: { $0.1.contains(point) }) else {
-            DiagLog.log("metal ink: drop out-of-page stroke")
-            return
+        guard stroke.points.count >= 2, !boxes.isEmpty else { return }
+        commitGroup += 1
+        var currentPage: Int?
+        var run: [InkPoint] = []
+        var saved = 0
+
+        func flushRun() {
+            guard let index = currentPage, run.count >= 2,
+                  let rect = boxes[index], let scale = scales[index], scale > 0 else {
+                run.removeAll(); return
+            }
+            var s = stroke
+            s.points = run.map { p in
+                var q = p
+                q.x = (p.x - Double(rect.minX)) / Double(scale)
+                q.y = (p.y - Double(rect.minY)) / Double(scale)
+                q.width = p.width / Double(scale)
+                return q
+            }
+            // 硬边界:换算后再滤一次,页外点不进库
+            s.points = s.points.filter { $0.x >= -0.5 && $0.y >= -0.5 }
+            guard s.points.count >= 2 else { run.removeAll(); return }
+            var page = pages[index] ?? InkPage()
+            // 撤销快照:动作前整页(写时复制,落笔瞬间零序列化)
+            undoStack.append(UndoEntry(group: commitGroup, page: index, before: page, after: page))
+            redoStack.removeAll()
+            page.append(s)
+            pages[index] = page
+            if !undoStack.isEmpty { undoStack[undoStack.count - 1].after = page }
+            store?.save(docSha: docSha, page: index, data: page.data(), scale: 1)
+            saved += 1
+            run.removeAll()
         }
-        // 视图坐标 → 页面坐标
-        var pageStroke = stroke
-        pageStroke.points = stroke.points.map { p in
-            var q = p
-            q.x = (p.x - Double(entry.rect.minX)) / Double(entry.scale)
-            q.y = (p.y - Double(entry.rect.minY)) / Double(entry.scale)
-            q.width = p.width / Double(entry.scale)
-            return q
+
+        for p in stroke.points {
+            let v = CGPoint(x: p.x, y: p.y)
+            if let index = boxes.first(where: { $0.value.contains(v) })?.key {
+                if currentPage != index {
+                    flushRun()
+                    currentPage = index
+                }
+                run.append(p)
+            } else {
+                flushRun()
+                currentPage = nil
+            }
         }
-        var page = pages[entry.index] ?? InkPage()
-        page.append(pageStroke)
-        pages[entry.index] = page
-        store?.save(docSha: docSha, page: entry.index, data: page.data(),
-                    scale: 1)
-        DiagLog.log("metal ink: saved page \(entry.index) strokes=\(page.strokes.count)")
+        flushRun()
+        DiagLog.log("metal ink: commit strokes=\(saved)")
+        // 立刻重映射:否则刚写的墨要等下一次滚动/翻页才出现(用户:"写完就消失")
+        refresh()
+    }
+
+    // MARK: - 撤销 / 重做
+
+    /// 撤销一次动作(一笔跨页时该笔涉及的所有页一起回退)
+    func undo() {
+        guard let group = undoStack.last?.group else { return }
+        var touched: Set<Int> = []
+        var moved: [UndoEntry] = []
+        while let last = undoStack.last, last.group == group {
+            pages[last.page] = last.before
+            touched.insert(last.page)
+            moved.append(last)
+            undoStack.removeLast()
+        }
+        redoStack.append(contentsOf: moved.reversed())
+        persist(touched)
+        DiagLog.log("metal ink: undo pages=\(touched.count)")
+    }
+
+    func redo() {
+        guard let group = redoStack.last?.group else { return }
+        var touched: Set<Int> = []
+        var moved: [UndoEntry] = []
+        while let last = redoStack.last, last.group == group {
+            pages[last.page] = last.after
+            touched.insert(last.page)
+            moved.append(last)
+            redoStack.removeLast()
+        }
+        undoStack.append(contentsOf: moved.reversed())
+        persist(touched)
+        DiagLog.log("metal ink: redo pages=\(touched.count)")
+    }
+
+    private func persist(_ pages: Set<Int>) {
+        for index in pages {
+            let ink = self.pages[index] ?? InkPage()
+            store?.save(docSha: docSha, page: index, data: ink.data(), scale: 1)
+        }
+        refresh()
     }
 }
