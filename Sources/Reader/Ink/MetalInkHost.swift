@@ -66,7 +66,7 @@ final class MetalInkHost: UIView {
         let current = pdfView.currentPage.map { document.index(for: $0) } ?? 0
         let lo = max(0, current - 1), hi = min(document.pageCount - 1, current + 1)
 
-        var rects: [(Int, CGRect, CGFloat)] = []
+        var rects: [(index: Int, rect: CGRect, scale: CGFloat)] = []
         for index in lo...max(lo, hi) {
             guard let page = document.page(at: index) else { continue }
             let viewRect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
