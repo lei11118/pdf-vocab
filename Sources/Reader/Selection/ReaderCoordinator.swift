@@ -1553,8 +1553,13 @@ final class ReaderCoordinator: NSObject {
     private func installInkSurface(on view: PDFView, docSha: String) {
         // v0.46.0:自研 Metal 墨迹(默认关,设置里可开)
         if UserDefaults.standard.bool(forKey: "metalInk") {
-            let host = MetalInkHost()
+            // v0.47.0:复用同一个宿主 —— 重进文档/重装时若每次 new 一个,
+            // pdfView 上会叠出第二块画布(两套墨迹、两份落库)。
+            let host = metalHost ?? MetalInkHost()
             metalHost = host
+            // 自研引擎接管墨迹时,旧 PencilKit 逐页叠层必须摘掉:
+            // 留着它 = 两个引擎同时吃笔、同时落库,墨迹重影且撤销/擦除互相打架。
+            view.pageOverlayViewProvider = nil
             host.attach(to: view, store: inkStore, docSha: docSha)
             host.isDrawingEnabled = markMode
             surfaceDocSha = docSha
@@ -1590,6 +1595,10 @@ final class ReaderCoordinator: NSObject {
         guard let session = toolSession else { return }
         // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
         inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
+        // v0.47.0:自研 Metal 引擎也要吃工具颜色/笔宽(否则调色盘与笔宽档对它无效)
+        if let inking = session.makeTool(scale: 1) as? PKInkingTool {
+            metalHost?.applyTool(color: inking.color, baseWidth: inking.width)
+        }
         if !wetToolIsRegular { clearWetInk() }
         let revision = session.stateRevision
         if !force, revision == appliedToolRevision { return }
@@ -1731,12 +1740,15 @@ final class ReaderCoordinator: NSObject {
         }
 
     func undoInk() {
+        // v0.47.0:自研 Metal 引擎有自己的撤销栈(它不经过 PencilKit 的 undoManager)
+        if let host = metalHost { host.undo(); return }
         // v0.40.0:单画布有自己的 undoManager(一笔一步),优先用它
         if let surface = inkSurface { surface.undo(); return }
         clearWetInk()
         overlayProvider?.undo()
     }
     func redoInk() {
+        if let host = metalHost { host.redo(); return }
         if let surface = inkSurface { surface.redo(); return }
         clearWetInk()
         overlayProvider?.redo()
