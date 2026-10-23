@@ -94,7 +94,9 @@ final class MetalInkHost: UIView {
 
     /// PDFView 不是 UIScrollView,内部滚动视图要从子树里找。
     private func findScrollView(in view: UIView) -> UIScrollView? {
-        if let parent = view.documentView?.superview as? UIScrollView { return parent }
+        if let pdf = view as? PDFView, let parent = pdf.documentView?.superview as? UIScrollView {
+            return parent
+        }
         if let direct = view.subviews.first(where: { $0 is UIScrollView }) as? UIScrollView { return direct }
         for sub in view.subviews {
             if let found = findScrollView(in: sub) { return found }
