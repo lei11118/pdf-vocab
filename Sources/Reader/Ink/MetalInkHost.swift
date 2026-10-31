@@ -248,7 +248,7 @@ final class MetalInkHost: UIView {
         if !additions.isEmpty { redoStack.removeAll(); persist(Set(additions.keys)) }
     }
 
-    private func erase(at point: CGPoint) {
+    func erase(at point: CGPoint) {
         let previous = lastEraserPoint ?? point; lastEraserPoint = point
         var changed = false
         for index in boxes.keys {
@@ -263,7 +263,7 @@ final class MetalInkHost: UIView {
         }
         if changed { needsInkRefresh = true; refresh() }
     }
-    private func finishErase() {
+    func finishErase() {
         lastEraserPoint = nil
         guard !eraseBefore.isEmpty else { return }
         commitGroup += 1

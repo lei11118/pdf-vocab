@@ -51,8 +51,13 @@ final class InkRegressionTests: XCTestCase {
             return Double(bytes[(32*64+32)*4+3])/255
         }
         XCTAssertEqual(try alpha(),0.3,accuracy: 2.0/255)
+        XCTAssertEqual(try alpha(),0.3,accuracy: 2.0/255) // Cached dry frame must match.
         canvas.renderItems.append(InkRenderItem(stroke: stroke,clip: canvas.bounds))
         XCTAssertEqual(try alpha(),0.51,accuracy: 2.0/255)
+        var dot = stroke
+        dot.points = [InkPoint(x: 32,y: 32,width: 20),InkPoint(x: 32,y: 32,width: 20)]
+        canvas.renderItems = [InkRenderItem(stroke: dot,clip: canvas.bounds)]
+        XCTAssertEqual(try alpha(),0.3,accuracy: 2.0/255)
     }
 
     func testMetalInkSharesPDFDocumentTransformDuringScroll() throws {
@@ -77,6 +82,43 @@ final class InkRegressionTests: XCTestCase {
         let paperPoint = view.convert(pdfPoint,from: page)
         XCTAssertEqual(inkPoint.x,paperPoint.x,accuracy: 0.01)
         XCTAssertEqual(inkPoint.y,paperPoint.y,accuracy: 0.01)
+    }
+
+    func testMetalEraserPersistsAndUndoRedoRestoreOriginalPage() throws {
+        let db = try XCTUnwrap(AppDatabase.shared)
+        let store = PencilInkStore(db: db)
+        let sha = "ink-regression-" + UUID().uuidString
+        defer { store.delete(docSha: sha,page: 0) }
+        let original = InkStroke(kind: .pen,r: 0,g: 0,b: 0,a: 1,
+                                 points: [InkPoint(x: 50,y: 100,width: 2),InkPoint(x: 250,y: 100,width: 2)])
+        store.save(docSha: sha,page: 0,data: InkPage(strokes: [original]).data(),scale: 1)
+        let view = PDFView(frame: CGRect(x: 0,y: 0,width: 400,height: 400))
+        let doc = PDFDocument()
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 400,height: 600)).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0,y: 0,width: 400,height: 600))
+        }
+        let page = try XCTUnwrap(PDFPage(image: image)); doc.insert(page,at: 0)
+        view.document = doc; view.layoutDocumentView()
+        let host = MetalInkHost(); host.attach(to: view,store: store,docSha: sha)
+        host.applyTool(kind: .eraser,color: .black,baseWidth: 0,eraserRadius: 10,whole: false)
+        let box = page.bounds(for: .cropBox)
+        let point = host.convert(view.convert(CGPoint(x: box.minX+150,y: box.maxY-100),from: page),from: view)
+        host.erase(at: point); host.finishErase()
+        func saved() throws -> InkPage {
+            let record = try XCTUnwrap(store.drawing(docSha: sha,page: 0))
+            return try XCTUnwrap(InkPage.decode(record.data))
+        }
+        XCTAssertEqual(try saved().strokes.count,2)
+        host.undo()
+        XCTAssertEqual(try saved().strokes.count,1)
+        XCTAssertEqual(try saved().strokes[0].points.count,2)
+        host.redo()
+        XCTAssertEqual(try saved().strokes.count,2)
+        host.applyTool(kind: .eraser,color: .black,baseWidth: 0,eraserRadius: 300,whole: true)
+        host.erase(at: point); host.finishErase()
+        XCTAssertTrue(try saved().isEmpty)
+        host.undo()
+        XCTAssertEqual(try saved().strokes.count,2)
     }
 
     func testMetalShaderCompilesAndEmptyFrameCanDraw() throws {

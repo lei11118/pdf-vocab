@@ -31,7 +31,7 @@ final class InkMetalCanvasView: MTKView {
     // MARK: - 对外
 
     /// 已落定的墨(视图坐标,由宿主每帧重映射)
-    var renderItems: [InkRenderItem] = [] { didSet { rebuildVertices() } }
+    var renderItems: [InkRenderItem] = [] { didSet { renderRevision += 1; rebuildVertices() } }
     /// 允许落墨的页矩形(视图坐标);Pencil 落在这些矩形之外一律不落墨
     var clipRects: [CGRect] = []
     /// 一段墨提交(视图坐标)。跨页/越界时会被切成多段分别提交。
@@ -58,6 +58,10 @@ final class InkMetalCanvasView: MTKView {
     private var pipeline: MTLRenderPipelineState?
     private var compositePipeline: MTLRenderPipelineState?
     private var coverageTexture: MTLTexture?
+    private var dryTexture: MTLTexture?
+    private var renderRevision = 0
+    private var cachedRevision = -1
+    private var dryBatchCount = 0
     private struct Batch { var start: Int; var count: Int; var style: UInt32 }
     private var batches: [Batch] = []
     private var vertexBuffer: MTLBuffer?
@@ -301,6 +305,7 @@ final class InkMetalCanvasView: MTKView {
             if verts.count > start { batches.append(Batch(start: start, count: verts.count-start, style: style)) }
         }
         for item in renderItems { append(item.stroke, clip: item.clip) }
+        dryBatchCount = batches.count
         if penDown, draft.points.count >= 1 {
             // 实时段:预览点只在这里参与,不进 draft
             var live = draft
@@ -375,7 +380,8 @@ final class InkMetalCanvasView: MTKView {
 
         // ② 圆头与圆角关节(只在该补的地方补:两端 + 转角明显的点)
         for i in 0..<pts.count {
-            if stroke.kind == .marker, i == 0 || i == pts.count - 1 { continue }
+            if stroke.kind == .marker, i == 0 || i == pts.count - 1,
+               hypot(pts.last!.x-pts[0].x,pts.last!.y-pts[0].y) > 0.001 { continue }
             guard shouldRound(at: i, in: pts) else { continue }
             appendDisc(center: pts[i].cg, radius: halves[i], clip: clipV, color: color, into: &verts)
         }
@@ -424,8 +430,10 @@ extension InkMetalCanvasView: MTKViewDelegate {
             desc.usage = [.renderTarget, .shaderRead]
             desc.storageMode = .private
             coverageTexture = device.makeTexture(descriptor: desc)
+            dryTexture = device.makeTexture(descriptor: desc)
+            cachedRevision = -1
         }
-        guard let coverageTexture else { return false }
+        guard let coverageTexture, let dryTexture else { return false }
         func pass(_ texture: MTLTexture, clear: Bool) -> MTLRenderPassDescriptor {
             let p = MTLRenderPassDescriptor()
             p.colorAttachments[0].texture = texture
@@ -434,26 +442,43 @@ extension InkMetalCanvasView: MTKViewDelegate {
             p.colorAttachments[0].clearColor = MTLClearColorMake(0,0,0,0)
             return p
         }
-        guard let clear = commandBuffer.makeRenderCommandEncoder(descriptor: pass(target, clear: true)) else { return false }
-        clear.endEncoding()
-        guard let buffer = vertexBuffer else { return true }
+        func clear(_ texture: MTLTexture) -> Bool {
+            guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass(texture,clear: true)) else { return false }
+            enc.endEncoding(); return true
+        }
+        func composite(_ texture: MTLTexture, into output: MTLTexture) -> Bool {
+            guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: pass(output,clear: false)) else { return false }
+            enc.setRenderPipelineState(compositePipeline)
+            enc.setFragmentTexture(texture,index: 0)
+            enc.drawPrimitives(type: .triangle,vertexStart: 0,vertexCount: 3)
+            enc.endEncoding(); return true
+        }
         var size = SIMD2<Float>(Float(max(1,bounds.width)),Float(max(1,bounds.height)))
         var px = SIMD2<Float>(Float(target.width)/size.x,Float(target.height)/size.y)
-        for batch in batches {
-            guard let mask = commandBuffer.makeRenderCommandEncoder(descriptor: pass(coverageTexture, clear: true)) else { return false }
+        func encode(_ batch: Batch, into output: MTLTexture) -> Bool {
+            guard let buffer = vertexBuffer,
+                  let mask = commandBuffer.makeRenderCommandEncoder(descriptor: pass(coverageTexture,clear: true)) else { return false }
             var style = batch.style
             mask.setRenderPipelineState(pipeline)
-            mask.setVertexBuffer(buffer, offset: 0, index: 0)
+            mask.setVertexBuffer(buffer,offset: 0,index: 0)
             mask.setVertexBytes(&size,length: MemoryLayout<SIMD2<Float>>.stride,index: 1)
             mask.setFragmentBytes(&px,length: MemoryLayout<SIMD2<Float>>.stride,index: 2)
             mask.setFragmentBytes(&style,length: MemoryLayout<UInt32>.stride,index: 3)
             mask.drawPrimitives(type: .triangle,vertexStart: batch.start,vertexCount: batch.count)
             mask.endEncoding()
-            guard let composite = commandBuffer.makeRenderCommandEncoder(descriptor: pass(target, clear: false)) else { return false }
-            composite.setRenderPipelineState(compositePipeline)
-            composite.setFragmentTexture(coverageTexture,index: 0)
-            composite.drawPrimitives(type: .triangle,vertexStart: 0,vertexCount: 3)
-            composite.endEncoding()
+            return composite(coverageTexture,into: output)
+        }
+        // Reuse settled ink while only the predicted/live tail changes.
+        if cachedRevision != renderRevision {
+            guard clear(dryTexture) else { return false }
+            for batch in batches.prefix(dryBatchCount) {
+                guard encode(batch,into: dryTexture) else { return false }
+            }
+            cachedRevision = renderRevision
+        }
+        guard clear(target), composite(dryTexture,into: target) else { return false }
+        for batch in batches.dropFirst(dryBatchCount) {
+            guard encode(batch,into: target) else { return false }
         }
         return true
     }
