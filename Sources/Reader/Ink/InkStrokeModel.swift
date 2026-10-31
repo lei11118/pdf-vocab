@@ -5,7 +5,7 @@ import PencilKit
 ///
 /// **存中心线 + 每点笔刷参数,不存渲染结果** —— 这是"任意缩放都锐利"的前提。
 /// 渲染在 `InkMetalCanvasView` 里用 Metal 解析式描边实时生成,不做位图放大。
-struct InkPoint: Codable {
+struct InkPoint: Codable, Equatable {
     var x: Double
     var y: Double
     /// 该点笔宽(页面点)
@@ -24,7 +24,7 @@ struct InkPoint: Codable {
     }
 }
 
-struct InkStroke: Codable {
+struct InkStroke: Codable, Equatable {
     enum Kind: String, Codable { case pen, pencil, marker, crayon, custom }
     var kind: Kind
     /// sRGB 0...1
@@ -37,7 +37,7 @@ struct InkStroke: Codable {
 }
 
 /// 一页的墨迹(页面坐标,左上原点)
-struct InkPage: Codable {
+struct InkPage: Codable, Equatable {
     var strokes: [InkStroke] = []
     var isEmpty: Bool { strokes.isEmpty }
 

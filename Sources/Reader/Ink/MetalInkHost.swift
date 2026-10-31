@@ -20,6 +20,7 @@ final class MetalInkHost: UIView {
     private let editing = InkEditingOverlay(frame:.zero)
     private var shapeKind: PencilShapeKind = .line
     private var editPath: [CGPoint] = []
+    private var editEnd: CGPoint?
     private var transforming = false
     private var selected: [Int: Set<Int>] = [:]
     private var transformRefs: [Int: Set<Int>] = [:]
@@ -57,7 +58,9 @@ final class MetalInkHost: UIView {
 
     func attach(to pdfView: PDFView, store: PencilInkStore?, docSha: String) {
         if self.docSha != docSha {
+            finishErase(); canvas.handleCancelled(); clearInkSelection()
             pages.removeAll(); undoStack.removeAll(); redoStack.removeAll()
+            boxes.removeAll();mappings.removeAll();canvas.renderItems=[];needsInkRefresh=true
         }
         if self.pdfView !== pdfView, let pencilGrab { self.pdfView?.removeGestureRecognizer(pencilGrab); self.pencilGrab = nil }
         self.pdfView = pdfView; self.store = store; self.docSha = docSha
@@ -84,7 +87,8 @@ final class MetalInkHost: UIView {
                 guard let self else { return }
                 DiagLog.log("metal ink: memory warning cachePages=\(self.pages.count) undo=\(self.undoStack.count)")
                 self.canvas.releaseCachedResources()
-                self.undoStack.removeAll(); self.redoStack.removeAll()
+                if let newest=self.undoStack.last?.group { self.undoStack.removeAll { $0.group < newest-7 } }
+                self.redoStack.removeAll()
                 self.trimPageCache(); self.needsInkRefresh = true; self.scheduleRefresh()
             }
         }
@@ -110,6 +114,7 @@ final class MetalInkHost: UIView {
         grab.onBegan = { [weak self] touch, _ in
             guard let self else { return }
             self.refresh()
+            DiagLog.log("metal ink: input begin tool=\(self.activeTool.rawValue) cachePages=\(self.pages.count) undo=\(self.undoStack.count)")
             if self.activeTool == .lasso || self.activeTool == .shape { self.beginEdit(at:touch.location(in:self.pdfView)) }
             else if self.activeTool == .eraser { self.erase(at: touch.location(in: self.canvas)) }
             else { self.canvas.handleBegan(touch) }
@@ -207,6 +212,7 @@ final class MetalInkHost: UIView {
         // Pixel budget bounds the three render surfaces without stretching a
         // document-sized low-resolution cache during a zoom gesture.
         let pixelBudget: CGFloat = 10_000_000
+        canvas.rasterScale = screenDensity
         let density = min(screenDensity, min(8192 / max(bounds.width,bounds.height),sqrt(pixelBudget / max(1,bounds.width*bounds.height))))
         let pixels = CGSize(width: max(1,(bounds.width*density).rounded()),height: max(1,(bounds.height*density).rounded()))
         let resolutionChanged = canvas.drawableSize != pixels
@@ -303,7 +309,7 @@ final class MetalInkHost: UIView {
                 pages[index] = InkPage(strokes: result.strokes); changed = true
             }
         }
-        if changed { needsInkRefresh = true; refresh() }
+        if changed { needsInkRefresh = true; scheduleRefresh() }
     }
     func finishErase() {
         lastEraserPoint = nil
@@ -326,7 +332,7 @@ final class MetalInkHost: UIView {
         redoStack.append(contentsOf: moved.reversed()); persist(Set(moved.map(\.page)))
     }
     func redo() {
-        clearInkSelection()
+        finishErase();clearInkSelection()
         guard let group = redoStack.last?.group else { return }
         var moved: [UndoEntry] = []
         while let entry = redoStack.last, entry.group == group {
@@ -340,10 +346,18 @@ final class MetalInkHost: UIView {
         for index in indexes { store?.save(docSha: docSha,page: index,data: (pages[index] ?? InkPage()).data(),scale: 1) }
         refresh()
     }
+    func detach() {
+        finishErase();canvas.handleCancelled();clearInkSelection()
+        drawingEnabled=false;canvas.isDrawingEnabled=false
+        if let pencilGrab { pdfView?.removeGestureRecognizer(pencilGrab) }
+        pencilGrab=nil;observations.removeAll();observedScrollView=nil
+        editing.removeFromSuperview();removeFromSuperview();isAttached=false
+        canvas.releaseCachedResources()
+    }
     deinit { if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }
     private func trimPageCache() {
         guard pages.count > 8, transformBefore.isEmpty, eraseBefore.isEmpty else { return }
-        pages = pages.filter { boxes[$0.key] != nil }
+        pages = pages.filter { boxes[$0.key] != nil || selected[$0.key] != nil }
     }
     func clearInkSelection() {
         if transforming { endInkTransform(cancelled:true) }
@@ -433,7 +447,7 @@ final class MetalInkHost: UIView {
             commitGroup += 1
             for (p,before) in originals {
                 let after = pages[p] ?? InkPage()
-                if before.data() != after.data() { undoStack.append(UndoEntry(group:commitGroup,page:p,before:before,after:after)) }
+                if before != after { undoStack.append(UndoEntry(group:commitGroup,page:p,before:before,after:after)) }
             }
             redoStack.removeAll()
         }
@@ -443,11 +457,12 @@ final class MetalInkHost: UIView {
     func beginEdit(at point: CGPoint) {
         if activeTool == .lasso && editing.point(inside:point,with:nil) {
             editing.begin(at:point)
-        } else { clearInkSelection(); editPath = [point] }
+        } else { clearInkSelection(); editPath = [point];editEnd = point }
     }
     func moveEdit(to point: CGPoint) {
         if transforming { editing.move(to:point); return }
         guard let first = editPath.first else { return }
+        editEnd=point
         if activeTool == .shape {
             editing.preview = InkEditGeometry.shape(shapeKind,from:first,to:point)
             editing.previewColor = canvas.inkColor
@@ -459,14 +474,14 @@ final class MetalInkHost: UIView {
     }
     func endEdit() {
         if transforming { editing.onEnd?(false); return }
-        defer { editPath.removeAll(); editing.preview = [] }
+        defer { editPath.removeAll();editEnd=nil; editing.preview = [] }
         if activeTool == .lasso { selectInk(in:editPath); return }
-        guard let first = editPath.first, let pdfView, let last = editing.preview.first?.dropFirst().max(by: { hypot($0.x-first.x,$0.y-first.y)<hypot($1.x-first.x,$1.y-first.y) }),
+        guard let first = editPath.first, let last=editEnd, let pdfView,
               hypot(first.x-last.x,first.y-last.y)>2 else { return }
         var r: CGFloat=0,g: CGFloat=0,b: CGFloat=0,a: CGFloat=1
         canvas.inkColor.getRed(&r,green:&g,blue:&b,alpha:&a)
         let strokes = editing.preview.map { points in
-            InkStroke(kind:.pen,r:Double(r),g:Double(g),b:Double(b),a:Double(a),points:points.map {
+            InkStroke(kind:.custom,r:Double(r),g:Double(g),b:Double(b),a:Double(a),points:points.map {
                 let p = canvas.convert($0,from:pdfView)
                 return InkPoint(x:Double(p.x),y:Double(p.y),width:Double(canvas.baseWidth*canvas.viewScale))
             })

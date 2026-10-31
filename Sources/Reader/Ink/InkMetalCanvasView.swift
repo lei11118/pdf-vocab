@@ -43,6 +43,7 @@ final class InkMetalCanvasView: MTKView {
     var baseWidth: CGFloat = 3.0
     /// 页面点 → 视图点(宿主每次刷新告知)
     var viewScale: CGFloat = 1
+    var rasterScale: CGFloat = 2
     var isDrawingEnabled = false {
         willSet { if !newValue { handleCancelled() } }
     }
@@ -50,7 +51,7 @@ final class InkMetalCanvasView: MTKView {
     var strokeProjector: ((CGPoint) -> ((CGPoint) -> CGPoint)?)?
     private var activeProjector: ((CGPoint) -> CGPoint)?
     /// 管线编译成功才允许接管触摸 —— 否则会"吞掉所有输入但什么都不画"
-    var isReady: Bool { pipeline != nil && compositePipeline != nil }
+    var isReady: Bool { pipeline != nil && compositePipeline != nil && grainTexture != nil }
 
     // MARK: - Metal
 
@@ -144,7 +145,7 @@ final class InkMetalCanvasView: MTKView {
             if (p.x < in.clip.x || p.y < in.clip.y || p.x > in.clip.z || p.y > in.clip.w) {
                 discard_fragment();
             }
-            float aa = max(fwidth(in.d), 0.6);
+            float aa = max(fwidth(in.d), 0.65 / max(pxPerPoint.x, pxPerPoint.y));
             float cov = 1.0 - smoothstep(in.hw - aa, in.hw, abs(in.d));
             float grain = 1.0;
             if (style > 0) {
@@ -280,7 +281,7 @@ final class InkMetalCanvasView: MTKView {
 
         let last = draft.points.last
         let dist = last.map { hypot(CGFloat(viewPoint.x) - CGFloat($0.x), CGFloat(viewPoint.y) - CGFloat($0.y)) } ?? 0
-        if last != nil, dist < 0.35, draft.points.count > 1 {
+        if last != nil, dist < 0.25 / max(1,rasterScale), draft.points.count > 1 {
             // 同一位置的重复采样(合并采样常见),只更新压力不新增顶点
             draft.points[draft.points.count - 1].force = Double(touch.force)
             return
@@ -349,7 +350,7 @@ final class InkMetalCanvasView: MTKView {
                 guard allowed.contains(where: { $0.contains(p) }) else { continue }
                 let last = live.points.last
                 let d = last.map { hypot(CGFloat(p.x) - CGFloat($0.x), CGFloat(p.y) - CGFloat($0.y)) } ?? 0
-                guard d > 0.35 else { continue }
+                guard d > 0.25 / max(1,rasterScale) else { continue }
                 live.points.append(InkPoint(x: Double(p.x), y: Double(p.y),
                                             width: last?.width ?? Double(baseWidth * viewScale),
                                             force: Double(t.force),
@@ -379,7 +380,7 @@ final class InkMetalCanvasView: MTKView {
     }
 
     private func appendVertices(_ stroke: InkStroke, clip: CGRect, into verts: inout [Vertex]) {
-        let pts = stroke.kind == .marker ? stroke.points : InkBrush.smoothed(stroke.points)
+        let pts = stroke.kind == .marker || stroke.kind == .custom ? stroke.points : InkBrush.smoothed(stroke.points)
         guard pts.count >= 2 else { return }
         let color = SIMD4<Float>(Float(stroke.r), Float(stroke.g), Float(stroke.b), Float(stroke.a))
         let visibleClip=clip.intersection(bounds)
@@ -387,7 +388,7 @@ final class InkMetalCanvasView: MTKView {
         let clipV = SIMD4<Float>(Float(clip.minX), Float(clip.minY), Float(clip.maxX), Float(clip.maxY))
 
         var halves = [CGFloat](repeating: 0.5, count: pts.count)
-        for i in 0..<pts.count { halves[i] = max(0.35, CGFloat(pts[i].width) * 0.5) }
+        for i in 0..<pts.count { halves[i] = max(0.05, CGFloat(pts[i].width) * 0.5) }
 
         // ① 每段一个四边形(带符号距离 d = ±半宽,片元里做 AA)
         for i in 0..<(pts.count - 1) {
@@ -435,7 +436,7 @@ final class InkMetalCanvasView: MTKView {
 
     private func appendDisc(center: CGPoint, radius: CGFloat, clip: SIMD4<Float>,
                             color: SIMD4<Float>, into verts: inout [Vertex]) {
-        let r = Float(max(0.4, radius))
+        let r = Float(max(0.05, radius))
         let c = SIMD2<Float>(Float(center.x), Float(center.y))
         let segments = 10
         for s in 0..<segments {
@@ -458,6 +459,7 @@ extension InkMetalCanvasView: MTKViewDelegate {
     @discardableResult
     func encodeFrame(to target: MTLTexture, commandBuffer: MTLCommandBuffer) -> Bool {
         guard let pipeline, let compositePipeline, let device else { return false }
+        if verticesRevision != renderRevision { rebuildVertices() }
         if coverageTexture?.width != target.width || coverageTexture?.height != target.height {
             let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
                          width: target.width, height: target.height, mipmapped: false)

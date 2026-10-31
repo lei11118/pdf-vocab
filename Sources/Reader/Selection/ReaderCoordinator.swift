@@ -270,6 +270,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
     func prepareForTeardown() {
+        metalHost?.detach()
         onTeardown?()
         overlayProvider?.flushAll()   // v0.9.0:收尾把未落盘的手写存库
         holdMenuWork?.cancel()
@@ -2439,6 +2440,7 @@ final class ReaderCoordinator: NSObject {
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if gestureRecognizer.view is SelectionHandleView { return true }
+        if touch.view is InkEditingOverlay { return false }
         if let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
         return true
     }

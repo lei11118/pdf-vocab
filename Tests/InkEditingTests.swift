@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import PDFKit
+import MetalKit
 @testable import PdfVocab
 
 @MainActor
@@ -75,6 +76,31 @@ final class InkEditingTests: XCTestCase {
         XCTAssertEqual(CGPoint(x:10,y:10).applying(t).x,10,accuracy:0.01)
         XCTAssertEqual(t.a,2,accuracy:0.01)
     }
+    func testZoomedVectorEdgeAndMemoryCacheRebuild() throws {
+        guard let device=MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
+        let canvas=InkMetalCanvasView();canvas.frame=CGRect(x:0,y:0,width:64,height:64)
+        let stroke=InkStroke(kind:.marker,r:1,g:1,b:0,a:0.3,points:[InkPoint(x:10,y:32,width:20),InkPoint(x:54,y:32,width:20)])
+        canvas.renderItems=[InkRenderItem(stroke:stroke,clip:canvas.bounds)]
+        let desc=MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.bgra8Unorm,width:512,height:512,mipmapped:false)
+        desc.storageMode = .shared;desc.usage=[.renderTarget,.shaderRead]
+        let target=try XCTUnwrap(device.makeTexture(descriptor:desc))
+        let queue=try XCTUnwrap(device.makeCommandQueue())
+        func render() throws -> [UInt8] {
+            let command=try XCTUnwrap(queue.makeCommandBuffer())
+            XCTAssertTrue(canvas.encodeFrame(to:target,commandBuffer:command));command.commit();command.waitUntilCompleted()
+            XCTAssertNil(command.error)
+            var bytes=[UInt8](repeating:0,count:512*512*4)
+            bytes.withUnsafeMutableBytes { target.getBytes($0.baseAddress!,bytesPerRow:512*4,from:MTLRegionMake2D(0,0,512,512),mipmapLevel:0) }
+            return bytes
+        }
+        let first=try render()
+        XCTAssertEqual(Double(first[(179*512+256)*4+3])/255,0.3,accuracy:2.0/255)
+        XCTAssertEqual(first[(174*512+256)*4+3],0)
+        canvas.releaseCachedResources()
+        let second=try render()
+        XCTAssertEqual(first,second)
+    }
+
     func testPressureRangeAndSmoothingPreserveEndpoints() {
         XCTAssertEqual(InkBrush.normalizedPressure(force:2,maximum:4),0.5)
         XCTAssertEqual(InkBrush.normalizedPressure(force:8,maximum:4),1)
@@ -96,6 +122,9 @@ final class InkEditingTests: XCTestCase {
         XCTAssertTrue(view.hitTest(p,with:nil) === handle)
         let scroll=try XCTUnwrap(view.documentView?.superview as? UIScrollView)
         XCTAssertFalse(scroll.isDirectionalLockEnabled)
-        _ = doc; _ = host
+        _ = doc
+        host.detach()
+        XCTAssertNil(host.superview)
+        XCTAssertFalse(view.subviews.contains { $0 is InkEditingOverlay })
     }
 }
