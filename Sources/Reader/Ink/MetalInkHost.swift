@@ -161,6 +161,7 @@ final class MetalInkHost: UIView {
         observedPinch=scroll.pinchGestureRecognizer
         observedPinch?.addTarget(self,action:#selector(pinchChanged(_:)))
         scroll.isDirectionalLockEnabled = false
+        scroll.bouncesZoom = false
         scroll.panGestureRecognizer.require(toFail:editing.pan)
         observations = [
             scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() },

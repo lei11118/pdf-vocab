@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Bounded spring dynamics in graph coordinates; camera scale never affects mass.
 enum VocabGraphPhysics {

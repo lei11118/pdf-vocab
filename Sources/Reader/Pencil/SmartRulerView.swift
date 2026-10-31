@@ -1,7 +1,7 @@
 import UIKit
 
-/// An analytical infinite line, rendered only inside the viewport. Position is
-/// independent of PDF layout; moving the document never moves the ruler.
+/// An analytical infinite line rendered inside the viewport. The pose is stored
+/// in document coordinates and projected into the viewport after scroll/zoom.
 final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     static let barHeight:CGFloat=80
     static let snapTargetsDegrees:[Double]=[0,30,45,60,90,120,135,180]
