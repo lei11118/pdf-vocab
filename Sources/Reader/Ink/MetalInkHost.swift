@@ -245,11 +245,11 @@ final class MetalInkHost: UIView {
             return abs(rect.minX-old.minX) < 0.001 && abs(rect.minY-old.minY) < 0.001 &&
                    abs(rect.width-old.width) < 0.001 && abs(rect.height-old.height) < 0.001
         }
-        refreshSelectionOverlay()
-        if sameGeometry && !geometryChanged && !resolutionChanged && !needsInkRefresh { return }
+        if sameGeometry && !geometryChanged && !resolutionChanged && !needsInkRefresh { refreshSelectionOverlay();return }
         needsInkRefresh = false
         boxes = nextBoxes
         mappings = docMappings.mapValues { $0.concatenating(shift) }
+        refreshSelectionOverlay()
         canvas.clipRects = boxes.values.filter { $0.intersects(bounds) }
         let scale = mappings[current].map { hypot($0.a,$0.b) } ?? 1
         canvas.viewScale = scale

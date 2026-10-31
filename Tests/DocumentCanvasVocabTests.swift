@@ -32,6 +32,8 @@ final class DocumentCanvasVocabTests: XCTestCase {
     func testBoundaryTouchDoesNotCreateEmptyFragment() {
         var s=stroke();s.points[1].y=100
         XCTAssertEqual(InkContinuity.partition(s,boxes:boxes,maps:maps).map(\.page),[0])
+        s.points=[InkPoint(x:30,y:100,width:2),InkPoint(x:30,y:100,width:2)]
+        XCTAssertEqual(InkContinuity.partition(s,boxes:boxes,maps:maps).map(\.page),[0])
     }
     func testLegacyJSONHasNoIdentityAndEraserGapIsNotBridged() throws {
         let json=Data(#"{"strokes":[{"kind":"pen","r":0,"g":0,"b":0,"a":1,"points":[]}]}"#.utf8)

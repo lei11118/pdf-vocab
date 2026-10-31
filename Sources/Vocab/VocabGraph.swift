@@ -215,9 +215,13 @@ struct VocabGraphView: View {
         let key=search.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
         let selected=Array(words.filter { key.isEmpty || $0.surface.lowercased().contains(key) || $0.lemma.contains(key) }.prefix(VocabRelationService.nodeLimit))
         let selectedMode=mode, pairs=selected.map { ($0.id,$0.lemma) }
-        let result=await Task.detached(priority:.utility) { VocabRelationService.build(words:pairs,mode:selectedMode) }.value
+        let computed=await Task.detached(priority:.utility) {
+            let result=VocabRelationService.build(words:pairs,mode:selectedMode)
+            return (result,VocabRelationService.layout(ids:pairs.map(\.0),edges:result.edges))
+        }.value
         guard !Task.isCancelled else { return }
-        var layout=VocabRelationService.layout(ids:selected.map(\.id),edges:result.edges)
+        let result=computed.0
+        var layout=computed.1
         let stored=store.graphPositions(mode:selectedMode.rawValue)
         for id in layout.keys { if let p=stored[id] { layout[id]=p } }
         shown=selected;positions=layout;data=result;loading=false

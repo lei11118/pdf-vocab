@@ -53,6 +53,34 @@ final class InkEditingTests: XCTestCase {
         host.undo();XCTAssertEqual(try saved(0).strokes.count,1);XCTAssertTrue(try saved(1).isEmpty)
         host.redo();XCTAssertEqual(try saved(1).strokes.count,1)
     }
+    func testCrossPageLogicalSelectionWholeEraseAndUndo() throws {
+        let (view,doc,host,store,sha)=try fixture()
+        defer { for i in 0..<2 { store.delete(docSha:sha,page:i) } }
+        let first=try XCTUnwrap(doc.page(at:0)),second=try XCTUnwrap(doc.page(at:1))
+        func point(_ y:CGFloat,page:PDFPage)->CGPoint {
+            let box=page.bounds(for:.cropBox)
+            return view.convert(CGPoint(x:box.minX+80,y:box.maxY-y),from:page)
+        }
+        let a=point(580,page:first),b=point(20,page:second)
+        host.commit(InkStroke(kind:.pen,r:0,g:0,b:0,a:1,points:[a,b].map {
+            let p=host.convert($0,from:view);return InkPoint(x:Double(p.x),y:Double(p.y),width:2)
+        }))
+        func saved(_ page:Int)throws->InkPage {
+            try XCTUnwrap(InkPage.decode(try XCTUnwrap(store.drawing(docSha:sha,page:page)).data))
+        }
+        XCTAssertEqual(try saved(0).strokes.count,1);XCTAssertEqual(try saved(1).strokes.count,1)
+        let id=try XCTUnwrap(saved(0).strokes.first?.strokeID)
+        XCTAssertEqual(try saved(1).strokes.first?.strokeID,id)
+        host.applyTool(kind:.lasso,color:.black,baseWidth:2,eraserRadius:8,whole:true)
+        host.selectInk(in:[CGPoint(x:a.x-5,y:a.y-5),CGPoint(x:a.x+5,y:a.y-5),CGPoint(x:a.x+5,y:a.y+5),CGPoint(x:a.x-5,y:a.y+5)])
+        XCTAssertEqual(host.selectedInkCount,2)
+        host.applyTool(kind:.eraser,color:.black,baseWidth:2,eraserRadius:8,whole:true)
+        host.erase(at:host.convert(a,from:view));host.finishErase()
+        XCTAssertTrue(try saved(0).isEmpty);XCTAssertTrue(try saved(1).isEmpty)
+        host.undo()
+        XCTAssertEqual(try saved(0).strokes.count,1);XCTAssertEqual(try saved(1).strokes.count,1)
+        host.redo();XCTAssertTrue(try saved(0).isEmpty);XCTAssertTrue(try saved(1).isEmpty)
+    }
     func testAllShapesPreviewCommitAndUndoAsOneOperation() throws {
         let (view,_,host,store,sha)=try fixture()
         defer { for i in 0..<2 { store.delete(docSha:sha,page:i) } }

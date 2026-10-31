@@ -35,11 +35,13 @@ enum InkContinuity {
             result.append(Piece(page:page,stroke:piece));run=[]
         }
         for (a,b) in zip(source.points,source.points.dropFirst()) {
-            let hits=boxes.keys.sorted().compactMap { page -> (Int,ClosedRange<Double>)? in
+            var hits=boxes.keys.sorted().compactMap { page -> (Int,ClosedRange<Double>)? in
                 guard let r=interval(a.cg,b.cg,in:boxes[page]!) else { return nil }
                 if hypot(a.x-b.x,a.y-b.y)>1e-9 && r.upperBound-r.lowerBound<1e-9 { return nil }
                 return (page,r)
             }.sorted { $0.1.lowerBound == $1.1.lowerBound ? $0.0<$1.0 : $0.1.lowerBound<$1.1.lowerBound }
+            // A tap exactly on a shared border belongs to one page only.
+            if hypot(a.x-b.x,a.y-b.y)<1e-9 { hits=Array(hits.prefix(1)) }
             for (page,r) in hits {
                 let first=mix(a,b,r.lowerBound),last=mix(a,b,r.upperBound)
                 if current != page || run.last.map({ hypot($0.x-first.x,$0.y-first.y)>0.01 }) == true { flush();current=page }
