@@ -38,14 +38,17 @@ enum OCRService {
     // MARK: - 整本识别(后台;按页落库;可取消——取消则不标记完成,下次打开续跑)
 
     static func run(url: URL, docSha: String, store: OCRStore, progress: @escaping (Int, Int) -> Void) async {
-        guard let doc = PDFDocument(url: url) else { return }
-        let total = doc.pageCount
+        guard var doc = PDFDocument(url:url) else { return }
+        let total=doc.pageCount
         for i in 0..<total {
             if Task.isCancelled { return }
             progress(i, total)
-            guard let page = doc.page(at: i) else { continue }
-            let words = recognize(page: page)
-            store.save(docSha: docSha, page: i, words: words)
+            if i>0 && i%32==0, let fresh=PDFDocument(url:url) { doc=fresh }
+            autoreleasepool {
+                guard let page=doc.page(at:i) else { return }
+                let words=recognize(page:page)
+                if !Task.isCancelled { store.save(docSha:docSha,page:i,words:words) }
+            }
         }
         progress(total, total)
         store.markDone(docSha: docSha)
@@ -54,11 +57,16 @@ enum OCRService {
     // MARK: - 单页识别
 
     /// 渲染页面(约 180 DPI)→ Vision 逐行识别 → 正则切词 → 逐词取包围框。
+    static func renderingSize(for bounds: CGRect) -> CGSize {
+        guard bounds.width.isFinite,bounds.height.isFinite,bounds.width>1,bounds.height>1 else { return .zero }
+        let density=min(2.5,min(4096/max(bounds.width,bounds.height),sqrt(6_000_000/(bounds.width*bounds.height))))
+        return CGSize(width:floor(bounds.width*density),height:floor(bounds.height*density))
+    }
     static func recognize(page: PDFPage) -> [OCRWord] {
         let pageBounds = page.bounds(for: .mediaBox)
         guard pageBounds.width > 1, pageBounds.height > 1 else { return [] }
-        let scale: CGFloat = 2.5
-        let target = CGSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
+        let target=renderingSize(for:pageBounds)
+        guard target.width>1,target.height>1 else { return [] }
         guard let cgImage = page.thumbnail(of: target, for: .mediaBox).cgImage else { return [] }
 
         let request = VNRecognizeTextRequest()

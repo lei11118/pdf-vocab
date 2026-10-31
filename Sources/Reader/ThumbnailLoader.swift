@@ -17,7 +17,19 @@ final class ThumbnailLoader: ObservableObject {
     private var workers: [Worker] = []
     private var rr = 0
     private var pending = Set<Int>()
-    private var cancelled = false
+    private let stateLock=NSLock()
+    private var cancelledFlag=false
+    private var cancelled: Bool {
+        get { stateLock.lock();defer { stateLock.unlock() };return cancelledFlag }
+        set { stateLock.lock();cancelledFlag=newValue;stateLock.unlock() }
+    }
+    private func publish(_ image: UIImage, at index: Int) {
+        images[index]=image
+        if images.count>96 {
+            let farthest=images.keys.sorted { abs($0-index)>abs($1-index) }
+            for key in farthest.prefix(images.count-96) { images.removeValue(forKey:key) }
+        }
+    }
 
     private final class Worker {
         let queue: DispatchQueue
@@ -56,7 +68,7 @@ final class ThumbnailLoader: ObservableObject {
                 DispatchQueue.main.async {
                     self.pending.remove(index)
                     guard !self.cancelled else { return }
-                    self.images[index] = cached
+                    self.publish(cached,at:index)
                 }
                 return
             }
@@ -77,14 +89,14 @@ final class ThumbnailLoader: ObservableObject {
         rr += 1
         worker.queue.async { [weak self] in
             guard let self, !self.cancelled else { return }
-            if worker.doc == nil, let url = self.url {
-                worker.doc = PDFDocument(url: url)
+            let image: UIImage? = autoreleasepool {
+                if worker.doc == nil, let url = self.url { worker.doc = PDFDocument(url:url) }
+                return worker.doc?.page(at:index)?.thumbnail(of:self.renderSize,for:.cropBox)
             }
-            let image = worker.doc?.page(at: index)?.thumbnail(of: self.renderSize, for: .cropBox)
             DispatchQueue.main.async {
                 self.pending.remove(index)
                 guard !self.cancelled, let image else { return }
-                self.images[index] = image
+                self.publish(image,at:index)
                 self.writeToDisk(index, image)
             }
         }
@@ -101,7 +113,9 @@ final class ThumbnailLoader: ObservableObject {
     /// 面板关闭时调用:丢弃在途工作、释放独立文档实例。
     func invalidate() {
         cancelled = true
-        workers.forEach { $0.doc = nil }
+        images.removeAll()
+        // PDFDocument is owned exclusively by its worker queue, including teardown.
+        workers.forEach { worker in worker.queue.async { worker.doc=nil } }
     }
 
     deinit {

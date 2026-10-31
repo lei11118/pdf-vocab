@@ -101,6 +101,26 @@ final class InkEditingTests: XCTestCase {
         XCTAssertEqual(first,second)
     }
 
+    func testOCRRenderingBudgetAndThumbnailTeardown() async throws {
+        for rect in [CGRect(x:0,y:0,width:595,height:842),CGRect(x:0,y:0,width:10000,height:20000)] {
+            let size=OCRService.renderingSize(for:rect)
+            XCTAssertLessThanOrEqual(size.width*size.height,6_000_000)
+            XCTAssertLessThanOrEqual(max(size.width,size.height),4096)
+            XCTAssertGreaterThan(min(size.width,size.height),1)
+        }
+        XCTAssertEqual(OCRService.renderingSize(for:.zero),.zero)
+        // Exercise actual worker ownership and cancellation with an isolated PDF.
+        let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".pdf")
+        defer { try? FileManager.default.removeItem(at:url) }
+        let renderer=UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:600))
+        try renderer.writePDF(to:url) { ctx in for _ in 0..<8 { ctx.beginPage() } }
+        let loader=ThumbnailLoader(url:url)
+        for i in 0..<8 { loader.request(i) }
+        loader.invalidate()
+        try await Task.sleep(nanoseconds:100_000_000)
+        XCTAssertTrue(loader.images.isEmpty)
+    }
+
     func testPressureRangeAndSmoothingPreserveEndpoints() {
         XCTAssertEqual(InkBrush.normalizedPressure(force:2,maximum:4),0.5)
         XCTAssertEqual(InkBrush.normalizedPressure(force:8,maximum:4),1)

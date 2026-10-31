@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// 轻量诊断日志:追加写入 Documents/diagnostics.log。
 /// 用户可在「文件」App → 我的 iPad → 跃文 → diagnostics.log 中查看并反馈。
@@ -48,6 +49,26 @@ enum DiagLog {
             } else {
                 try? line.write(to: url, atomically: true, encoding: .utf8)
             }
+        }
+    }
+}
+
+/// Local lifecycle breadcrumbs help distinguish an idle termination from input failures.
+enum RuntimeDiagnostics {
+    private static var observers: [NSObjectProtocol]=[]
+    static func beginSession() {
+        guard observers.isEmpty else { return }
+        let key="diagnostics.previousSessionPhase"
+        if let previous=UserDefaults.standard.string(forKey:key) { DiagLog.log("session: previous phase=\(previous); termination cause unknown") }
+        UserDefaults.standard.set("active",forKey:key)
+        let events: [(Notification.Name,String)]=[(UIApplication.didReceiveMemoryWarningNotification,"memory-warning"),
+            (UIApplication.didEnterBackgroundNotification,"background"),(UIApplication.willEnterForegroundNotification,"active"),
+            (UIApplication.willTerminateNotification,"terminated")]
+        for (name,label) in events {
+            observers.append(NotificationCenter.default.addObserver(forName:name,object:nil,queue:.main) { _ in
+                if label != "memory-warning" { UserDefaults.standard.set(label,forKey:key) }
+                DiagLog.log("session: \(label)")
+            })
         }
     }
 }
