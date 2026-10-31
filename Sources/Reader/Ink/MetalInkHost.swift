@@ -190,7 +190,8 @@ final class MetalInkHost: UIView {
         var docRects: [Int: CGRect] = [:]
         var docMappings: [Int: CGAffineTransform] = [:]
         var window = CGRect.null
-        for index in max(0,current-1)...min(document.pageCount-1,current+1) {
+        let wanted=Set(max(0,current-1)...min(document.pageCount-1,current+1)).union(selected.keys)
+        for index in wanted.sorted() {
             guard let page = document.page(at: index) else { continue }
             let box = page.bounds(for: pdfView.displayBox)
             func convert(_ p: CGPoint) -> CGPoint { docView.convert(pdfView.convert(p, from: page), from: pdfView) }
@@ -249,7 +250,7 @@ final class MetalInkHost: UIView {
         needsInkRefresh = false
         boxes = nextBoxes
         mappings = docMappings.mapValues { $0.concatenating(shift) }
-        canvas.clipRects = Array(boxes.values)
+        canvas.clipRects = boxes.values.filter { $0.intersects(bounds) }
         let scale = mappings[current].map { hypot($0.a,$0.b) } ?? 1
         canvas.viewScale = scale
         var items: [InkRenderItem] = []
@@ -304,14 +305,30 @@ final class MetalInkHost: UIView {
     func erase(at point: CGPoint) {
         let previous = lastEraserPoint ?? point; lastEraserPoint = point
         var changed = false
+        var removedIDs=Set<UUID>()
         for index in boxes.keys {
             guard let mapping = mappings[index] else { continue }
             let inverse = mapping.inverted()
             let before = pageInk(index)
             let result = InkEraser.erase(before.strokes, from: previous.applying(inverse), to: point.applying(inverse), radius: eraserRadius, whole: eraserWhole)
             if result.changed {
+                if eraserWhole {
+                    let remaining=Set(result.strokes.compactMap(\.strokeID))
+                    removedIDs.formUnion(before.strokes.compactMap(\.strokeID).filter { !remaining.contains($0) })
+                }
                 if eraseBefore[index] == nil { eraseBefore[index] = before }
                 pages[index] = InkPage(strokes: result.strokes); changed = true
+            }
+        }
+        if !removedIDs.isEmpty {
+            let linked=Set(store?.pages(containing:removedIDs,docSha:docSha) ?? []).union(pages.keys)
+            for index in linked {
+                let before=pageInk(index)
+                let kept=before.strokes.filter { $0.strokeID.map { !removedIDs.contains($0) } ?? true }
+                if kept.count != before.strokes.count {
+                    if eraseBefore[index]==nil { eraseBefore[index]=before }
+                    pages[index]=InkPage(strokes:kept);changed=true
+                }
             }
         }
         if changed { needsInkRefresh = true; scheduleRefresh() }
@@ -381,7 +398,16 @@ final class MetalInkHost: UIView {
                 }
             }
         }
-        refreshSelectionOverlay()
+        let ids=Set(selected.flatMap { page,refs in refs.compactMap { index in
+            let strokes=pageInk(page).strokes
+            return strokes.indices.contains(index) ? strokes[index].strokeID:nil
+        } })
+        for page in store?.pages(containing:ids,docSha:docSha) ?? [] {
+            for (i,stroke) in pageInk(page).strokes.enumerated() {
+                if let id=stroke.strokeID,ids.contains(id) { selected[page,default:[]].insert(i) }
+            }
+        }
+        needsInkRefresh=true;refresh()
     }
     var selectedInkCount: Int { selected.values.reduce(0) { $0+$1.count } }
     private func refreshSelectionOverlay() {
@@ -410,34 +436,31 @@ final class MetalInkHost: UIView {
             value.strokes = value.strokes.enumerated().filter { !indices.contains($0.offset) }.map { $0.element }
             updated[page] = value
         }
-        for (page,indices) in transformRefs {
-            guard let original = transformBefore[page] else { continue }
-            for i in indices where original.strokes.indices.contains(i) {
-                let stroke = original.strokes[i]
-                var destinations: [(Int,InkPoint)] = []
-                for p in stroke.points {
-                    guard let v = viewport(p,page:page) else { return }
-                    let moved = canvas.convert(v.applying(transform),from:pdfView)
-                    guard let owner = boxes.first(where: { $0.value.contains(moved) })?.key, let map = mappings[owner] else { return }
-                    let local = moved.applying(map.inverted())
-                    var q = p; q.x = Double(local.x); q.y = Double(local.y)
-                    q.width *= Double(sqrt(abs(transform.a*transform.d-transform.b*transform.c)))
-                    destinations.append((owner,q))
-                }
-                var owner: Int?; var run: [InkPoint] = []
-                func flush() {
-                    guard let page = owner, !run.isEmpty else { return }
-                    if run.count == 1 { run.append(run[0]) }
-                    var piece = stroke; piece.points = run
-                    var bucket = updated[page] ?? InkPage()
-                    refs[page,default:[]].insert(bucket.strokes.count)
-                    bucket.strokes.append(piece); updated[page] = bucket; run.removeAll()
-                }
-                for (page,p) in destinations {
-                    if owner != page { flush(); owner = page }
-                    run.append(p)
-                }
-                flush()
+        var originals:[(Int,InkStroke)]=[]
+        for page in transformRefs.keys.sorted() {
+            guard let original=transformBefore[page] else { continue }
+            for i in transformRefs[page]!.sorted() where original.strokes.indices.contains(i) { originals.append((page,original.strokes[i])) }
+        }
+        originals=originals.enumerated().sorted {
+            ($0.element.1.fragmentOrder ?? 0,$0.offset)<($1.element.1.fragmentOrder ?? 0,$1.offset)
+        }.map(\.element)
+        var nextOrder:[UUID:Int]=[:]
+        for (page,stroke) in originals {
+            guard let sourceMap=mappings[page] else { return }
+            var moved=stroke
+            let id=stroke.strokeID ?? UUID();moved.strokeID=id
+            let widthScale=hypot(sourceMap.a,sourceMap.b)*sqrt(abs(transform.a*transform.d-transform.b*transform.c))
+            moved.points=stroke.points.map { p in
+                let v=canvas.convert(canvas.convert(p.cg.applying(sourceMap),to:pdfView).applying(transform),from:pdfView)
+                var q=p;q.x=Double(v.x);q.y=Double(v.y);q.width*=Double(widthScale);return q
+            }
+            guard moved.points.allSatisfy({ p in boxes.values.contains { $0.insetBy(dx:-0.001,dy:-0.001).contains(p.cg) } }) else { return }
+            let pieces=InkContinuity.partition(moved,boxes:boxes,maps:mappings,startOrder:nextOrder[id] ?? 0)
+            nextOrder[id]=(nextOrder[id] ?? 0)+pieces.count
+            for piece in pieces {
+                var bucket=updated[piece.page] ?? InkPage()
+                refs[piece.page,default:[]].insert(bucket.strokes.count)
+                bucket.strokes.append(piece.stroke);updated[piece.page]=bucket
             }
         }
         for (page,value) in updated { pages[page] = value }

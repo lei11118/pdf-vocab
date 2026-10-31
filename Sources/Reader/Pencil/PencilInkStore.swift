@@ -37,6 +37,23 @@ struct PencilInkStore: Sendable {
         }
     }
 
+    /// Find linked fragments without decoding every ink page in memory. Results
+    /// are validated by the caller after decoding; binary legacy drawings have no IDs.
+    func pages(containing ids:Set<UUID>,docSha:String)->[Int] {
+        guard !ids.isEmpty else { return [] }
+        let values=ids.map { $0.uuidString.lowercased() }.sorted()
+        var found=Set<Int>()
+        for offset in stride(from:0,to:values.count,by:64) {
+            let chunk=Array(values[offset..<min(offset+64,values.count)])
+            let condition=chunk.map { _ in "instr(lower(CAST(data AS TEXT)),?)>0" }.joined(separator:" OR ")
+            var args:[DatabaseValueConvertible?]=[docSha]
+            for value in chunk { args.append(value) }
+            let pages=(try? db.dbQueue.read { try Int.fetchAll($0,sql:"SELECT page FROM pencil_ink WHERE docSha=? AND ("+condition+")",arguments:StatementArguments(args)) }) ?? []
+            found.formUnion(pages)
+        }
+        return found.sorted()
+    }
+
     func delete(docSha: String, page: Int) {
         try? db.dbQueue.write { db in
             try db.execute(sql: "DELETE FROM pencil_ink WHERE docSha = ? AND page = ?", arguments: [docSha, page])

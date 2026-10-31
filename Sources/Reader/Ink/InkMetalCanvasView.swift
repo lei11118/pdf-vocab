@@ -101,7 +101,7 @@ final class InkMetalCanvasView: MTKView {
         commandQueue = dev?.makeCommandQueue()
         buildPipeline(device: dev)
         if let dev {
-            if let image=UIImage(named:"ink-grain-v1")?.cgImage {
+            if let image=UIImage(named:"ink-material-atlas-v2")?.cgImage {
                 grainTexture=try? MTKTextureLoader(device:dev).newTexture(cgImage:image,options:[.SRGB:false])
             }
             if grainTexture == nil {
@@ -156,6 +156,8 @@ final class InkMetalCanvasView: MTKView {
             if (style > 0) {
                 constexpr sampler paper(coord::normalized,filter::linear,address::repeat);
                 float2 uv=(p-in.clip.xy)/(style==1 ? 96.0 : 160.0);
+                uv=fract(uv);
+                uv.x=0.001+uv.x*0.498+(style==1 ? 0.0 : 0.5);
                 float fleck=1.0-grainMap.sample(paper,uv).r;
                 grain=style==1 ? 0.18+0.82*smoothstep(0.01,0.5,fleck)
                               : 0.4+0.6*smoothstep(0.01,0.35,fleck);

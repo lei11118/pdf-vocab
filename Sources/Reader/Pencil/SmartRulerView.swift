@@ -17,7 +17,7 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     private var turnPivot=CGPoint.zero
     private var turnAngle:CGFloat?
     private let haptic=UIImpactFeedbackGenerator(style:.light)
-    private lazy var pan=UIPanGestureRecognizer(target:self,action:#selector(move(_:)))
+    private lazy var pan=UIPanGestureRecognizer(target:self,action:#selector(dragRuler(_:)))
     init(length:CGFloat,host:UIView) {
         hostView=host
         super.init(frame:host.bounds)
@@ -71,7 +71,7 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     override func point(inside point:CGPoint,with event:UIEvent?)->Bool {
         isOn && bounds.contains(point) && abs(signedDistance(point))<=Self.barHeight/2+6
     }
-    @objc private func move(_ g:UIPanGestureRecognizer) {
+    @objc private func dragRuler(_ g:UIPanGestureRecognizer) {
         guard turnAngle==nil else { return }
         switch g.state {
         case .began:dragOrigin=rulerPosition
