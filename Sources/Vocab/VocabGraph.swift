@@ -1,5 +1,6 @@
 import SwiftUI
 import GRDB
+import Combine
 
 enum VocabGraphMode: String, CaseIterable, Identifiable, Sendable {
     case morphology, synonym, mixed
@@ -109,9 +110,13 @@ extension VocabStore {
         }) ?? [:]
     }
     func saveGraphPosition(_ point: CGPoint, word: Int64, mode: String) {
-        guard point.x.isFinite,point.y.isFinite else { return }
+        saveGraphPositions([word:point],mode:mode)
+    }
+    func saveGraphPositions(_ positions:[Int64:CGPoint],mode:String) {
         try? db.dbQueue.write { db in
-            try db.execute(sql: "INSERT OR REPLACE INTO vocab_graph_position(wordId,mode,x,y) VALUES(?,?,?,?)", arguments: [word,mode,Double(point.x),Double(point.y)])
+            for (word,point) in positions where point.x.isFinite && point.y.isFinite {
+                try db.execute(sql: "INSERT OR REPLACE INTO vocab_graph_position(wordId,mode,x,y) VALUES(?,?,?,?)", arguments: [word,mode,Double(point.x),Double(point.y)])
+            }
         }
     }
 }
@@ -135,10 +140,24 @@ struct VocabGraphView: View {
     @State private var evidence: String?
     @State private var sources = false
     @State private var loading = false
+    @State private var velocities:[Int64:CGVector]=[:]
+    @State private var simulationTicks=0
+    @State private var layoutMode=VocabGraphMode.mixed.rawValue
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let clock=Timer.publish(every:1/30,on:.main,in:.common).autoconnect()
 
     var body: some View {
         NavigationStack {
             VStack(spacing: DS.Space.s) {
+                HStack(alignment:.firstTextBaseline) {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text("词与词的星群").font(DS.Fonts.display3).foregroundStyle(DS.foreground1)
+                        Text("LEXICAL ATLAS").font(DS.Fonts.caption2).tracking(3).foregroundStyle(DS.accent)
+                    }
+                    Spacer()
+                    Image(systemName:"circle.hexagongrid").font(.system(size:32,weight:.ultraLight)).foregroundStyle(DS.accent.opacity(0.5))
+                }.padding(.vertical,DS.Space.s)
                 Picker("连线方式", selection: $mode) { ForEach(VocabGraphMode.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
                 TextField("搜索生词", text: $search).textFieldStyle(.roundedBorder)
                 HStack {
@@ -159,25 +178,39 @@ struct VocabGraphView: View {
                                 }) { evidence=edge.evidence }
                             })
                         Canvas { context,size in
+                            let spacing=48*zoom
+                            let origin=screen(.zero,center:center)
+                            let x0=origin.x.truncatingRemainder(dividingBy:spacing),y0=origin.y.truncatingRemainder(dividingBy:spacing)
+                            var grid=Path()
+                            for x in stride(from:x0-spacing,through:size.width+spacing,by:spacing) { grid.move(to:CGPoint(x:x,y:0));grid.addLine(to:CGPoint(x:x,y:size.height)) }
+                            for y in stride(from:y0-spacing,through:size.height+spacing,by:spacing) { grid.move(to:CGPoint(x:0,y:y));grid.addLine(to:CGPoint(x:size.width,y:y)) }
+                            context.stroke(grid,with:.color(DS.foreground3.opacity(0.09)),lineWidth:0.5)
                             for edge in data.edges {
                                 guard let a=positions[edge.a],let b=positions[edge.b] else { continue }
                                 var path=Path();path.move(to:screen(a,center:center));path.addLine(to:screen(b,center:center))
-                                context.stroke(path,with:.color((edge.morphology ? DS.accent : DS.foreground3).opacity(0.45)),lineWidth:edge.morphology ? 1.5:1)
+                                context.stroke(path,with:.color((edge.morphology ? DS.accent : DS.foreground3).opacity(0.35)),lineWidth:(edge.morphology ? 1.5:1)*zoom)
                             }
                         }.allowsHitTesting(false)
                         ForEach(shown) { word in
                             if let point=positions[word.id] {
                                 Button { detail=word } label: {
-                                    Text(word.surface).font(DS.Fonts.caption2).foregroundStyle(DS.foreground1).padding(DS.Space.xs)
-                                        .background(DS.background2,in:Capsule()).overlay(Capsule().stroke(DS.accent.opacity(0.6),lineWidth:1))
+                                    HStack(spacing:6) {
+                                        Circle().fill(DS.accent).frame(width:5,height:5)
+                                        Text(word.surface).font(DS.Fonts.caption2).foregroundStyle(DS.foreground1)
+                                    }.padding(.horizontal,12).padding(.vertical,9)
+                                        .background(DS.background2,in:Capsule()).overlay(Capsule().stroke(DS.accent.opacity(0.35),lineWidth:0.8))
+                                        .shadow(color:DS.accent.opacity(nodeStarts[word.id] == nil ? 0.08:0.2),radius:nodeStarts[word.id] == nil ? 6:12,y:3)
                                 }
-                                .buttonStyle(.plain).position(screen(point,center:center))
+                                .buttonStyle(.plain).scaleEffect(zoom).position(screen(point,center:center))
                                 .simultaneousGesture(DragGesture(minimumDistance:5).onChanged { value in
                                     if nodeStarts[word.id]==nil { nodeStarts[word.id]=positions[word.id] }
                                     let start=nodeStarts[word.id]!
                                     positions[word.id]=CGPoint(x:start.x+value.translation.width/zoom,y:start.y+value.translation.height/zoom)
-                                }.onEnded { _ in
+                                    simulationTicks=120
+                                }.onEnded { value in
                                     nodeStarts[word.id]=nil
+                                    velocities[word.id]=CGVector(dx:(value.predictedEndTranslation.width-value.translation.width)/zoom,dy:(value.predictedEndTranslation.height-value.translation.height)/zoom)
+                                    simulationTicks=120
                                     if let p=positions[word.id] { store.saveGraphPosition(p,word:word.id,mode:mode.rawValue) }
                                 })
                             }
@@ -186,7 +219,8 @@ struct VocabGraphView: View {
                             VStack { Spacer();Text(data.available ? "当前范围暂无有来源依据的关联，可切换模式或搜索其他词。" : "关系数据不可用，现有生词不受影响。").font(DS.Fonts.caption2).foregroundStyle(DS.foreground3).padding() }.allowsHitTesting(false)
                         }
                     }
-                    .clipped()
+                    .clipped().background(DS.background2,in:RoundedRectangle(cornerRadius:24))
+                    .overlay(RoundedRectangle(cornerRadius:24).stroke(DS.foreground3.opacity(0.12),lineWidth:0.8)).clipShape(RoundedRectangle(cornerRadius:24))
                     .simultaneousGesture(MagnificationGesture().onChanged { zoom=max(0.2,min(4,zoomStart*$0)) }.onEnded { _ in zoomStart=zoom })
                 }
                 Text("蓝线：词根词缀词例 · 灰线：共享英文义项；点击连线查看依据。最多展示 250 词，可搜索定位。")
@@ -195,10 +229,12 @@ struct VocabGraphView: View {
             .padding(DS.Space.m).background(DS.background1)
             .navigationTitle("知识图谱").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement:.topBarLeading) { Button("返回词表") { dismiss() } }
+                ToolbarItem(placement:.topBarLeading) { Button("返回") { dismiss() } }
                 ToolbarItem(placement:.topBarTrailing) { Button("数据来源") { sources=true } }
             }
             .task(id:mode.rawValue+":"+search) { await load() }
+            .onReceive(clock) { _ in tickPhysics() }
+            .onDisappear { persistPositions();simulationTicks=0 }
             .sheet(item:$detail) { VocabularyDetailView(store:store,word:$0,onJump:onJump) }
             .alert("关联依据",isPresented:Binding(get:{evidence != nil},set:{if !$0 { evidence=nil }})) { Button("关闭") { evidence=nil } } message: { Text(evidence ?? "") }
             .sheet(isPresented:$sources) {
@@ -210,8 +246,20 @@ struct VocabGraphView: View {
         }
     }
     private func screen(_ point: CGPoint, center: CGPoint) -> CGPoint { CGPoint(x:center.x+pan.width+point.x*zoom,y:center.y+pan.height+point.y*zoom) }
+    private func persistPositions() {
+        store.saveGraphPositions(positions,mode:layoutMode)
+    }
+    private func tickPhysics() {
+        guard scenePhase == .active,!loading,simulationTicks>0,!reduceMotion else { return }
+        var p=positions,v=velocities
+        let speed=VocabGraphPhysics.step(positions:&p,velocities:&v,edges:data.edges,pinned:Set(nodeStarts.keys))
+        positions=p;velocities=v;simulationTicks-=1
+        if speed<0.2 && nodeStarts.isEmpty { simulationTicks=0 }
+        if simulationTicks==0 { persistPositions() }
+    }
     @MainActor private func load() async {
-        loading=true
+        persistPositions()
+        loading=true;simulationTicks=0;nodeStarts=[:];velocities=[:]
         let key=search.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
         let selected=Array(words.filter { key.isEmpty || $0.surface.lowercased().contains(key) || $0.lemma.contains(key) }.prefix(VocabRelationService.nodeLimit))
         let selectedMode=mode, pairs=selected.map { ($0.id,$0.lemma) }
@@ -224,6 +272,7 @@ struct VocabGraphView: View {
         var layout=computed.1
         let stored=store.graphPositions(mode:selectedMode.rawValue)
         for id in layout.keys { if let p=stored[id] { layout[id]=p } }
-        shown=selected;positions=layout;data=result;loading=false
+        shown=selected;positions=layout;data=result;layoutMode=selectedMode.rawValue;loading=false
+        simulationTicks=stored.isEmpty ? 90:0
     }
 }

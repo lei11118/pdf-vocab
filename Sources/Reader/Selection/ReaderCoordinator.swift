@@ -325,6 +325,7 @@ final class ReaderCoordinator: NSObject {
 
         // 防跳页:紧跟选区变化(0.8s 内)的跨页"前跳"判为异常,拉回上次稳定页
         if now > jumpGuardUntil,
+           !(PencilTouchIsolation.scrollViews(in:pdfView).contains { $0.isZooming || $0.isZoomBouncing || $0.isDragging || $0.isDecelerating }),
            now - lastAnySelectionChangeTime < 0.8,
            abs(index - lastGoodPage.index) > 5,
            index > lastGoodPage.index {
@@ -375,7 +376,7 @@ final class ReaderCoordinator: NSObject {
 
         let pencilPress = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
         pencilPress.delegate = self
-        pencilPress.minimumPressDuration = 0.45
+        pencilPress.minimumPressDuration = 0
         pencilPress.allowableMovement = 14
         pencilPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         view.addGestureRecognizer(pencilPress)
@@ -525,6 +526,7 @@ final class ReaderCoordinator: NSObject {
         view.addSubview(ruler)
         view.bringSubviewToFront(ruler)
         rulerOverlay = ruler
+        ruler.bindDocument(view.documentView)
         // 沿尺绘图:把一笔投影到尺线(画布 ↔ 视口两套坐标互转后做几何判定)
         overlayProvider?.rulerSnapper = { [weak self] stroke, index in
             guard let self, let pdfView = self.pdfView, let ruler = self.rulerOverlay, ruler.isOn,
@@ -762,7 +764,7 @@ final class ReaderCoordinator: NSObject {
 
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
-            if let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
+            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
                SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
                 DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
                                    SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
@@ -1120,6 +1122,14 @@ final class ReaderCoordinator: NSObject {
             }
         }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
+        if !markMode, let hit=pageHit(point) {
+            if let word=SelectionGeometry.initialWord(on:hit.page,at:hit.point) {
+                clearHover();applySelection(word,src:"tapWord");refreshHandles();presentMenu();return
+            }
+            if let index=ocrWordIndex(at:hit.point,on:hit.page) {
+                clearHover();applyOCRSelection(page:hit.page,range:index...index,src:"tapWord");presentMenu();return
+            }
+        }
         guard !rects.isEmpty || menu.isPresented else { return }
         DiagLog.log("tap: clear all (menu+selection together)")
         clearSelection()
@@ -1131,7 +1141,7 @@ final class ReaderCoordinator: NSObject {
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
         if let hit = pageHit(viewPoint),
-           let word = hit.page.selectionForWord(at: hit.point) ?? hit.page.selectionForLine(at: hit.point),
+           let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
            SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
             DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
             applySelection(word, src: "doubleTap")
@@ -1645,6 +1655,7 @@ final class ReaderCoordinator: NSObject {
     /// 滚动/缩放都不动,关闭再打开也不改位置(它没有位置状态)。
     private func setRulerOverlayVisible(_ on: Bool) {
         guard let ruler = rulerOverlay else { return }
+        ruler.bindDocument(pdfView?.documentView)
         // v0.38.0:关闭→开启时回到屏幕正中、角度归零(需求:只有重开才重置位置)
         if on, !ruler.isOn { ruler.resetInHost() }
         ruler.isOn = on
@@ -2127,6 +2138,8 @@ final class ReaderCoordinator: NSObject {
         scrollObservers.append(sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             guard let self else { return }
             sv.isDirectionalLockEnabled = false
+            self.rulerOverlay?.bindDocument(self.pdfView?.documentView)
+            self.rulerOverlay?.syncDocumentPose()
             self.refreshHandles()
             self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
             self.dryHost?.refresh()                      // v0.30.0:跨页干墨跟随滚动
@@ -2140,6 +2153,8 @@ final class ReaderCoordinator: NSObject {
             self.fireReadingTick()
         })
         scrollObservers.append(sv.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in
+            self?.rulerOverlay?.bindDocument(self?.pdfView?.documentView)
+            self?.rulerOverlay?.syncDocumentPose()
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:缩放后菜单随选区同步
             self?.dryHost?.refresh()                    // v0.30.0:跨页干墨跟随缩放
@@ -2148,7 +2163,7 @@ final class ReaderCoordinator: NSObject {
             // 而捏合缩放不触发 SwiftUI 更新,`updateUIView` 里那句重设永远等不到。
             // 这里每次缩放都重新放开上下限(只改限值、不动当前比例,不干扰手势)。
             if let view = self?.pdfView {
-                self?.applyZoomLimits(view)
+                if !sv.isZooming && !sv.isZoomBouncing { self?.applyZoomLimits(view) }
                 if view.scaleFactor < 1.2 {
                     DiagLog.log("zoom[pinch]: s=\(String(format: "%.2f", view.scaleFactor)) min=\(String(format: "%.2f", view.minScaleFactor)) max=\(String(format: "%.2f", view.maxScaleFactor)) auto=\(view.autoScales ? 1 : 0)")
                 }
@@ -2157,6 +2172,8 @@ final class ReaderCoordinator: NSObject {
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.rulerOverlay?.updateHostBounds()
+            self?.rulerOverlay?.bindDocument(self?.pdfView?.documentView)
+            self?.rulerOverlay?.syncDocumentPose()
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:旋转/布局变化后菜单随选区同步
             self?.dryHost?.refresh()                    // v0.30.0:旋转/分屏后页矩形变化

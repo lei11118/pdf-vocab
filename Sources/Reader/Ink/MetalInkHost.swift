@@ -184,6 +184,8 @@ final class MetalInkHost: UIView {
     func refresh() {
         guard isAttached, let pdfView, let document = pdfView.document, let docView = pdfView.documentView,
               document.pageCount > 0 else { return }
+        CATransaction.begin();CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         observeScroll()
         let focus = pdfView.page(for: CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY), nearest: true)
         let current = min(document.pageCount-1, max(0, focus.map { document.index(for: $0) } ?? 0))

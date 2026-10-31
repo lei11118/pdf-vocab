@@ -14,6 +14,7 @@ struct LibraryView: View {
     @State private var showDiagnostics = false
     @State private var showSettings = false
     @State private var showVocab = false
+    @State private var showGraph = false
     @State private var readerJump: VocabJumpTarget?
     @State private var query = ""
     @State private var vocabCount = 0
@@ -95,6 +96,13 @@ struct LibraryView: View {
                     }
                 }, docStore: store)
             }
+            .fullScreenCover(isPresented:$showGraph) {
+                let vocab=VocabStore(db:store.db)
+                VocabGraphView(store:vocab,words:vocab.listWords(),onJump:{ target in
+                    showGraph=false
+                    DispatchQueue.main.asyncAfter(deadline:.now()+0.4) { readerJump=target }
+                })
+            }
             .overlay {
                 if let importingLabel {
                     importingOverlay(importingLabel)
@@ -151,6 +159,7 @@ struct LibraryView: View {
             Spacer(minLength: DS.Space.s)
 
             HStack(spacing: DS.Space.x2s) {
+                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:17,foreground:DS.accent,background:DS.accentContainer,accessibility:"知识图谱") { showGraph=true }
                 Text(Date.now, format: .dateTime.month(.abbreviated).day())
                     .font(DS.Fonts.caption2)
                     .foregroundStyle(DS.foreground3)

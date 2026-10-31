@@ -7,6 +7,12 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     static let snapTargetsDegrees:[Double]=[0,30,45,60,90,120,135,180]
     static let snapToleranceDegrees:Double=3
     private weak var hostView:UIView?
+    private weak var documentView:UIView?
+    private var documentAnchor:CGPoint?
+    private var documentAxis:CGPoint?
+    private(set) var poseScale:CGFloat=1
+    private var halfHeight:CGFloat { Self.barHeight*poseScale/2 }
+    var angleLabel:String { String(format:"%.0f°",angleDegrees) }
     private(set) var rulerPosition=CGPoint.zero
     private(set) var angle:CGFloat=0
     var angleDegrees:Double { Double(angle)*180 / .pi }
@@ -30,13 +36,28 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
         turn.delegate=self;turn.allowedTouchTypes=pan.allowedTouchTypes;addGestureRecognizer(turn)
     }
     required init?(coder:NSCoder) { fatalError("init(coder:) unavailable") }
-    func updateHostBounds() { if let hostView { frame=hostView.bounds };setNeedsDisplay() }
+    func updateHostBounds() { if let hostView { frame=hostView.bounds };syncDocumentPose();setNeedsDisplay() }
+    func bindDocument(_ view:UIView?) {
+        if documentView !== view { documentView=view;captureDocumentPose() }
+        syncDocumentPose()
+    }
+    private func captureDocumentPose() {
+        guard let documentView else { return }
+        documentAnchor=documentView.convert(rulerPosition,from:self)
+        documentAxis=documentView.convert(CGPoint(x:rulerPosition.x+100*poseScale*cos(angle),y:rulerPosition.y+100*poseScale*sin(angle)),from:self)
+    }
+    func syncDocumentPose() {
+        guard let documentView,let anchor=documentAnchor,let axis=documentAxis else { return }
+        let a=convert(anchor,from:documentView),b=convert(axis,from:documentView)
+        rulerPosition=a;angle=atan2(b.y-a.y,b.x-a.x)
+        poseScale=max(0.01,hypot(b.x-a.x,b.y-a.y)/100);setNeedsDisplay()
+    }
     func resetInHost() {
-        updateHostBounds();rulerPosition=CGPoint(x:bounds.midX,y:bounds.midY);angle=0;setNeedsDisplay()
+        updateHostBounds();poseScale=1;rulerPosition=CGPoint(x:bounds.midX,y:bounds.midY);angle=0;captureDocumentPose();setNeedsDisplay()
     }
     func setPose(position:CGPoint,angle:CGFloat) {
         guard position.x.isFinite,position.y.isFinite,angle.isFinite else { return }
-        rulerPosition=position;self.angle=CGFloat(Self.normalizedAngle(Double(angle)));setNeedsDisplay()
+        rulerPosition=position;self.angle=CGFloat(Self.normalizedAngle(Double(angle)));captureDocumentPose();setNeedsDisplay()
     }
     static func normalizedAngle(_ angle:Double)->Double {
         guard angle.isFinite else { return 0 }
@@ -61,7 +82,7 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     }
     func projector(startingAt point:CGPoint)->((CGPoint)->CGPoint)? {
         guard isOn else { return nil }
-        let distance=signedDistance(point),half=Self.barHeight/2
+        let distance=signedDistance(point),half=halfHeight
         guard abs(abs(distance)-half)<=18 else { return nil }
         let normal=CGPoint(x:-sin(angle),y:cos(angle)),direction=CGPoint(x:cos(angle),y:sin(angle))
         let origin=CGPoint(x:rulerPosition.x+normal.x*half*(distance<0 ? -1:1),y:rulerPosition.y+normal.y*half*(distance<0 ? -1:1))
@@ -69,7 +90,7 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
             return CGPoint(x:origin.x+t*direction.x,y:origin.y+t*direction.y) }
     }
     override func point(inside point:CGPoint,with event:UIEvent?)->Bool {
-        isOn && bounds.contains(point) && abs(signedDistance(point))<=Self.barHeight/2+6
+        isOn && bounds.contains(point) && abs(signedDistance(point))<=halfHeight+6
     }
     @objc private func dragRuler(_ g:UIPanGestureRecognizer) {
         guard turnAngle==nil else { return }
@@ -100,8 +121,9 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     override func draw(_ rect:CGRect) {
         guard isOn,let ctx=UIGraphicsGetCurrentContext() else { return }
         ctx.saveGState();ctx.translateBy(x:rulerPosition.x,y:rulerPosition.y);ctx.rotate(by:angle)
+        ctx.scaleBy(x:poseScale,y:poseScale)
         let corners=[CGPoint.zero,CGPoint(x:bounds.maxX,y:0),CGPoint(x:0,y:bounds.maxY),CGPoint(x:bounds.maxX,y:bounds.maxY)]
-        let xs=corners.map { ($0.x-rulerPosition.x)*cos(angle)+($0.y-rulerPosition.y)*sin(angle) }
+        let xs=corners.map { (($0.x-rulerPosition.x)*cos(angle)+($0.y-rulerPosition.y)*sin(angle))/poseScale }
         let lo=(xs.min() ?? 0)-80,hi=(xs.max() ?? 0)+80,half=Self.barHeight/2
         ctx.setFillColor(UIColor.secondarySystemBackground.withAlphaComponent(0.7).cgColor)
         ctx.fill(CGRect(x:lo,y:-half,width:hi-lo,height:Self.barHeight))
@@ -115,7 +137,7 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
             if tick%5==0 { (String(tick*10) as NSString).draw(at:CGPoint(x:x+2,y:-half+17),withAttributes:[.font:UIFont.monospacedDigitSystemFont(ofSize:9,weight:.medium),.foregroundColor:UIColor.secondaryLabel]) }
             tick+=1
         }
-        (String(Int(angleDegrees.rounded()))+" deg" as NSString).draw(at:CGPoint(x:-22,y:-7),withAttributes:[.font:UIFont.monospacedDigitSystemFont(ofSize:13,weight:.semibold),.foregroundColor:UIColor.systemBlue])
+        (angleLabel as NSString).draw(at:CGPoint(x:-22,y:-7),withAttributes:[.font:UIFont.monospacedDigitSystemFont(ofSize:13,weight:.semibold),.foregroundColor:UIColor.systemBlue])
         ctx.restoreGState()
     }
 }

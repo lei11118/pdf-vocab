@@ -151,7 +151,7 @@ final class InkMetalCanvasView: MTKView {
                 if (!inside) discard_fragment();
             }
             float aa = max(fwidth(in.d), 0.65 / max(pxPerPoint.x, pxPerPoint.y));
-            float cov = 1.0 - smoothstep(in.hw - aa, in.hw, abs(in.d));
+            float cov = 1.0 - smoothstep(in.hw - aa*0.5, in.hw + aa*0.5, abs(in.d));
             float grain = 1.0;
             if (style > 0) {
                 constexpr sampler paper(coord::normalized,filter::linear,address::repeat);
@@ -171,7 +171,7 @@ final class InkMetalCanvasView: MTKView {
             QOut o; o.position = float4(p,0,1); o.uv = float2((p.x+1)*0.5,(1-p.y)*0.5); return o;
         }
         fragment float4 q_fragment(QOut in [[stage_in]], texture2d<float> ink [[texture(0)]]) {
-            constexpr sampler s(coord::normalized, filter::nearest, address::clamp_to_edge);
+            constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
             return ink.sample(s,in.uv);
         }
         """
@@ -393,6 +393,8 @@ final class InkMetalCanvasView: MTKView {
         guard !visibleClip.isNull else { return }
         let clipV = SIMD4<Float>(Float(clip.minX), Float(clip.minY), Float(clip.maxX), Float(clip.maxY))
 
+        let density=max(0.05,min(drawableSize.width/max(1,bounds.width),drawableSize.height/max(1,bounds.height)))
+        let fringe=1/density
         var halves = [CGFloat](repeating: 0.5, count: pts.count)
         for i in 0..<pts.count { halves[i] = max(0.05, CGFloat(pts[i].width) * 0.5) }
 
@@ -405,18 +407,19 @@ final class InkMetalCanvasView: MTKView {
             let len = hypot(dx, dy)
             guard len > 0.001 else { continue }
             let nx = -dy / len, ny = dx / len
-            let wa = halves[i], wb = halves[i + 1]
+            let wa = halves[i]+fringe, wb = halves[i + 1]+fringe
             let a1 = SIMD2<Float>(Float(a.x + nx * wa), Float(a.y + ny * wa))
             let a2 = SIMD2<Float>(Float(a.x - nx * wa), Float(a.y - ny * wa))
             let b1 = SIMD2<Float>(Float(b.x + nx * wb), Float(b.y + ny * wb))
             let b2 = SIMD2<Float>(Float(b.x - nx * wb), Float(b.y - ny * wb))
             let fa = Float(wa), fb = Float(wb)
-            verts.append(Vertex(pos: a1, d: fa, hw: fa, clip: clipV, color: color))
-            verts.append(Vertex(pos: a2, d: -fa, hw: fa, clip: clipV, color: color))
-            verts.append(Vertex(pos: b1, d: fb, hw: fb, clip: clipV, color: color))
-            verts.append(Vertex(pos: a2, d: -fa, hw: fa, clip: clipV, color: color))
-            verts.append(Vertex(pos: b2, d: -fb, hw: fb, clip: clipV, color: color))
-            verts.append(Vertex(pos: b1, d: fb, hw: fb, clip: clipV, color: color))
+            let ha=Float(halves[i]),hb=Float(halves[i+1])
+            verts.append(Vertex(pos: a1, d: fa, hw: ha, clip: clipV, color: color))
+            verts.append(Vertex(pos: a2, d: -fa, hw: ha, clip: clipV, color: color))
+            verts.append(Vertex(pos: b1, d: fb, hw: hb, clip: clipV, color: color))
+            verts.append(Vertex(pos: a2, d: -fa, hw: ha, clip: clipV, color: color))
+            verts.append(Vertex(pos: b2, d: -fb, hw: hb, clip: clipV, color: color))
+            verts.append(Vertex(pos: b1, d: fb, hw: hb, clip: clipV, color: color))
         }
 
         // ② 圆头与圆角关节(只在该补的地方补:两端 + 转角明显的点)
@@ -444,15 +447,17 @@ final class InkMetalCanvasView: MTKView {
                             color: SIMD4<Float>, into verts: inout [Vertex]) {
         let r = Float(max(0.05, radius))
         let c = SIMD2<Float>(Float(center.x), Float(center.y))
-        let segments = 10
+        let density=max(0.05,min(drawableSize.width/max(1,bounds.width),drawableSize.height/max(1,bounds.height)))
+        let outer=r+Float(1/density)
+        let segments=max(24,min(128,Int(ceil(Double(outer)*Double(density)*2))))
         for s in 0..<segments {
             let t0 = Float(s) / Float(segments) * 2 * .pi
             let t1 = Float(s + 1) / Float(segments) * 2 * .pi
-            let p0 = SIMD2<Float>(c.x + r * cos(t0), c.y + r * sin(t0))
-            let p1 = SIMD2<Float>(c.x + r * cos(t1), c.y + r * sin(t1))
+            let p0 = SIMD2<Float>(c.x + outer * cos(t0), c.y + outer * sin(t0))
+            let p1 = SIMD2<Float>(c.x + outer * cos(t1), c.y + outer * sin(t1))
             verts.append(Vertex(pos: c, d: 0, hw: r, clip: clip, color: color))
-            verts.append(Vertex(pos: p0, d: r, hw: r, clip: clip, color: color))
-            verts.append(Vertex(pos: p1, d: r, hw: r, clip: clip, color: color))
+            verts.append(Vertex(pos: p0, d: outer, hw: r, clip: clip, color: color))
+            verts.append(Vertex(pos: p1, d: outer, hw: r, clip: clip, color: color))
         }
     }
 }

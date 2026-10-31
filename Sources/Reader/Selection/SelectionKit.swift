@@ -162,6 +162,15 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 
 enum SelectionGeometry {
 
+    /// Initial picking must never silently expand to a whole line.
+    static func initialWord(on page: PDFPage, at point: CGPoint) -> PDFSelection? {
+        guard let word=page.selectionForWord(at:point),
+              isSane(word,maxPages:1,maxChars:100),
+              WordPicker.countWords(in:word.string ?? "")==1,
+              word.bounds(for:page).insetBy(dx:-3,dy:-3).contains(point) else { return nil }
+        return word
+    }
+
     static func distanceSquared(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
         let dx = a.x - b.x
         let dy = a.y - b.y
