@@ -105,7 +105,7 @@ final class InkMetalCanvasView: MTKView {
         struct VIn  { float2 pos; float d; float hw; float4 clip; float4 color; };
         struct VOut { float4 position [[position]]; float d; float hw; float4 clip; float4 color; };
         vertex VOut v_main(uint vid [[vertex_id]],
-                           constant VIn *v [[buffer(0)]],
+                           device const VIn *v [[buffer(0)]],
                            constant float2 &size [[buffer(1)]]) {
             VOut o;
             float2 p = v[vid].pos;

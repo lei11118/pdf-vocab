@@ -561,6 +561,7 @@ final class ReaderCoordinator: NSObject {
 
         suppressNativeSelection(in: view)
         observeScrolling()
+        applyToolSession(force: true) // The ruler view is installed after the ink host.
     }
 
     // MARK: - v0.28.0 全局湿墨(常规笔的跨页溢出段)
@@ -1502,6 +1503,8 @@ final class ReaderCoordinator: NSObject {
         if !on {
             stopAutoScroll()
             clearWetInk()
+            inkSurface?.setRulerActive(false)
+            overlayProvider?.setRulerActive(false)
             setRulerOverlayVisible(false)   // v0.35.0:退出书写时收起尺子
         }
         overlayProvider?.setMarkMode(on)
@@ -1593,6 +1596,8 @@ final class ReaderCoordinator: NSObject {
 
     func applyToolSession(force: Bool = false) {
         guard let session = toolSession else { return }
+        let revision = session.stateRevision
+        if !force, revision == appliedToolRevision { return }
         // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
         inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
         // v0.47.0:自研 Metal 引擎也要吃工具颜色/笔宽(否则调色盘与笔宽档对它无效)
@@ -1600,8 +1605,6 @@ final class ReaderCoordinator: NSObject {
             metalHost?.applyTool(color: inking.color, baseWidth: inking.width)
         }
         if !wetToolIsRegular { clearWetInk() }
-        let revision = session.stateRevision
-        if !force, revision == appliedToolRevision { return }
         // provider 未就绪时**不记版本**,留给建好之后的下一次调用
         guard let provider = overlayProvider else { return }
         appliedToolRevision = revision

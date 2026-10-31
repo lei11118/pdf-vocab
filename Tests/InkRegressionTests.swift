@@ -2,10 +2,20 @@ import XCTest
 import UIKit
 import PDFKit
 import PencilKit
+import MetalKit
 @testable import PdfVocab
 
 @MainActor
 final class InkRegressionTests: XCTestCase {
+    func testMetalShaderCompilesAndEmptyFrameCanDraw() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal is unavailable") }
+        let canvas = InkMetalCanvasView()
+        XCTAssertTrue(canvas.isReady, "The runtime Metal shader must compile before accepting Pencil input")
+        canvas.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        canvas.renderItems = []
+        canvas.draw(in: canvas)
+    }
+
     func testPencilObserverCannotBlockOrBeBlockedByScrolling() {
         let pan = UIPanGestureRecognizer()
         let grab = InkPencilGrabRecognizer(target: nil, action: nil)

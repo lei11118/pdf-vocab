@@ -188,7 +188,7 @@ final class DocumentInkSurface: UIView {
         for entry in windowPages { pageDrawings[entry.index] = PKDrawing() }
 
         // Include erased-to-empty pages so deleting the final stroke persists.
-        var changedPages = Set(windowPages.map { $0.index })
+        let changedPages = Set(windowPages.map { $0.index })
         for stroke in drawing.strokes {
             // 画布坐标 → 文档坐标
             // PKCanvasView drawing uses content coordinates already; contentOffset
@@ -209,7 +209,6 @@ final class DocumentInkSurface: UIView {
                 strokes.append(contentsOf: drawing.strokes)
                 bucket = PKDrawing(strokes: strokes)
                 pageDrawings[page] = bucket
-                changedPages.insert(page)
             }
 
             for point in points {
