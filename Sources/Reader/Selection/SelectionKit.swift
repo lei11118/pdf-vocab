@@ -35,7 +35,7 @@ enum HandleMetrics {
         r.insetBy(dx: selectionPadX, dy: selectionPadY)
     }
     /// 最小拖动热区(短边不小于它,以"圆点 + 竖线"整体为中心)
-    static let hitMinimum: CGFloat = 44
+    static let hitMinimum: CGFloat = 56
 }
 
 // MARK: - 拖动柄(原生同款:竖线 = 行高,圆点紧贴竖线外端;v0.6.10)
@@ -57,6 +57,7 @@ final class SelectionHandleView: UIView {
         backgroundColor = .clear
         stem.backgroundColor = .systemBlue
         stem.layer.cornerRadius = HandleMetrics.lineWidth / 2
+        stem.isUserInteractionEnabled = false
         addSubview(stem)
         dot.backgroundColor = .systemBlue
         dot.layer.cornerRadius = HandleMetrics.dotDiameter / 2
@@ -64,6 +65,7 @@ final class SelectionHandleView: UIView {
         dot.layer.shadowOpacity = 0.15
         dot.layer.shadowRadius = 2
         dot.layer.shadowOffset = CGSize(width: 0, height: 1)
+        dot.isUserInteractionEnabled = false
         addSubview(dot)
     }
 
@@ -99,6 +101,12 @@ final class SelectionHandleView: UIView {
     }
 
     /// 拖动热区 ≥ hitMinimum × hitMinimum,以"圆点 + 竖线"整体(即视图 bounds)为中心。
+    func hitDistance(to point: CGPoint) -> CGFloat {
+        let height=max(1,bounds.height-HandleMetrics.dotProtrusion)
+        let dot=dotFrame(lineHeight:height)
+        return hypot(point.x-dot.midX,point.y-dot.midY)
+    }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         let dx = max(0, (HandleMetrics.hitMinimum - bounds.width) / 2)
         let dy = max(0, (HandleMetrics.hitMinimum - bounds.height) / 2)

@@ -8,8 +8,32 @@ enum InkBrush {
         case .marker: return base
         case .pencil: return base * (0.4 + 0.6 * f) * (1 + 0.65 * (1 - sin(altitude)))
         case .crayon: return base * (0.75 + 0.25 * f)
-        default: return base * (0.55 + 0.45 * sqrt(f))
+        default: return base * (0.16 + 1.64 * pow(f,0.75))
         }
+    }
+
+    static func normalizedPressure(force: Double, maximum: Double) -> Double {
+        guard force.isFinite, maximum.isFinite, maximum > 0 else { return 0.5 }
+        return min(1,max(0,force/maximum))
+    }
+    static func smoothed(_ points: [InkPoint]) -> [InkPoint] {
+        guard points.count > 3 else { return points }
+        var out: [InkPoint] = [points[0]]
+        for i in 0..<(points.count-1) {
+            let a=points[max(0,i-1)],b=points[i],c=points[i+1],d=points[min(points.count-1,i+2)]
+            for step in 1...3 {
+                let t=Double(step)/3, t2=t*t,t3=t2*t
+                func value(_ a:Double,_ b:Double,_ c:Double,_ d:Double)->Double {
+                    0.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3)
+                }
+                var p=b
+                p.x=value(a.x,b.x,c.x,d.x);p.y=value(a.y,b.y,c.y,d.y)
+                p.width=b.width+(c.width-b.width)*t
+                p.force=b.force+(c.force-b.force)*t
+                out.append(p)
+            }
+        }
+        return out
     }
 
     static func opacity(kind: InkStroke.Kind, colorAlpha: Double) -> Double {

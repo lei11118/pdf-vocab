@@ -365,6 +365,7 @@ final class ReaderCoordinator: NSObject {
     func installGestures(on view: PDFView) {
         // 长按选词(手指 0.5s / Pencil 0.45s)
         let fingerPress = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+        fingerPress.delegate = self
         fingerPress.minimumPressDuration = 0.5
         fingerPress.allowableMovement = 14
         fingerPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
@@ -372,6 +373,7 @@ final class ReaderCoordinator: NSObject {
         fingerPressRef = fingerPress
 
         let pencilPress = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+        pencilPress.delegate = self
         pencilPress.minimumPressDuration = 0.45
         pencilPress.allowableMovement = 14
         pencilPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
@@ -391,6 +393,7 @@ final class ReaderCoordinator: NSObject {
         tapRef = tap
 
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.delegate = self
         doubleTap.numberOfTapsRequired = 2
         doubleTap.allowedTouchTypes = [
             NSNumber(value: UITouch.TouchType.direct.rawValue),
@@ -400,6 +403,7 @@ final class ReaderCoordinator: NSObject {
         doubleTapRef = doubleTap
 
         let tripleTap = UITapGestureRecognizer(target: self, action: #selector(handleTripleTap(_:)))
+        tripleTap.delegate = self
         tripleTap.numberOfTapsRequired = 3
         tripleTap.allowedTouchTypes = [
             NSNumber(value: UITouch.TouchType.direct.rawValue),
@@ -429,6 +433,8 @@ final class ReaderCoordinator: NSObject {
         endHandle = end
         for handle in [start, end] {
             let pan = PencilAwarePanGestureRecognizer(target: self, action: #selector(handleHandlePan(_:)))
+            pan.delegate = self
+            pan.maximumNumberOfTouches = 1
             handle.addGestureRecognizer(pan)
         }
 
@@ -1413,6 +1419,7 @@ final class ReaderCoordinator: NSObject {
         if excluded {
             var newlyArmed = 0
             for scroll in PencilTouchIsolation.scrollViews(in: pdfView) {
+                scroll.isDirectionalLockEnabled = false
                 let pan = scroll.panGestureRecognizer
                 let id = ObjectIdentifier(pan)
                 guard armedScrollPans[id] == nil else { continue }
@@ -1603,7 +1610,7 @@ final class ReaderCoordinator: NSObject {
         // v0.47.0:自研 Metal 引擎也要吃工具颜色/笔宽(否则调色盘与笔宽档对它无效)
         metalHost?.applyTool(kind: session.kind, color: session.currentUIColor,
                              baseWidth: session.width, eraserRadius: session.eraserRadius,
-                             whole: session.eraserWhole)
+                             whole: session.eraserWhole, shape: session.shapeKind)
         if !wetToolIsRegular { clearWetInk() }
         // provider 未就绪时**不记版本**,留给建好之后的下一次调用
         guard let provider = overlayProvider else { return }
@@ -2111,8 +2118,14 @@ final class ReaderCoordinator: NSObject {
         scrollObservers.forEach { $0.invalidate() }
         scrollObservers.removeAll()
         observedScrollView = sv
+        sv.isDirectionalLockEnabled = false
+        sv.panGestureRecognizer.minimumNumberOfTouches = 1
+        for handle in [startHandle,endHandle].compactMap({ $0 }) {
+            for pan in handle.gestureRecognizers ?? [] { sv.panGestureRecognizer.require(toFail:pan) }
+        }
         scrollObservers.append(sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             guard let self else { return }
+            sv.isDirectionalLockEnabled = false
             self.refreshHandles()
             self.menu.updatePosition(animated: false)   // v0.6.10:滚动后菜单随选区同步
             self.dryHost?.refresh()                      // v0.30.0:跨页干墨跟随滚动
@@ -2424,11 +2437,18 @@ final class ReaderCoordinator: NSObject {
 }
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer.view is SelectionHandleView { return true }
+        if let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
+        return true
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
-        true
+        if gestureRecognizer.view is SelectionHandleView || otherGestureRecognizer.view is SelectionHandleView { return false }
+        return true
     }
 }
 
