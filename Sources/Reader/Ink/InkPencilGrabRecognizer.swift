@@ -33,6 +33,11 @@ final class InkPencilGrabRecognizer: UIGestureRecognizer {
 
     private var active: Bool { isActive?() ?? true }
 
+    // Remaining .possible alone does not stop PDFKit's recognizers from
+    // preventing this observer once their own gesture begins.
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard active else { return }
         guard let touch = touches.first(where: { $0.type == .pencil }) else { return }

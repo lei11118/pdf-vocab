@@ -19,7 +19,7 @@ final class SmartRulerView: UIView {
     /// 吸附阈值(度)
     static let snapToleranceDegrees: Double = 3
     /// 尺身厚度
-    static let barHeight: CGFloat = 26
+    static let barHeight: CGFloat = 80
 
     /// 是否显示
     var isOn: Bool = false {
@@ -37,7 +37,8 @@ final class SmartRulerView: UIView {
     var angleDegrees: Double { Double(angle) * 180 / .pi }
 
     /// 尺身长度(视口点)
-    let rulerLength: CGFloat
+    private(set) var rulerLength: CGFloat
+    private var hostSize: CGSize = .zero
 
     private weak var hostView: UIView?
     private let impact = UIImpactFeedbackGenerator(style: .rigid)
@@ -56,7 +57,7 @@ final class SmartRulerView: UIView {
         isUserInteractionEnabled = true
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
         // 只收手指:Pencil 落在尺子上也应该继续写字,不能被尺子抢走
         pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         addGestureRecognizer(pan)
@@ -78,9 +79,19 @@ final class SmartRulerView: UIView {
 
     /// 回到屏幕正中、角度归零(只有"关闭再开启"才会调用)
     func resetInHost() {
+        updateHostBounds()
         cameraCenterToHost()
         angle = 0
         transform = .identity
+        setNeedsDisplay()
+    }
+
+    func updateHostBounds() {
+        guard let host = hostView, host.bounds.size != hostSize else { return }
+        hostSize = host.bounds.size
+        rulerLength = max(160, hypot(hostSize.width, hostSize.height))
+        bounds.size = CGSize(width: rulerLength, height: Self.barHeight)
+        clampIntoHost()
         setNeedsDisplay()
     }
 
@@ -117,6 +128,27 @@ final class SmartRulerView: UIView {
         guard len2 > 0.0001 else { return a }
         let t = ((point.x - a.x) * vx + (point.y - a.y) * vy) / len2
         return CGPoint(x: a.x + vx * t, y: a.y + vy * t)
+    }
+
+    /// Choose the nearest physical edge at pen-down, and keep that same edge
+    /// for the entire stroke. Ordinary handwriting away from the ruler is free.
+    func projector(startingAt point: CGPoint) -> ((CGPoint) -> CGPoint)? {
+        guard isOn else { return nil }
+        let direction = CGPoint(x: cos(angle), y: sin(angle))
+        let normal = CGPoint(x: -direction.y, y: direction.x)
+        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        let along = delta.x * direction.x + delta.y * direction.y
+        let across = delta.x * normal.x + delta.y * normal.y
+        let half = Self.barHeight / 2
+        guard abs(along) <= rulerLength / 2 + 18,
+              abs(abs(across) - half) <= 18 else { return nil }
+        let side: CGFloat = across < 0 ? -1 : 1
+        let origin = CGPoint(x: center.x + normal.x * half * side,
+                             y: center.y + normal.y * half * side)
+        return { p in
+            let t = (p.x - origin.x) * direction.x + (p.y - origin.y) * direction.y
+            return CGPoint(x: origin.x + t * direction.x, y: origin.y + t * direction.y)
+        }
     }
 
     // MARK: 角度吸附
@@ -200,8 +232,10 @@ final class SmartRulerView: UIView {
         guard let host = hostView else { return }
         let halfW = abs(cos(angle)) * rulerLength / 2 + abs(sin(angle)) * Self.barHeight / 2
         let halfH = abs(sin(angle)) * rulerLength / 2 + abs(cos(angle)) * Self.barHeight / 2
-        center.x = min(max(center.x, halfW), host.bounds.width - halfW)
-        center.y = min(max(center.y, halfH), host.bounds.height - halfH)
+        let marginX = min(halfW, host.bounds.width / 2)
+        let marginY = min(halfH, host.bounds.height / 2)
+        center.x = min(max(center.x, marginX), host.bounds.width - marginX)
+        center.y = min(max(center.y, marginY), host.bounds.height - marginY)
     }
 
     // MARK: 绘制
@@ -239,12 +273,13 @@ final class SmartRulerView: UIView {
             index += 1
         }
 
-        // v0.39.0:尺线(投影基准线)+ 实时角度读数。
-        // 投影用的是尺身中线,所以必须把它画出来,否则"吸到哪"看不见。
+        // The two visible edges are the projection guides.
         ctx.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.55).cgColor)
         ctx.setLineWidth(1)
-        ctx.move(to: CGPoint(x: 4, y: bounds.midY))
-        ctx.addLine(to: CGPoint(x: bounds.width - 4, y: bounds.midY))
+        ctx.move(to: CGPoint(x: 0, y: 0.5))
+        ctx.addLine(to: CGPoint(x: bounds.width, y: 0.5))
+        ctx.move(to: CGPoint(x: 0, y: bounds.height - 0.5))
+        ctx.addLine(to: CGPoint(x: bounds.width, y: bounds.height - 0.5))
         ctx.strokePath()
 
         let angleText = "\(Int(angleDegrees.rounded()))°"
@@ -271,6 +306,6 @@ extension SmartRulerView: UIGestureRecognizerDelegate {
     /// 拖动与双指旋转同时进行
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
+        other.view === self
     }
 }

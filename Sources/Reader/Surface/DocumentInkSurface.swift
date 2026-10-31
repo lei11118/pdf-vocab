@@ -29,7 +29,7 @@ final class DocumentInkSurface: UIView {
     private weak var pdfView: PDFView?
     private var windowOrigin: CGPoint = .zero
     /// 当前窗口包含的页及其在画布坐标里的矩形
-    private var windowPages: [(index: Int, rect: CGRect)] = []
+    private var windowPages: [(index: Int, rect: CGRect, pageToDoc: CGAffineTransform)] = []
     private var drawingEnabled = false
     private var saveTask: Task<Void, Never>?
     /// 重组画布内容时不要回写(否则自己触发自己)
@@ -47,6 +47,9 @@ final class DocumentInkSurface: UIView {
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.isScrollEnabled = false
+        // PDFKit's ancestor scroll view owns finger panning and pinching.
+        canvas.panGestureRecognizer.isEnabled = false
+        canvas.pinchGestureRecognizer?.isEnabled = false
         canvas.alwaysBounceVertical = false
         canvas.alwaysBounceHorizontal = false
         canvas.drawingPolicy = .pencilOnly     // iPad:Pencil 落墨,手指滚动/选词
@@ -92,7 +95,7 @@ final class DocumentInkSurface: UIView {
             return
         }
         if superview !== docView { docView.addSubview(self) }
-        isUserInteractionEnabled = true
+        isUserInteractionEnabled = drawingEnabled
         refreshWindow()
     }
 
@@ -116,16 +119,24 @@ final class DocumentInkSurface: UIView {
         guard let pdfView, let docView = pdfView.documentView, let document = pdfView.document,
               document.pageCount > 0 else { return }
 
-        let current = pdfView.currentPage.map { document.index(for: $0) } ?? 0
+        let current = min(document.pageCount - 1, max(0, pdfView.currentPage.map { document.index(for: $0) } ?? 0))
         let lo = max(0, current - 1), hi = min(document.pageCount - 1, current + 1)
 
-        var rects: [(Int, CGRect)] = []
+        var rects: [(index: Int, rect: CGRect, pageToDoc: CGAffineTransform)] = []
         var windowRect = CGRect.null
         for index in lo...max(lo, hi) {
             guard let page = document.page(at: index) else { continue }
-            let inView = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+            let box = page.bounds(for: pdfView.displayBox)
+            let inView = pdfView.convert(box, from: page)
             let inDoc = docView.convert(inView, from: pdfView)
-            rects.append((index, inDoc))
+            func convert(_ p: CGPoint) -> CGPoint { docView.convert(pdfView.convert(p, from: page), from: pdfView) }
+            let o = convert(CGPoint(x: box.minX, y: box.maxY))
+            let x = convert(CGPoint(x: box.minX + 1, y: box.maxY))
+            let y = convert(CGPoint(x: box.minX, y: box.maxY - 1))
+            let mapping = CGAffineTransform(a: x.x - o.x, b: x.y - o.y,
+                                            c: y.x - o.x, d: y.y - o.y, tx: o.x, ty: o.y)
+            guard abs(mapping.a * mapping.d - mapping.b * mapping.c) > 0.000001 else { continue }
+            rects.append((index, inDoc, mapping))
             windowRect = windowRect.union(inDoc)
         }
         guard !windowRect.isNull, windowRect.width > 1, windowRect.height > 1 else { return }
@@ -138,7 +149,7 @@ final class DocumentInkSurface: UIView {
         guard changed else { return }
 
         windowOrigin = windowRect.origin
-        windowPages = rects.map { (index: $0.0, rect: $0.1) }
+        windowPages = rects
         frame = windowRect
         bounds = CGRect(origin: .zero, size: windowRect.size)
         canvas.frame = bounds
@@ -160,10 +171,8 @@ final class DocumentInkSurface: UIView {
                 pageDrawings[entry.index] = loaded
             }
             guard !pageDrawing.strokes.isEmpty else { continue }
-            let shift = entry.rect.origin
-            for stroke in pageDrawing.strokes {
-                strokes.append(Self.translated(stroke, by: shift))
-            }
+            pageDrawing.transform(using: entry.pageToDoc)
+            strokes.append(contentsOf: pageDrawing.strokes)
         }
         suppressArchive = true
         canvas.drawing = PKDrawing(strokes: strokes)
@@ -178,31 +187,33 @@ final class DocumentInkSurface: UIView {
         // 每个页面先清空,再由这次的完整绘制重建(切割是幂等的)
         for entry in windowPages { pageDrawings[entry.index] = PKDrawing() }
 
-        var changedPages = Set<Int>()
+        // Include erased-to-empty pages so deleting the final stroke persists.
+        var changedPages = Set(windowPages.map { $0.index })
         for stroke in drawing.strokes {
             // 画布坐标 → 文档坐标
-            let inDoc = Self.translated(stroke, by: windowOrigin)
-            let points = Array(inDoc.path)
-            guard points.count >= 2 else { continue }
+            // PKCanvasView drawing uses content coordinates already; contentOffset
+            // only moves the viewport. Adding windowOrigin here shifts ink twice.
+            let points = Array(stroke.path)
+            guard !points.isEmpty else { continue }
 
             var runPage: Int?
             var runPoints: [PKStrokePoint] = []
             func flush() {
-                guard let page = runPage, runPoints.count >= 2,
+                guard let page = runPage, !runPoints.isEmpty,
                       let entry = windowPages.first(where: { $0.index == page }) else { return }
-                let local = runPoints.map { Self.moved($0, by: CGPoint(x: -entry.rect.minX, y: -entry.rect.minY)) }
-                let path = PKStrokePath(controlPoints: local, creationDate: stroke.path.creationDate)
-                let piece = PKStroke(ink: stroke.ink, path: path, transform: .identity, mask: stroke.mask)
+                let path = PKStrokePath(controlPoints: runPoints, creationDate: stroke.path.creationDate)
+                var drawing = PKDrawing(strokes: [PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)])
+                drawing.transform(using: entry.pageToDoc.inverted())
                 var bucket = pageDrawings[page] ?? PKDrawing()
                 var strokes = bucket.strokes
-                strokes.append(piece)
+                strokes.append(contentsOf: drawing.strokes)
                 bucket = PKDrawing(strokes: strokes)
                 pageDrawings[page] = bucket
                 changedPages.insert(page)
             }
 
             for point in points {
-                let owner = windowPages.first { $0.rect.contains(point.location) }?.index
+                let owner = windowPages.first { $0.rect.contains(point.location.applying(stroke.transform)) }?.index
                 if owner != runPage {
                     flush()
                     runPage = owner
@@ -211,8 +222,6 @@ final class DocumentInkSurface: UIView {
                     runPoints.append(point)
                 }
             }
-            runPage = nil
-            runPoints = []
             flush()   // 收尾:最后一段也要落页
         }
         for page in changedPages { if let d = pageDrawings[page] { onPageInkChanged?(page, d) } }
@@ -225,6 +234,8 @@ final class DocumentInkSurface: UIView {
         canvas.tool = tool
         canvas.drawingGestureRecognizer.isEnabled = true
     }
+
+    func setRulerActive(_ active: Bool) { canvas.isRulerActive = active }
 
     func undo() { if canvas.undoManager?.canUndo == true { canvas.undoManager?.undo() } }
     func redo() { if canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() } }

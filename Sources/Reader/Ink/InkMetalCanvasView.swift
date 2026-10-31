@@ -42,7 +42,12 @@ final class InkMetalCanvasView: MTKView {
     var baseWidth: CGFloat = 3.0
     /// 页面点 → 视图点(宿主每次刷新告知)
     var viewScale: CGFloat = 1
-    var isDrawingEnabled = false
+    var isDrawingEnabled = false {
+        willSet { if !newValue { handleCancelled() } }
+    }
+    /// Viewport point mapping, selected once at pen-down (e.g. a ruler edge).
+    var strokeProjector: ((CGPoint) -> ((CGPoint) -> CGPoint)?)?
+    private var activeProjector: ((CGPoint) -> CGPoint)?
     /// 管线编译成功才允许接管触摸 —— 否则会"吞掉所有输入但什么都不画"
     var isReady: Bool { pipeline != nil }
 
@@ -178,16 +183,17 @@ final class InkMetalCanvasView: MTKView {
 
     private func endStroke() {
         penDown = false
+        activeProjector = nil
         draft = InkStroke(kind: .pen, r: 0.04, g: 0.04, b: 0.04, a: 1, points: [])
         rebuildVertices()
     }
 
     private func begin(at touch: UITouch) {
+        activeProjector = strokeProjector?(touch.location(in: self))
         var stroke = InkStroke(kind: .pen, r: 0.04, g: 0.04, b: 0.04, a: 1, points: [])
-        if let c = inkColor.cgColor.components, c.count >= 3 {
-            stroke.r = Double(c[0]); stroke.g = Double(c[1]); stroke.b = Double(c[2])
-            stroke.a = c.count >= 4 ? Double(c[3]) : 1
-        }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        inkColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        stroke.r = Double(r); stroke.g = Double(g); stroke.b = Double(b); stroke.a = Double(a)
         draft = stroke
         penDown = true
         lastTimestamp = touch.timestamp
@@ -200,9 +206,10 @@ final class InkMetalCanvasView: MTKView {
     private func appendSample(_ touch: UITouch) {
         guard penDown else { return }
         guard touch.timestamp > lastSampleTime else { return }
-        let viewPoint = touch.location(in: self)
+        let raw = touch.location(in: self)
+        let viewPoint = activeProjector?(raw) ?? raw
         // 兜底:宿主还没算过页矩形时用画布范围裁剪 —— 宁可暂时不裁,也不能一个字都不出
-        let clips: [CGRect] = clipRects.isEmpty ? (bounds.width > 1 ? [bounds] : []) : clipRects
+        let clips = clipRects
         if clips.isEmpty, !warnedEmptyClips {
             warnedEmptyClips = true
             DiagLog.log("metal ink: no clip rects yet canvas=\(Int(bounds.width))x\(Int(bounds.height))")
@@ -242,7 +249,9 @@ final class InkMetalCanvasView: MTKView {
 
     /// 把当前段交给宿主;不足两点直接丢弃(单点画不出东西)
     private func flushDraft() {
-        guard draft.points.count >= 2 else { draft.points.removeAll(); return }
+        guard !draft.points.isEmpty else { return }
+        // A tap is a dot, represented by two coincident control points.
+        if draft.points.count == 1 { draft.points.append(draft.points[0]) }
         let stroke = draft
         draft.points.removeAll()
         onStrokeCommitted?(stroke)
@@ -257,8 +266,9 @@ final class InkMetalCanvasView: MTKView {
             // 实时段:预览点只在这里参与,不进 draft
             var live = draft
             for t in predicted {
-                let p = t.location(in: self)
-                let allowed = clipRects.isEmpty ? (bounds.width > 1 ? [bounds] : []) : clipRects
+                let raw = t.location(in: self)
+                let p = activeProjector?(raw) ?? raw
+                let allowed = clipRects
                 guard allowed.contains(where: { $0.contains(p) }) else { continue }
                 let last = live.points.last
                 let d = last.map { hypot(CGFloat(p.x) - CGFloat($0.x), CGFloat(p.y) - CGFloat($0.y)) } ?? 0
@@ -270,7 +280,7 @@ final class InkMetalCanvasView: MTKView {
                                             azimuth: Double(t.azimuthAngle(in: self)),
                                             time: t.timestamp))
             }
-            let clip = clipRects.first(where: { $0.contains(live.points[0].cg) })
+            let clip = live.points.first.flatMap { first in clipRects.first(where: { $0.contains(first.cg) }) }
                 ?? (bounds.width > 1 ? bounds : .zero)
             if !clip.isEmpty { appendVertices(live, clip: clip, into: &verts) }
         }
@@ -366,8 +376,7 @@ extension InkMetalCanvasView: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let pipeline, let queue = commandQueue,
               let drawable = currentDrawable,
-              let pass = currentRenderPassDescriptor,
-              let buffer = vertexBuffer, vertexCount > 0 else { return }
+              let pass = currentRenderPassDescriptor else { return }
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
@@ -378,10 +387,12 @@ extension InkMetalCanvasView: MTKViewDelegate {
                               Float(drawable.texture.height) / size.y)
         var pxBytes = px
         enc.setRenderPipelineState(pipeline)
-        enc.setVertexBuffer(buffer, offset: 0, index: 0)
-        enc.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        enc.setFragmentBytes(&pxBytes, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+        if let buffer = vertexBuffer, vertexCount > 0 {
+            enc.setVertexBuffer(buffer, offset: 0, index: 0)
+            enc.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setFragmentBytes(&pxBytes, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+        }
         enc.endEncoding()
         cmd.present(drawable)
         cmd.commit()

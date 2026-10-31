@@ -1618,8 +1618,13 @@ final class ReaderCoordinator: NSObject {
         provider.setTool(tool)
         // ③ 直尺:自绘、固定在视口中线(v0.35.0)。PencilKit 自带直尺没有定位 API、
         //    只会跟着页面一起滚,所以永久关掉它,改用我们自己的尺子层。
-        provider.setRulerActive(false)
-        setRulerOverlayVisible(session.rulerActive && markMode)
+        let rulerOn = session.rulerActive && markMode
+        inkSurface?.setRulerActive(rulerOn)
+        provider.setRulerActive(rulerOn && inkSurface == nil && metalHost == nil)
+        setRulerOverlayVisible(rulerOn && metalHost != nil)
+        metalHost?.strokeProjector = { [weak self] point in
+            self?.rulerOverlay?.projector(startingAt: point)
+        }
 
         let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
         DiagLog.log("pencil: apply ink=\(Self.inkSummary(tool)) kind=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
@@ -2134,6 +2139,7 @@ final class ReaderCoordinator: NSObject {
             self?.fireReadingTick()
         })
         scrollObservers.append(pdfView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
+            self?.rulerOverlay?.updateHostBounds()
             self?.refreshHandles()
             self?.menu.updatePosition(animated: false)  // v0.6.10:旋转/布局变化后菜单随选区同步
             self?.dryHost?.refresh()                    // v0.30.0:旋转/分屏后页矩形变化
@@ -2436,7 +2442,7 @@ enum PencilTouchIsolation {
         var result: [UIScrollView] = []
         var seen = Set<ObjectIdentifier>()
         func visit(_ view: UIView) {
-            if view is InkOverlayView { return }
+            if view is InkOverlayView || view is PKCanvasView { return }
             if let scroll = view as? UIScrollView, seen.insert(ObjectIdentifier(scroll)).inserted {
                 result.append(scroll)
             }

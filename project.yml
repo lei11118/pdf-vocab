@@ -64,6 +64,17 @@ targets:
       - package: GRDB
       - package: ZIPFoundation
 
+  PdfVocabTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: PdfVocab
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   PdfVocab:
     build:
@@ -73,3 +84,6 @@ schemes:
       config: Debug
     archive:
       config: Release
+    test:
+      targets:
+        - PdfVocabTests

@@ -46,6 +46,11 @@ final class MetalInkHost: UIView {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
+    var strokeProjector: ((CGPoint) -> ((CGPoint) -> CGPoint)?)? {
+        get { canvas.strokeProjector }
+        set { canvas.strokeProjector = newValue }
+    }
+
     var isDrawingEnabled: Bool {
         get { canvas.isDrawingEnabled }
         set { canvas.isDrawingEnabled = newValue && canvas.isReady }
@@ -104,6 +109,7 @@ final class MetalInkHost: UIView {
             return self.canvas.isDrawingEnabled && self.canvas.isReady
         }
         grab.onBegan = { [weak self] touch, _ in
+            self?.refresh()
             self?.canvas.handleBegan(touch)
         }
         grab.onMoved = { [weak self] touches, event in
@@ -186,8 +192,15 @@ final class MetalInkHost: UIView {
         guard let pdfView, let document = pdfView.document, document.pageCount > 0 else { return }
         if frame != pdfView.bounds { frame = pdfView.bounds }
         if canvas.frame != bounds { canvas.frame = bounds }
+        if observedScrollView !== findScrollView(in: pdfView) { observeScroll() }
+        // Keep the ink above PDFKit's page tree while leaving controls/ruler above it.
+        if let documentView = pdfView.documentView {
+            var pageTree: UIView = documentView
+            while let parent = pageTree.superview, parent !== pdfView { pageTree = parent }
+            if pageTree.superview === pdfView { pdfView.insertSubview(self, aboveSubview: pageTree) }
+        }
 
-        let current = currentIndex() ?? 0
+        let current = min(document.pageCount - 1, max(0, currentIndex() ?? 0))
         let lo = max(0, current - 2)
         let hi = min(document.pageCount - 1, current + 2)
         visibleRange = lo...max(lo, hi)

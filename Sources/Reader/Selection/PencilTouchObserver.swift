@@ -25,6 +25,14 @@ final class PencilTouchObserver: UIGestureRecognizer {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    override func reset() {
+        super.reset()
+        onEnd?()
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         onBegin?()
         report(touches, event: event)

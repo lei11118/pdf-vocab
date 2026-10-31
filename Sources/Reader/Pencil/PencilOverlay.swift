@@ -653,6 +653,8 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
 
         canvas.drawingPolicy = .pencilOnly
         canvas.isScrollEnabled = false
+        canvas.panGestureRecognizer.isEnabled = false
+        canvas.pinchGestureRecognizer?.isEnabled = false
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         // v0.25.0:纸面永远是白纸,墨水就永远是真正的黑 —— 深色模式下 PencilKit 会按
