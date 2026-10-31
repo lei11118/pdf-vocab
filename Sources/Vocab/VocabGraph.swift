@@ -202,7 +202,7 @@ struct VocabGraphView: View {
                                         .shadow(color:DS.accent.opacity(nodeStarts[word.id] == nil ? 0.08:0.2),radius:nodeStarts[word.id] == nil ? 6:12,y:3)
                                 }
                                 .buttonStyle(.plain).scaleEffect(zoom).position(screen(point,center:center))
-                                .simultaneousGesture(DragGesture(minimumDistance:5).onChanged { value in
+                                .simultaneousGesture(DragGesture(minimumDistance:5,coordinateSpace:.named("vocab-graph")).onChanged { value in
                                     if nodeStarts[word.id]==nil { nodeStarts[word.id]=positions[word.id] }
                                     let start=nodeStarts[word.id]!
                                     positions[word.id]=CGPoint(x:start.x+value.translation.width/zoom,y:start.y+value.translation.height/zoom)
@@ -219,6 +219,7 @@ struct VocabGraphView: View {
                             VStack { Spacer();Text(data.available ? "当前范围暂无有来源依据的关联，可切换模式或搜索其他词。" : "关系数据不可用，现有生词不受影响。").font(DS.Fonts.caption2).foregroundStyle(DS.foreground3).padding() }.allowsHitTesting(false)
                         }
                     }
+                    .coordinateSpace(name:"vocab-graph")
                     .clipped().background(DS.background2,in:RoundedRectangle(cornerRadius:24))
                     .overlay(RoundedRectangle(cornerRadius:24).stroke(DS.foreground3.opacity(0.12),lineWidth:0.8)).clipShape(RoundedRectangle(cornerRadius:24))
                     .simultaneousGesture(MagnificationGesture().onChanged { zoom=max(0.2,min(4,zoomStart*$0)) }.onEnded { _ in zoomStart=zoom })

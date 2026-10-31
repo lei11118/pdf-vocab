@@ -14,6 +14,8 @@ final class MetalInkHost: UIView {
     private var mappings: [Int: CGAffineTransform] = [:]
     private var observations: [NSKeyValueObservation] = []
     private weak var observedScrollView: UIScrollView?
+    private weak var observedPinch:UIPinchGestureRecognizer?
+    private var pinchDrawableSize:CGSize?
     private var refreshScheduled = false
     private(set) var isAttached = false
     private var pencilGrab: InkPencilGrabRecognizer?
@@ -154,7 +156,10 @@ final class MetalInkHost: UIView {
     private func observeScroll() {
         guard let pdfView, let scroll = pdfView.documentView?.superview as? UIScrollView else { return }
         guard observedScrollView !== scroll else { return }
+        observedPinch?.removeTarget(self,action:#selector(pinchChanged(_:)))
         observedScrollView = scroll
+        observedPinch=scroll.pinchGestureRecognizer
+        observedPinch?.addTarget(self,action:#selector(pinchChanged(_:)))
         scroll.isDirectionalLockEnabled = false
         scroll.panGestureRecognizer.require(toFail:editing.pan)
         observations = [
@@ -162,6 +167,12 @@ final class MetalInkHost: UIView {
             scroll.observe(\.zoomScale, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() },
             scroll.observe(\.contentSize, options: [.new]) { [weak self] _, _ in self?.scheduleRefresh() }
         ]
+    }
+    @objc private func pinchChanged(_ gesture:UIPinchGestureRecognizer) {
+        if gesture.state == .began { pinchDrawableSize=canvas.drawableSize }
+        if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+            pinchDrawableSize=nil;needsInkRefresh=true;scheduleRefresh()
+        }
     }
     private func scheduleRefresh() {
         guard !refreshScheduled else { return }
@@ -230,7 +241,14 @@ final class MetalInkHost: UIView {
         let pixelBudget: CGFloat = 10_000_000
         canvas.rasterScale = screenDensity
         let density = min(screenDensity, min(8192 / max(bounds.width,bounds.height),sqrt(pixelBudget / max(1,bounds.width*bounds.height))))
-        let pixels = CGSize(width: max(1,(bounds.width*density).rounded()),height: max(1,(bounds.height*density).rounded()))
+        let requestedPixels = CGSize(width: max(1,(bounds.width*density).rounded()),height: max(1,(bounds.height*density).rounded()))
+        // Reuse the same three render surfaces throughout a pinch. Geometry
+        // follows PDFKit continuously; full-density rasterization resumes at end.
+        let pixels:CGSize
+        if observedScrollView?.isZooming == true {
+            if pinchDrawableSize == nil { pinchDrawableSize=canvas.drawableSize.width>1 ? canvas.drawableSize:requestedPixels }
+            pixels=pinchDrawableSize ?? requestedPixels
+        } else { pinchDrawableSize=nil;pixels=requestedPixels }
         let resolutionChanged = canvas.drawableSize != pixels
         canvas.autoResizeDrawable = false
         if resolutionChanged { canvas.drawableSize = pixels }
@@ -375,6 +393,7 @@ final class MetalInkHost: UIView {
         drawingEnabled=false;canvas.isDrawingEnabled=false
         if let pencilGrab { pdfView?.removeGestureRecognizer(pencilGrab) }
         pencilGrab=nil;observations.removeAll();observedScrollView=nil
+        observedPinch?.removeTarget(self,action:#selector(pinchChanged(_:)));observedPinch=nil;pinchDrawableSize=nil
         laser.clear();laser.removeFromSuperview();editing.removeFromSuperview();removeFromSuperview();isAttached=false
         canvas.releaseCachedResources()
     }
