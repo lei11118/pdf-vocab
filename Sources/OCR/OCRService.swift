@@ -50,6 +50,7 @@ enum OCRService {
                 if !Task.isCancelled { store.save(docSha:docSha,page:i,words:words) }
             }
         }
+        guard !Task.isCancelled else { return }
         progress(total, total)
         store.markDone(docSha: docSha)
     }

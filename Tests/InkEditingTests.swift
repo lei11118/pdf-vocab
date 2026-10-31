@@ -78,6 +78,7 @@ final class InkEditingTests: XCTestCase {
     }
     func testZoomedVectorEdgeAndMemoryCacheRebuild() throws {
         guard let device=MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
+        XCTAssertNotNil(UIImage(named:"ink-grain-v1")?.cgImage,"Generated brush asset must be bundled")
         let canvas=InkMetalCanvasView();canvas.frame=CGRect(x:0,y:0,width:64,height:64)
         let stroke=InkStroke(kind:.marker,r:1,g:1,b:0,a:0.3,points:[InkPoint(x:10,y:32,width:20),InkPoint(x:54,y:32,width:20)])
         canvas.renderItems=[InkRenderItem(stroke:stroke,clip:canvas.bounds)]
@@ -111,7 +112,12 @@ final class InkEditingTests: XCTestCase {
         XCTAssertEqual(OCRService.renderingSize(for:.zero),.zero)
         // Exercise actual worker ownership and cancellation with an isolated PDF.
         let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".pdf")
-        defer { try? FileManager.default.removeItem(at:url) }
+        let cache=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask).first?
+            .appendingPathComponent("thumb-cache",isDirectory:true).appendingPathComponent(url.lastPathComponent,isDirectory:true)
+        defer {
+            try? FileManager.default.removeItem(at:url)
+            if let cache { try? FileManager.default.removeItem(at:cache) }
+        }
         let renderer=UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:600))
         try renderer.writePDF(to:url) { ctx in for _ in 0..<8 { ctx.beginPage() } }
         let loader=ThumbnailLoader(url:url)
@@ -134,7 +140,7 @@ final class InkEditingTests: XCTestCase {
         XCTAssertEqual(smooth.last?.x,points.last?.x)
         XCTAssertTrue(smooth.allSatisfy { $0.x.isFinite && $0.width>0 })
     }
-    func testHandleExpandedTargetWinsOverPDFContentAndScrollIsUnlocked() throws {
+    func testHandleExpandedTargetWinsOverPDFContentAndScrollIsUnlocked() async throws {
         let (view,doc,host,_,_)=try fixture()
         let handle=SelectionHandleView(isStart:true)
         handle.frame=CGRect(x:180,y:180,width:14,height:32);view.addSubview(handle)
@@ -144,6 +150,7 @@ final class InkEditingTests: XCTestCase {
         XCTAssertFalse(scroll.isDirectionalLockEnabled)
         _ = doc
         host.detach()
+        await Task.yield()
         XCTAssertNil(host.superview)
         XCTAssertFalse(view.subviews.contains { $0 is InkEditingOverlay })
     }
