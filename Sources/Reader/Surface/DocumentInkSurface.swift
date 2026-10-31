@@ -29,7 +29,7 @@ final class DocumentInkSurface: UIView {
     private weak var pdfView: PDFView?
     private var windowOrigin: CGPoint = .zero
     /// 当前窗口包含的页及其在画布坐标里的矩形
-    private var windowPages: [(index: Int, rect: CGRect, pageToDoc: CGAffineTransform)] = []
+    private var windowPages: [(index: Int, rect: CGRect, pageToCanvas: CGAffineTransform)] = []
     private var drawingEnabled = false
     private var saveTask: Task<Void, Never>?
     /// 重组画布内容时不要回写(否则自己触发自己)
@@ -149,13 +149,15 @@ final class DocumentInkSurface: UIView {
         guard changed else { return }
 
         windowOrigin = windowRect.origin
-        windowPages = rects
+        let toCanvas = CGAffineTransform(translationX: -windowRect.minX, y: -windowRect.minY)
+        windowPages = rects.map { (index: $0.index, rect: $0.rect.applying(toCanvas),
+                                  pageToCanvas: $0.pageToDoc.concatenating(toCanvas)) }
         frame = windowRect
         bounds = CGRect(origin: .zero, size: windowRect.size)
         canvas.frame = bounds
         canvas.bounds = CGRect(origin: .zero, size: bounds.size)   // 恒等变换,不抖
-        canvas.contentSize = CGSize(width: windowRect.maxX, height: windowRect.maxY)
-        canvas.contentOffset = windowRect.origin
+        canvas.contentSize = bounds.size
+        canvas.contentOffset = .zero
         if let superview { superview.bringSubviewToFront(self) }
         recompose()
         DiagLog.log("surface: window page \(lo)...\(hi) size=\(Int(windowRect.width))x\(Int(windowRect.height))")
@@ -171,7 +173,7 @@ final class DocumentInkSurface: UIView {
                 pageDrawings[entry.index] = loaded
             }
             guard !pageDrawing.strokes.isEmpty else { continue }
-            pageDrawing.transform(using: entry.pageToDoc)
+            pageDrawing.transform(using: entry.pageToCanvas)
             strokes.append(contentsOf: pageDrawing.strokes)
         }
         suppressArchive = true
@@ -190,9 +192,7 @@ final class DocumentInkSurface: UIView {
         // Include erased-to-empty pages so deleting the final stroke persists.
         let changedPages = Set(windowPages.map { $0.index })
         for stroke in drawing.strokes {
-            // 画布坐标 → 文档坐标
-            // PKCanvasView drawing uses content coordinates already; contentOffset
-            // only moves the viewport. Adding windowOrigin here shifts ink twice.
+            // Strokes and page rectangles both use local canvas coordinates.
             let points = Array(stroke.path)
             guard !points.isEmpty else { continue }
 
@@ -203,7 +203,7 @@ final class DocumentInkSurface: UIView {
                       let entry = windowPages.first(where: { $0.index == page }) else { return }
                 let path = PKStrokePath(controlPoints: runPoints, creationDate: stroke.path.creationDate)
                 var drawing = PKDrawing(strokes: [PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)])
-                drawing.transform(using: entry.pageToDoc.inverted())
+                drawing.transform(using: entry.pageToCanvas.inverted())
                 var bucket = pageDrawings[page] ?? PKDrawing()
                 var strokes = bucket.strokes
                 strokes.append(contentsOf: drawing.strokes)

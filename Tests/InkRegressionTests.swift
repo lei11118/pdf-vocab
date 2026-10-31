@@ -58,10 +58,10 @@ final class InkRegressionTests: XCTestCase {
         XCTAssertTrue(surface.canvas.isRulerActive)
 
         let page = try XCTUnwrap(document.page(at: 0))
-        let docView = try XCTUnwrap(view.documentView)
+        _ = try XCTUnwrap(view.documentView)
         let box = page.bounds(for: .cropBox)
         func location(_ x: CGFloat) -> CGPoint {
-            docView.convert(view.convert(CGPoint(x: box.minX + x, y: box.maxY - 50), from: page), from: view)
+            surface.canvas.convert(view.convert(CGPoint(x: box.minX + x, y: box.maxY - 50), from: page), from: view)
         }
         let points = [50, 80, 110].map { x in
             PKStrokePoint(location: location(CGFloat(x)), timeOffset: Double(x) / 100,
