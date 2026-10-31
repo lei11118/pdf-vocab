@@ -198,7 +198,7 @@ struct VocabListView: View {
             Spacer(minLength: DS.Space.s)
 
             HStack(spacing: DS.Space.x2s) {
-                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:16,foreground:DS.accent,background:DS.background2,accessibility:"Knowledge graph") { showGraph=true }
+                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:16,foreground:DS.accent,background:DS.background2,accessibility:"知识图谱") { showGraph=true }
                 moreMenu
                 DSIconButton(
                     systemImage: "xmark",

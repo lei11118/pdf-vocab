@@ -87,4 +87,17 @@ final class DocumentCanvasVocabTests: XCTestCase {
         XCTAssertEqual(layout,VocabRelationService.layout(ids:ids,edges:senses.edges))
     }
     func testNewMaterialIsBundled() { XCTAssertNotNil(UIImage(named:"ink-material-atlas-v2")?.cgImage) }
+    func testExportRendererKeepsMarkerOverlapAtSingleOpacity() throws {
+        let format=UIGraphicsImageRendererFormat();format.scale=1;format.opaque=false
+        let marker=InkStroke(kind:.marker,r:1,g:0,b:0,a:0.3,points:[InkPoint(x:10,y:30,width:20),InkPoint(x:50,y:30,width:20),InkPoint(x:10,y:30,width:20)])
+        let image=UIGraphicsImageRenderer(size:CGSize(width:64,height:64),format:format).image { ctx in
+            InkPDFRendering.draw(InkPage(strokes:[marker]),in:ctx.cgContext,pageSize:CGSize(width:64,height:64),scale:1)
+        }
+        let cg=try XCTUnwrap(image.cgImage)
+        var pixels=[UInt8](repeating:0,count:64*64*4)
+        let context=try XCTUnwrap(CGContext(data:&pixels,width:64,height:64,bitsPerComponent:8,bytesPerRow:64*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cg,in:CGRect(x:0,y:0,width:64,height:64))
+        XCTAssertEqual(Double(pixels[(32*64+30)*4+3])/255,0.3,accuracy:2.0/255)
+        XCTAssertEqual(pixels[(32*64+5)*4+3],0)
+    }
 }
