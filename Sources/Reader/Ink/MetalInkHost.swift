@@ -17,6 +17,7 @@ final class MetalInkHost: UIView {
     private var refreshScheduled = false
     private(set) var isAttached = false
     private var pencilGrab: InkPencilGrabRecognizer?
+    private let laser=InkLaserOverlay(frame:.zero)
     private let editing = InkEditingOverlay(frame:.zero)
     private var shapeKind: PencilShapeKind = .line
     private var editPath: [CGPoint] = []
@@ -31,6 +32,8 @@ final class MetalInkHost: UIView {
     private var eraserRadius: CGFloat = 11
     private var lastEraserPoint: CGPoint?
     private var eraseBefore: [Int: InkPage] = [:]
+    private var visitedBoxes:[Int:CGRect]=[:]
+    private var visitedMaps:[Int:CGAffineTransform]=[:]
     private var drawingEnabled = false
     private var needsInkRefresh = true
     private struct UndoEntry {
@@ -49,7 +52,7 @@ final class MetalInkHost: UIView {
     var isDrawingEnabled: Bool {
         get { drawingEnabled }
         set {
-            if !newValue { finishErase(); clearInkSelection() }
+            if !newValue { laser.clear();finishErase(); clearInkSelection() }
             drawingEnabled = newValue
             canvas.isDrawingEnabled = newValue && canvas.isReady
         }
@@ -76,6 +79,8 @@ final class MetalInkHost: UIView {
                 return self.canvas.convert(project(self.canvas.convert(p, to: pdf)), from: pdf)
             }
         }
+        laser.frame=pdfView.bounds;laser.autoresizingMask=[.flexibleWidth,.flexibleHeight]
+        pdfView.addSubview(laser)
         editing.frame = pdfView.bounds
         editing.autoresizingMask = [.flexibleWidth,.flexibleHeight]
         pdfView.addSubview(editing)
@@ -109,19 +114,23 @@ final class MetalInkHost: UIView {
         grab.isActive = { [weak self] in
             guard let self else { return false }
             return self.drawingEnabled && self.canvas.isReady &&
-                [.pen, .pencil, .marker, .crayon, .eraser, .lasso, .shape].contains(self.activeTool)
+                [.pen, .pencil, .marker, .crayon, .eraser, .lasso, .shape, .laser].contains(self.activeTool)
         }
         grab.onBegan = { [weak self] touch, _ in
             guard let self else { return }
+            self.visitedBoxes=[:];self.visitedMaps=[:]
             self.refresh()
             DiagLog.log("metal ink: input begin tool=\(self.activeTool.rawValue) cachePages=\(self.pages.count) undo=\(self.undoStack.count)")
-            if self.activeTool == .lasso || self.activeTool == .shape { self.beginEdit(at:touch.location(in:self.pdfView)) }
+            if self.activeTool == .laser { self.laser.begin(at:touch.location(in:self.pdfView)) }
+            else if self.activeTool == .lasso || self.activeTool == .shape { self.beginEdit(at:touch.location(in:self.pdfView)) }
             else if self.activeTool == .eraser { self.erase(at: touch.location(in: self.canvas)) }
             else { self.canvas.handleBegan(touch) }
         }
         grab.onMoved = { [weak self] touches, event in
             guard let self else { return }
-            if self.activeTool == .lasso || self.activeTool == .shape {
+            if self.activeTool == .laser {
+                if let t=touches.first(where:{$0.type == .pencil}) { self.laser.append(t.location(in:self.pdfView)) }
+            } else if self.activeTool == .lasso || self.activeTool == .shape {
                 if let t = touches.first(where: { $0.type == .pencil }) { self.moveEdit(to:t.location(in:self.pdfView)) }
             } else if self.activeTool == .eraser, let touch = touches.first(where: { $0.type == .pencil }) {
                 for sample in event?.coalescedTouches(for: touch) ?? [touch] { self.erase(at: sample.location(in: self.canvas)) }
@@ -129,7 +138,8 @@ final class MetalInkHost: UIView {
         }
         grab.onEnded = { [weak self] touches, event in
             guard let self else { return }
-            if self.activeTool == .lasso || self.activeTool == .shape {
+            if self.activeTool == .laser { self.laser.finish() }
+            else if self.activeTool == .lasso || self.activeTool == .shape {
                 if let t = touches.first(where: { $0.type == .pencil }) { self.moveEdit(to:t.location(in:self.pdfView)) }
                 self.endEdit()
             } else if self.activeTool == .eraser {
@@ -137,7 +147,7 @@ final class MetalInkHost: UIView {
                 self.finishErase()
             } else { self.canvas.handleEnded(touches, event: event) }
         }
-        grab.onCancelled = { [weak self] in self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled() }
+        grab.onCancelled = { [weak self] in self?.laser.clear();self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled() }
         pdf.addGestureRecognizer(grab); pencilGrab = grab
     }
 
@@ -163,7 +173,7 @@ final class MetalInkHost: UIView {
     }
 
     func applyTool(kind: PencilToolKind, color: UIColor, baseWidth: CGFloat, eraserRadius: CGFloat, whole: Bool, shape: PencilShapeKind = .line) {
-        finishErase(); canvas.handleCancelled(); clearInkSelection()
+        laser.clear();finishErase(); canvas.handleCancelled(); clearInkSelection()
         shapeKind = shape
         activeTool = kind; self.eraserRadius = eraserRadius; eraserWhole = whole
         canvas.inkKind = InkStroke.Kind(rawValue: kind.rawValue) ?? .pen
@@ -199,13 +209,16 @@ final class MetalInkHost: UIView {
         let visible = docView.convert(pdfView.bounds, from: pdfView)
         let expectedSize = CGSize(width:visible.width*1.3,height:visible.height*1.3)
         let tileSizedForZoom = abs(frame.width-expectedSize.width) < expectedSize.width*0.15 && abs(frame.height-expectedSize.height) < expectedSize.height*0.15
-        if frame.width > 1 && ((frame.contains(visible) && tileSizedForZoom) || canvas.hasActiveStroke || lastEraserPoint != nil || transforming || !editPath.isEmpty) {
+        if frame.width > 1 && ((frame.contains(visible) && tileSizedForZoom) || lastEraserPoint != nil || transforming || !editPath.isEmpty) {
             window = frame
         } else {
             window = visible.insetBy(dx: -visible.width*0.15, dy: -visible.height*0.15)
         }
         let geometryChanged = frame != window
-        if geometryChanged { frame = window; canvas.frame = bounds }
+        if geometryChanged {
+            canvas.translateLiveStroke(by:CGPoint(x:frame.minX-window.minX,y:frame.minY-window.minY))
+            frame = window;canvas.frame=bounds
+        }
         let origin = docView.convert(CGPoint.zero, to: pdfView)
         let unit = docView.convert(CGPoint(x: 1,y: 0), to: pdfView)
         let screenDensity = UIScreen.main.scale * hypot(unit.x-origin.x,unit.y-origin.y)
@@ -218,6 +231,12 @@ final class MetalInkHost: UIView {
         let resolutionChanged = canvas.drawableSize != pixels
         canvas.autoResizeDrawable = false
         if resolutionChanged { canvas.drawableSize = pixels }
+        if canvas.hasActiveStroke {
+            for (p,r) in docRects { visitedBoxes[p]=r }
+            for (p,t) in docMappings { visitedMaps[p]=t }
+            docRects.merge(visitedBoxes) { current,_ in current }
+            docMappings.merge(visitedMaps) { current,_ in current }
+        }
         let shift = CGAffineTransform(translationX: -window.minX, y: -window.minY)
         let nextBoxes = docRects.mapValues { $0.applying(shift) }
         let sameGeometry = nextBoxes.count == boxes.count && nextBoxes.allSatisfy { index, rect in
@@ -245,7 +264,7 @@ final class MetalInkHost: UIView {
                 items.append(InkRenderItem(stroke: mapped, clip: clip))
             }
         }
-        canvas.renderItems = items
+        canvas.renderItems = InkContinuity.joined(items)
         // Geometry and pixels must change in the same transaction on window recenter.
         if geometryChanged || resolutionChanged { canvas.draw() }
         trimPageCache()
@@ -268,25 +287,11 @@ final class MetalInkHost: UIView {
         guard !strokes.isEmpty else { return }
         commitGroup += 1
         var additions: [Int: [InkStroke]] = [:]
-        for stroke in strokes where stroke.points.count >= 2 {
-        var owner: Int?; var run: [InkPoint] = []
-        func flush() {
-            defer { run.removeAll() }
-            guard let index = owner, !run.isEmpty, let map = mappings[index] else { return }
-            var local = stroke; let inverse = map.inverted(); let scale = hypot(map.a,map.b)
-            local.points = run.map { p in
-                var q = p; let v = p.cg.applying(inverse)
-                q.x = Double(v.x); q.y = Double(v.y); q.width /= Double(scale); return q
+        for stroke in strokes {
+            let order=pages.values.flatMap(\.strokes).filter { $0.strokeID != nil && $0.strokeID == stroke.strokeID }.compactMap(\.fragmentOrder).max().map { $0+1 } ?? 0
+            for piece in InkContinuity.partition(stroke,boxes:boxes,maps:mappings,startOrder:order) {
+                additions[piece.page,default:[]].append(piece.stroke)
             }
-            if local.points.count == 1 { local.points.append(local.points[0]) }
-            additions[index,default: []].append(local)
-        }
-        for point in stroke.points {
-            let next = boxes.first { $0.value.contains(point.cg) }?.key
-            if next != owner { flush(); owner = next }
-            if next != nil { run.append(point) }
-        }
-        flush()
         }
         for (index, strokes) in additions {
             let before = pageInk(index); var after = before; after.strokes.append(contentsOf: strokes)
@@ -351,7 +356,7 @@ final class MetalInkHost: UIView {
         drawingEnabled=false;canvas.isDrawingEnabled=false
         if let pencilGrab { pdfView?.removeGestureRecognizer(pencilGrab) }
         pencilGrab=nil;observations.removeAll();observedScrollView=nil
-        editing.removeFromSuperview();removeFromSuperview();isAttached=false
+        laser.clear();laser.removeFromSuperview();editing.removeFromSuperview();removeFromSuperview();isAttached=false
         canvas.releaseCachedResources()
     }
     deinit { if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }

@@ -86,7 +86,7 @@ struct LibraryView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(db: store.db)
             }
-            .sheet(isPresented: $showVocab) {
+            .fullScreenCover(isPresented: $showVocab) {
                 VocabListView(store: VocabStore(db: store.db), onJump: { target in
                     showVocab = false
                     // 等生词本面板收起后再推入阅读页(避免转场打架)

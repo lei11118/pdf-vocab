@@ -2,7 +2,7 @@ name: test-ink
 on:
   workflow_dispatch:
   push:
-    branches: [codex/fix-ink-input-ruler]
+    branches: [codex/fix-ink-input-ruler, codex/document-canvas-vocab-graph]
 permissions:
   contents: read
 env:

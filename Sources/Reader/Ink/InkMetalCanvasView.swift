@@ -140,10 +140,15 @@ final class InkMetalCanvasView: MTKView {
         }
         fragment float4 f_main(VOut in [[stage_in]],
                                constant float2 &pxPerPoint [[buffer(2)]],
-                               constant uint &style [[buffer(3)]], texture2d<float> grainMap [[texture(0)]]) {
+                               constant uint &style [[buffer(3)]], constant float4 *papers [[buffer(4)]], constant uint &paperCount [[buffer(5)]], texture2d<float> grainMap [[texture(0)]]) {
             float2 p = in.position.xy / max(pxPerPoint, float2(0.0001));
             if (p.x < in.clip.x || p.y < in.clip.y || p.x > in.clip.z || p.y > in.clip.w) {
                 discard_fragment();
+            }
+            if (paperCount>0) {
+                bool inside=false;
+                for (uint i=0;i<paperCount;i++) { float4 r=papers[i];inside=inside || (p.x>=r.x && p.y>=r.y && p.x<=r.z && p.y<=r.w); }
+                if (!inside) discard_fragment();
             }
             float aa = max(fwidth(in.d), 0.65 / max(pxPerPoint.x, pxPerPoint.y));
             float cov = 1.0 - smoothstep(in.hw - aa, in.hw, abs(in.d));
@@ -250,6 +255,7 @@ final class InkMetalCanvasView: MTKView {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
         inkColor.getRed(&r, green: &g, blue: &b, alpha: &a)
         stroke.r = Double(r); stroke.g = Double(g); stroke.b = Double(b); stroke.a = InkBrush.opacity(kind: inkKind, colorAlpha: Double(a))
+        stroke.strokeID=UUID()
         draft = stroke
         penDown = true
         lastTimestamp = touch.timestamp
@@ -270,13 +276,8 @@ final class InkMetalCanvasView: MTKView {
             warnedEmptyClips = true
             DiagLog.log("metal ink: no clip rects yet canvas=\(Int(bounds.width))x\(Int(bounds.height))")
         }
-        guard clips.contains(where: { $0.contains(viewPoint) }) else {
-            // 页外:当前段到此为止(已在页面内的部分保留)
-            flushDraft()
-            lastTimestamp = touch.timestamp
-            lastSampleTime = touch.timestamp
-            return
-        }
+        // Crossing a page boundary never ends the logical stroke. Paper clips
+        // apply in the renderer and precise page intersections are persisted later.
         lastSampleTime = touch.timestamp
 
         let last = draft.points.last
@@ -302,7 +303,7 @@ final class InkMetalCanvasView: MTKView {
                                      altitude: Double(touch.altitudeAngle),
                                      azimuth: Double(touch.azimuthAngle(in: self)),
                                      time: touch.timestamp))
-        if draft.points.count > 4000 { flushDraft() }
+        if draft.points.count>20000,let anchor=draft.points.last { flushDraft();draft.points=[anchor] }
     }
 
     /// 把当前段交给宿主;不足两点直接丢弃(单点画不出东西)
@@ -358,13 +359,16 @@ final class InkMetalCanvasView: MTKView {
                                             azimuth: Double(t.azimuthAngle(in: self)),
                                             time: t.timestamp))
             }
-            let clip = live.points.first.flatMap { first in clipRects.first(where: { $0.contains(first.cg) }) }
-                ?? (bounds.width > 1 ? bounds : .zero)
+            let clip=clipRects.reduce(CGRect.null) { $0.union($1) }
             if !clip.isEmpty, let batch=makeBatch(live,clip:clip) { batches.append(batch) }
         }
         setNeedsDisplay()
     }
 
+    func translateLiveStroke(by delta: CGPoint) {
+        guard penDown else { return }
+        draft.points=draft.points.map { p in var q=p;q.x+=Double(delta.x);q.y+=Double(delta.y);return q }
+    }
     func releaseCachedResources() {
         coverageTexture=nil;dryTexture=nil;dryBatches.removeAll();batches.removeAll()
         verticesRevision = -1;cachedRevision = -1
@@ -500,6 +504,11 @@ extension InkMetalCanvasView: MTKViewDelegate {
             mask.setVertexBytes(&size,length: MemoryLayout<SIMD2<Float>>.stride,index: 1)
             mask.setFragmentBytes(&px,length: MemoryLayout<SIMD2<Float>>.stride,index: 2)
             mask.setFragmentBytes(&style,length: MemoryLayout<UInt32>.stride,index: 3)
+            var papers=clipRects.prefix(64).map { SIMD4<Float>(Float($0.minX),Float($0.minY),Float($0.maxX),Float($0.maxY)) }
+            var count=UInt32(papers.count)
+            if papers.isEmpty { papers=[.zero] }
+            papers.withUnsafeBytes { mask.setFragmentBytes($0.baseAddress!,length:$0.count,index:4) }
+            mask.setFragmentBytes(&count,length:MemoryLayout<UInt32>.stride,index:5)
             mask.drawPrimitives(type: .triangle,vertexStart: 0,vertexCount: batch.count)
             mask.endEncoding()
             return composite(coverageTexture,into: output)

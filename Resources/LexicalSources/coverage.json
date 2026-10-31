@@ -1,0 +1,22 @@
+{
+  "counts": {
+    "membership": 185081,
+    "synset": 107519,
+    "morphology": 24158
+  },
+  "sources": [
+    [
+      "oewn-2025",
+      "https://en-word.net/downloads",
+      "CC-BY-4.0 and Princeton WordNet License",
+      "9ca6d1dcb75f822fdd66617f7d9da48142ace38dd544d6ad5e2feca1674ad3fe"
+    ],
+    [
+      "morphemes",
+      "https://github.com/colingoldberg/morphemes",
+      "MIT",
+      "2911f1791b8f769c70d6474f6cb92e64ce528f09c50ec9c14008b3b096b7c127"
+    ]
+  ],
+  "policy": "Morphology: explicit source examples only. Synonyms: shared English sense IDs. Chinese gloss matches alone are not confirmed edges."
+}

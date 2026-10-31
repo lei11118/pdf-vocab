@@ -23,3 +23,6 @@ tmp_v69/
 *.ipa
 build_log.tmp
 dist/
+
+# Reproducible lexical source downloads
+tools/lexical-cache/

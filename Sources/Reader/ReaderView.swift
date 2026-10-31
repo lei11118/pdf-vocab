@@ -215,7 +215,7 @@ struct ReaderView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(db: store.db)
             }
-            .sheet(isPresented: $showVocab) {
+            .fullScreenCover(isPresented: $showVocab) {
                 VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                     showVocab = false
                     readerHandle.coordinator?.jumpToVocab(target: target)

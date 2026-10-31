@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import UniformTypeIdentifiers
 
 /// 生词本(v0.10.0 起;v0.25.0 按用户要求"和主页一样的样式,大刀阔斧地改"整页重做)。
 ///
@@ -49,6 +50,16 @@ struct VocabListView: View {
     @State private var noteText = ""
     @State private var showExport = false
     /// v0.25.0:正在被拖动的卡片(用于抬起时轻微放大,给"拿起来了"的手感)
+    @State private var showGraph=false
+    @State private var dragOriginal:[Int64]=[]
+    @State private var dragGeneration=UUID()
+    @State private var dragCancel:DispatchWorkItem?
+    @State private var scrollProxy:ScrollViewProxy?
+    @State private var scrollHeight:CGFloat=0
+    @State private var cardFrames:[Int64:CGRect]=[:]
+    @State private var edgeWork:DispatchWorkItem?
+    @State private var edgeDirection=0
+    @State private var targetId:Int64?
     @State private var draggingId: Int64?
     /// 手动排序才允许拖动换位
     @AppStorage("vocabSortMode") private var sortRaw = "manual"
@@ -78,6 +89,7 @@ struct VocabListView: View {
             ZStack(alignment: .bottom) {
                 DS.background1.ignoresSafeArea()
 
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
                         header
@@ -96,6 +108,12 @@ struct VocabListView: View {
                     .padding(.bottom, 128)
                 }
                 .scrollIndicators(.hidden)
+                .coordinateSpace(name:"vocab-scroll")
+                .background(GeometryReader { geometry in Color.clear.onAppear { scrollHeight=geometry.size.height }.onChange(of:geometry.size.height) { _,value in scrollHeight=value } })
+                .onPreferenceChange(VocabCardFrames.self) { cardFrames=$0 }
+                .onAppear { scrollProxy=proxy }
+                .onDrop(of:[UTType.text],delegate:VocabGridDropDelegate(enter:{},leave:{scheduleDragCancel()},finish:{finishCardDrag(commit:true)},update:{point in updateEdgeScroll(y:point.y)}))
+                }
 
                 dockLayer
             }
@@ -106,6 +124,8 @@ struct VocabListView: View {
             .sheet(item: $detailWord) { word in
                 VocabularyDetailView(store: store, word: word, onJump: onJump)
             }
+            .fullScreenCover(isPresented:$showGraph) { VocabGraphView(store:store,words:words,onJump:onJump) }
+            .onDisappear { finishCardDrag(commit:false) }
             .sheet(isPresented: $showExport) {
                 AnkiExportSheet(store: store, words: words, docStore: docStore)
             }
@@ -178,6 +198,7 @@ struct VocabListView: View {
             Spacer(minLength: DS.Space.s)
 
             HStack(spacing: DS.Space.x2s) {
+                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:16,foreground:DS.accent,background:DS.background2,accessibility:"Knowledge graph") { showGraph=true }
                 moreMenu
                 DSIconButton(
                     systemImage: "xmark",
@@ -368,6 +389,7 @@ struct VocabListView: View {
 
     /// 拖放落地:groupId = nil → 移出所有分组(「未分组」)。
     private func moveWords(_ items: [String], toGroup groupId: Int64?) -> Bool {
+        finishCardDrag(commit:false)
         var moved = 0
         for item in items {
             guard let id = Int64(item) else { continue }
@@ -453,13 +475,62 @@ struct VocabListView: View {
         }
         .buttonStyle(DSPressableButtonStyle())
         .contextMenu { rowMenu(word) }
-        .modifier(CardDragModifier(enabled: listMode != .select, payload: String(word.id)))
-        .modifier(CardDropModifier(enabled: canReorder) { items in
-            guard let raw = items.first, let id = Int64(raw) else { return false }
-            move(id: id, before: word.id)
-            return true
-        })
+        .id(word.id)
+        .background(GeometryReader { geometry in Color.clear.preference(key:VocabCardFrames.self,value:[word.id:geometry.frame(in:.named("vocab-scroll"))]) })
+        .overlay(alignment:.top) {
+            if targetId==word.id && draggingId != nil { Rectangle().fill(DS.accent).frame(height:3) }
+        }
+        .onDrag {
+            if listMode != .select {
+                draggingId=word.id;dragOriginal=words.map(\.id);dragGeneration=UUID()
+            }
+            return NSItemProvider(object:String(word.id) as NSString)
+        }
+        .onDrop(of:[UTType.text],delegate:VocabGridDropDelegate(enter:{
+            dragCancel?.cancel();dragGeneration=UUID()
+            guard canReorder,let id=draggingId,id != word.id else { return }
+            targetId=word.id
+            let ids=VocabReorderPolicy.moving(words.map(\.id),source:id,target:word.id)
+            let lookup=Dictionary(uniqueKeysWithValues:words.map { ($0.id,$0) })
+            withAnimation(DS.Motion.spring) { words=ids.compactMap { lookup[$0] } }
+        },leave:{ scheduleDragCancel() },finish:{ finishCardDrag(commit:canReorder) },update:{ point in
+            if let frame=cardFrames[word.id] { updateEdgeScroll(y:frame.minY+point.y) }
+        }))
         .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+    }
+
+    private func finishCardDrag(commit:Bool) {
+        dragCancel?.cancel();dragCancel=nil;edgeWork?.cancel();edgeWork=nil;edgeDirection=0
+        guard draggingId != nil else { return }
+        if commit,sortMode == .manual,!isSearching,!dragOriginal.isEmpty {
+            store.applyManualOrder(fullOrder:store.listWords(docSha:scopeDocSha).map(\.id),visible:dragOriginal,moved:words.map(\.id))
+        }
+        draggingId=nil;targetId=nil;dragOriginal=[];reload()
+    }
+    private func scheduleDragCancel() {
+        dragCancel?.cancel();let generation=dragGeneration
+        let work=DispatchWorkItem { if generation==dragGeneration { finishCardDrag(commit:false) } }
+        dragCancel=work;DispatchQueue.main.asyncAfter(deadline:.now()+0.7,execute:work)
+    }
+    private func updateEdgeScroll(y:CGFloat) {
+        guard draggingId != nil else { return }
+        dragCancel?.cancel();dragGeneration=UUID()
+        let direction=y<70 ? -1 : (y>scrollHeight-90 ? 1:0)
+        if edgeDirection==direction { return }
+        edgeDirection=direction;edgeWork?.cancel();edgeWork=nil
+        if direction != 0 { stepEdgeScroll() }
+    }
+    private func stepEdgeScroll() {
+        guard draggingId != nil,edgeDirection != 0,!words.isEmpty else { return }
+        let visible=words.enumerated().filter { pair in
+            guard let frame=cardFrames[pair.element.id] else { return false }
+            return frame.maxY>0 && frame.minY<scrollHeight
+        }
+        let base=edgeDirection<0 ? (visible.first?.offset ?? 0):(visible.last?.offset ?? words.count-1)
+        let index=max(0,min(words.count-1,base+edgeDirection*2))
+        withAnimation(.linear(duration:0.12)) { scrollProxy?.scrollTo(words[index].id,anchor:edgeDirection<0 ? .top:.bottom) }
+        let work=DispatchWorkItem { stepEdgeScroll() };edgeWork=work
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:work)
     }
 
     private func toggleSelection(_ id: Int64) {
@@ -1045,5 +1116,27 @@ private struct VocabCardView: View {
         guard !Task.isCancelled else { return }
         self.translation = translation
         self.note = storedNote
+    }
+}
+
+private struct VocabCardFrames:PreferenceKey {
+    static var defaultValue:[Int64:CGRect]=[:]
+    static func reduce(value:inout [Int64:CGRect],nextValue:()->[Int64:CGRect]) { value.merge(nextValue()) { _,new in new } }
+}
+private struct VocabGridDropDelegate:DropDelegate {
+    var enter:()->Void
+    var leave:()->Void
+    var finish:()->Void
+    var update:(CGPoint)->Void
+    func validateDrop(info:DropInfo)->Bool { info.hasItemsConforming(to:[UTType.text]) }
+    func dropEntered(info:DropInfo) { enter() }
+    func dropExited(info:DropInfo) { leave() }
+    func dropUpdated(info:DropInfo)->DropProposal? { update(info.location);return DropProposal(operation:.move) }
+    func performDrop(info:DropInfo)->Bool { finish();return true }
+}
+enum VocabReorderPolicy {
+    static func moving(_ ids:[Int64],source:Int64,target:Int64)->[Int64] {
+        guard source != target,let from=ids.firstIndex(of:source),let to=ids.firstIndex(of:target) else { return ids }
+        var result=ids;result.remove(at:from);result.insert(source,at:min(to,result.count));return result
     }
 }

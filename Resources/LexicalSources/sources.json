@@ -1,0 +1,18 @@
+{
+  "source": "colingoldberg/morphemes",
+  "license": "MIT",
+  "relationshipPolicy": "Source examples are evidence; substring matches alone are not verified morphology. Chinese gloss matches are candidates only.",
+  "files": [
+    {
+      "file": "morphemes.json",
+      "url": "https://raw.githubusercontent.com/colingoldberg/morphemes/master/data/morphemes.json",
+      "sha256": "2911f1791b8f769c70d6474f6cb92e64ce528f09c50ec9c14008b3b096b7c127"
+    },
+    {
+      "file": "morphemes-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/colingoldberg/morphemes/master/LICENSE",
+      "sha256": "9bfc780a45a89040c83ac5c36894350065a366505e9da9f79374341b5d97ca24"
+    }
+  ],
+  "morphemeCount": 2435
+}

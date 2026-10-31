@@ -65,6 +65,9 @@ enum AnnotatedPDFExporter {
                             imageContext.cgContext.fill(mapped)
                         }
                         // Pencil 手写(导出前归一化到页面坐标)
+                        if let record=ink.drawing(docSha:docSha,page:i),let drawing=InkPage.decode(record.data) {
+                            InkPDFRendering.draw(drawing,in:imageContext.cgContext,pageSize:pageBounds.size,scale:scale)
+                        }
                         if let own = loadPageInk(i) {
                             let inkImage = own.image(from: CGRect(origin: .zero, size: pageBounds.size), scale: scale)
                             inkImage.draw(in: CGRect(origin: .zero, size: pixelSize))

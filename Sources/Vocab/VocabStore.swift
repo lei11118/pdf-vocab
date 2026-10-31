@@ -12,7 +12,7 @@ import GRDB
 struct VocabStore: Sendable {
     let db: AppDatabase
 
-    struct WordSummary: Identifiable {
+    struct WordSummary: Identifiable, Sendable {
         let id: Int64
         let lemma: String
         let surface: String

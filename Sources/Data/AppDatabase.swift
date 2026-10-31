@@ -192,6 +192,14 @@ final class AppDatabase: @unchecked Sendable {
                 )
                 """)
         }
+        migrator.registerMigration("v12.vocabGraphPosition") { db in
+            try db.create(table:"vocab_graph_position") { t in
+                t.column("wordId",.integer).notNull().references("vocab_word",onDelete:.cascade)
+                t.column("mode",.text).notNull()
+                t.column("x",.double).notNull();t.column("y",.double).notNull()
+                t.primaryKey(["wordId","mode"])
+            }
+        }
         return migrator
     }
 }

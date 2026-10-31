@@ -30,6 +30,8 @@ struct InkStroke: Codable, Equatable {
     /// sRGB 0...1
     var r: Double, g: Double, b: Double, a: Double
     var points: [InkPoint]
+    var strokeID: UUID? = nil
+    var fragmentOrder: Int? = nil
     /// 荧光笔等半透明笔要先做 stencil 合并,否则自交处变深(见逆向文档 §4.5)
     var isTranslucent: Bool { a < 0.999 }
 
