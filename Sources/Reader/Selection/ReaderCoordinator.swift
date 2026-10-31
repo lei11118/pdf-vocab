@@ -1601,9 +1601,9 @@ final class ReaderCoordinator: NSObject {
         // v0.40.0:单画布模式先套工具(它不经过 provider 的逐页画布)
         inkSurface?.applyTool(session.makeTool(scale: DocumentInkSurface.scale))
         // v0.47.0:自研 Metal 引擎也要吃工具颜色/笔宽(否则调色盘与笔宽档对它无效)
-        if let inking = session.makeTool(scale: 1) as? PKInkingTool {
-            metalHost?.applyTool(color: inking.color, baseWidth: inking.width)
-        }
+        metalHost?.applyTool(kind: session.kind, color: session.currentUIColor,
+                             baseWidth: session.width, eraserRadius: session.eraserRadius,
+                             whole: session.eraserWhole)
         if !wetToolIsRegular { clearWetInk() }
         // provider 未就绪时**不记版本**,留给建好之后的下一次调用
         guard let provider = overlayProvider else { return }

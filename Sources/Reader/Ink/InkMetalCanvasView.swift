@@ -37,6 +37,7 @@ final class InkMetalCanvasView: MTKView {
     /// 一段墨提交(视图坐标)。跨页/越界时会被切成多段分别提交。
     var onStrokeCommitted: ((InkStroke) -> Void)?
 
+    var inkKind: InkStroke.Kind = .pen
     var inkColor: UIColor = .black { didSet { colorDirty = true } }
     /// 基础笔宽(**页面点**;实际笔宽 = baseWidth × viewScale × 压感 × 速度)
     var baseWidth: CGFloat = 3.0
@@ -49,12 +50,16 @@ final class InkMetalCanvasView: MTKView {
     var strokeProjector: ((CGPoint) -> ((CGPoint) -> CGPoint)?)?
     private var activeProjector: ((CGPoint) -> CGPoint)?
     /// 管线编译成功才允许接管触摸 —— 否则会"吞掉所有输入但什么都不画"
-    var isReady: Bool { pipeline != nil }
+    var isReady: Bool { pipeline != nil && compositePipeline != nil }
 
     // MARK: - Metal
 
     private var commandQueue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
+    private var compositePipeline: MTLRenderPipelineState?
+    private var coverageTexture: MTLTexture?
+    private struct Batch { var start: Int; var count: Int; var style: UInt32 }
+    private var batches: [Batch] = []
     private var vertexBuffer: MTLBuffer?
     private var vertexCount = 0
     private var colorDirty = true
@@ -64,6 +69,7 @@ final class InkMetalCanvasView: MTKView {
     /// 当前正在写的一段(视图坐标)
     private var draft = InkStroke(kind: .pen, r: 0.04, g: 0.04, b: 0.04, a: 1, points: [])
     private var penDown = false
+    var hasActiveStroke: Bool { penDown }
     private var lastTimestamp: TimeInterval = 0
     private var lastSampleTime: TimeInterval = 0
     private var warnedEmptyClips = false
@@ -114,14 +120,32 @@ final class InkMetalCanvasView: MTKView {
             return o;
         }
         fragment float4 f_main(VOut in [[stage_in]],
-                               constant float2 &pxPerPoint [[buffer(2)]]) {
+                               constant float2 &pxPerPoint [[buffer(2)]],
+                               constant uint &style [[buffer(3)]]) {
             float2 p = in.position.xy / max(pxPerPoint, float2(0.0001));
             if (p.x < in.clip.x || p.y < in.clip.y || p.x > in.clip.z || p.y > in.clip.w) {
                 discard_fragment();
             }
             float aa = max(fwidth(in.d), 0.6);
             float cov = 1.0 - smoothstep(in.hw - aa, in.hw, abs(in.d));
-            return float4(in.color.rgb, in.color.a * cov);
+            float grain = 1.0;
+            if (style > 0) {
+                float2 cell = floor((p - in.clip.xy) * (style == 1 ? 2.5 : 1.5));
+                float noise = fract(sin(dot(cell,float2(12.9898,78.233))) * 43758.5453);
+                grain = style == 1 ? (0.25 + 0.75 * smoothstep(0.15,0.8,noise))
+                                   : (0.5 + 0.5 * smoothstep(0.1,0.7,noise));
+            }
+            float alpha = in.color.a * cov * grain;
+            return float4(in.color.rgb * alpha, alpha);
+        }
+        struct QOut { float4 position [[position]]; float2 uv; };
+        vertex QOut q_main(uint vid [[vertex_id]]) {
+            float2 p = vid == 0 ? float2(-1,-1) : (vid == 1 ? float2(3,-1) : float2(-1,3));
+            QOut o; o.position = float4(p,0,1); o.uv = float2((p.x+1)*0.5,(1-p.y)*0.5); return o;
+        }
+        fragment float4 q_fragment(QOut in [[stage_in]], texture2d<float> ink [[texture(0)]]) {
+            constexpr sampler s(coord::normalized, filter::nearest, address::clamp_to_edge);
+            return ink.sample(s,in.uv);
         }
         """
         do {
@@ -132,13 +156,24 @@ final class InkMetalCanvasView: MTKView {
             let att = desc.colorAttachments[0]!
             att.pixelFormat = .bgra8Unorm
             att.isBlendingEnabled = true
-            att.rgbBlendOperation = .add
-            att.alphaBlendOperation = .add
-            att.sourceRGBBlendFactor = .sourceAlpha
-            att.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            att.rgbBlendOperation = .max
+            att.alphaBlendOperation = .max
+            att.sourceRGBBlendFactor = .one
+            att.destinationRGBBlendFactor = .one
             att.sourceAlphaBlendFactor = .one
-            att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            att.destinationAlphaBlendFactor = .one
             pipeline = try device.makeRenderPipelineState(descriptor: desc)
+            let composite = MTLRenderPipelineDescriptor()
+            composite.vertexFunction = lib.makeFunction(name: "q_main")
+            composite.fragmentFunction = lib.makeFunction(name: "q_fragment")
+            let output = composite.colorAttachments[0]!
+            output.pixelFormat = .bgra8Unorm
+            output.isBlendingEnabled = true
+            output.sourceRGBBlendFactor = .one
+            output.sourceAlphaBlendFactor = .one
+            output.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            output.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            compositePipeline = try device.makeRenderPipelineState(descriptor: composite)
         } catch {
             DiagLog.log("metal ink: pipeline failed \(error.localizedDescription)")
         }
@@ -190,10 +225,10 @@ final class InkMetalCanvasView: MTKView {
 
     private func begin(at touch: UITouch) {
         activeProjector = strokeProjector?(touch.location(in: self))
-        var stroke = InkStroke(kind: .pen, r: 0.04, g: 0.04, b: 0.04, a: 1, points: [])
+        var stroke = InkStroke(kind: inkKind, r: 0.04, g: 0.04, b: 0.04, a: 1, points: [])
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
         inkColor.getRed(&r, green: &g, blue: &b, alpha: &a)
-        stroke.r = Double(r); stroke.g = Double(g); stroke.b = Double(b); stroke.a = Double(a)
+        stroke.r = Double(r); stroke.g = Double(g); stroke.b = Double(b); stroke.a = InkBrush.opacity(kind: inkKind, colorAlpha: Double(a))
         draft = stroke
         penDown = true
         lastTimestamp = touch.timestamp
@@ -221,23 +256,20 @@ final class InkMetalCanvasView: MTKView {
             lastSampleTime = touch.timestamp
             return
         }
-        let dt = max(0.001, touch.timestamp - lastTimestamp)
         lastTimestamp = touch.timestamp
         lastSampleTime = touch.timestamp
 
         let last = draft.points.last
         let dist = last.map { hypot(CGFloat(viewPoint.x) - CGFloat($0.x), CGFloat(viewPoint.y) - CGFloat($0.y)) } ?? 0
-        if let last, dist < 0.35, draft.points.count > 1 {
+        if last != nil, dist < 0.35, draft.points.count > 1 {
             // 同一位置的重复采样(合并采样常见),只更新压力不新增顶点
             draft.points[draft.points.count - 1].force = Double(touch.force)
             return
         }
-        let speed = dist / CGFloat(dt)
-        let forceFactor = touch.type == .pencil
-            ? max(0.35, min(1.6, touch.force > 0 ? Double(touch.force) * 2.0 : 0.8))
-            : 0.8
-        let speedFactor = max(0.45, min(1.35, 1.25 - Double(speed) * 0.02))
-        let width = Double(baseWidth * viewScale) * forceFactor * speedFactor
+        let normalizedForce = touch.maximumPossibleForce > 0 ? Double(touch.force / touch.maximumPossibleForce) : 0.5
+        let rawWidth = InkBrush.width(kind: inkKind, base: Double(baseWidth * viewScale),
+                                      force: normalizedForce, altitude: Double(touch.altitudeAngle))
+        let width = draft.points.last.map { $0.width * 0.3 + rawWidth * 0.7 } ?? rawWidth
 
         draft.points.append(InkPoint(x: Double(viewPoint.x), y: Double(viewPoint.y),
                                      width: width, force: Double(touch.force),
@@ -261,7 +293,14 @@ final class InkMetalCanvasView: MTKView {
 
     private func rebuildVertices(predicted: [UITouch] = []) {
         var verts: [Vertex] = []
-        for item in renderItems { appendVertices(item.stroke, clip: item.clip, into: &verts) }
+        batches.removeAll(keepingCapacity: true)
+        func append(_ stroke: InkStroke, clip: CGRect) {
+            let start = verts.count
+            appendVertices(stroke, clip: clip, into: &verts)
+            let style: UInt32 = stroke.kind == .pencil ? 1 : (stroke.kind == .crayon ? 2 : 0)
+            if verts.count > start { batches.append(Batch(start: start, count: verts.count-start, style: style)) }
+        }
+        for item in renderItems { append(item.stroke, clip: item.clip) }
         if penDown, draft.points.count >= 1 {
             // 实时段:预览点只在这里参与,不进 draft
             var live = draft
@@ -282,7 +321,7 @@ final class InkMetalCanvasView: MTKView {
             }
             let clip = live.points.first.flatMap { first in clipRects.first(where: { $0.contains(first.cg) }) }
                 ?? (bounds.width > 1 ? bounds : .zero)
-            if !clip.isEmpty { appendVertices(live, clip: clip, into: &verts) }
+            if !clip.isEmpty { append(live, clip: clip) }
         }
         vertexCount = verts.count
         guard !verts.isEmpty, let device else {
@@ -336,6 +375,7 @@ final class InkMetalCanvasView: MTKView {
 
         // ② 圆头与圆角关节(只在该补的地方补:两端 + 转角明显的点)
         for i in 0..<pts.count {
+            if stroke.kind == .marker, i == 0 || i == pts.count - 1 { continue }
             guard shouldRound(at: i, in: pts) else { continue }
             appendDisc(center: pts[i].cg, radius: halves[i], clip: clipV, color: color, into: &verts)
         }
@@ -373,28 +413,54 @@ final class InkMetalCanvasView: MTKView {
 extension InkMetalCanvasView: MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
-    func draw(in view: MTKView) {
-        guard let pipeline, let queue = commandQueue,
-              let drawable = currentDrawable,
-              let pass = currentRenderPassDescriptor else { return }
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
-        guard let cmd = queue.makeCommandBuffer(),
-              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
-        var size = SIMD2<Float>(Float(max(1, bounds.width)), Float(max(1, bounds.height)))
-        let px = SIMD2<Float>(Float(drawable.texture.width) / size.x,
-                              Float(drawable.texture.height) / size.y)
-        var pxBytes = px
-        enc.setRenderPipelineState(pipeline)
-        if let buffer = vertexBuffer, vertexCount > 0 {
-            enc.setVertexBuffer(buffer, offset: 0, index: 0)
-            enc.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-            enc.setFragmentBytes(&pxBytes, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+    /// Per-stroke max coverage prevents segment/join/self-intersection alpha buildup.
+    /// The premultiplied result is composited exactly once over earlier strokes.
+    @discardableResult
+    func encodeFrame(to target: MTLTexture, commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let pipeline, let compositePipeline, let device else { return false }
+        if coverageTexture?.width != target.width || coverageTexture?.height != target.height {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                         width: target.width, height: target.height, mipmapped: false)
+            desc.usage = [.renderTarget, .shaderRead]
+            desc.storageMode = .private
+            coverageTexture = device.makeTexture(descriptor: desc)
         }
-        enc.endEncoding()
-        cmd.present(drawable)
-        cmd.commit()
+        guard let coverageTexture else { return false }
+        func pass(_ texture: MTLTexture, clear: Bool) -> MTLRenderPassDescriptor {
+            let p = MTLRenderPassDescriptor()
+            p.colorAttachments[0].texture = texture
+            p.colorAttachments[0].loadAction = clear ? .clear : .load
+            p.colorAttachments[0].storeAction = .store
+            p.colorAttachments[0].clearColor = MTLClearColorMake(0,0,0,0)
+            return p
+        }
+        guard let clear = commandBuffer.makeRenderCommandEncoder(descriptor: pass(target, clear: true)) else { return false }
+        clear.endEncoding()
+        guard let buffer = vertexBuffer else { return true }
+        var size = SIMD2<Float>(Float(max(1,bounds.width)),Float(max(1,bounds.height)))
+        var px = SIMD2<Float>(Float(target.width)/size.x,Float(target.height)/size.y)
+        for batch in batches {
+            guard let mask = commandBuffer.makeRenderCommandEncoder(descriptor: pass(coverageTexture, clear: true)) else { return false }
+            var style = batch.style
+            mask.setRenderPipelineState(pipeline)
+            mask.setVertexBuffer(buffer, offset: 0, index: 0)
+            mask.setVertexBytes(&size,length: MemoryLayout<SIMD2<Float>>.stride,index: 1)
+            mask.setFragmentBytes(&px,length: MemoryLayout<SIMD2<Float>>.stride,index: 2)
+            mask.setFragmentBytes(&style,length: MemoryLayout<UInt32>.stride,index: 3)
+            mask.drawPrimitives(type: .triangle,vertexStart: batch.start,vertexCount: batch.count)
+            mask.endEncoding()
+            guard let composite = commandBuffer.makeRenderCommandEncoder(descriptor: pass(target, clear: false)) else { return false }
+            composite.setRenderPipelineState(compositePipeline)
+            composite.setFragmentTexture(coverageTexture,index: 0)
+            composite.drawPrimitives(type: .triangle,vertexStart: 0,vertexCount: 3)
+            composite.endEncoding()
+        }
+        return true
+    }
+
+    func draw(in view: MTKView) {
+        guard let drawable = currentDrawable, let command = commandQueue?.makeCommandBuffer(),
+              encodeFrame(to: drawable.texture, commandBuffer: command) else { return }
+        command.present(drawable); command.commit()
     }
 }

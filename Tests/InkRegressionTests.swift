@@ -7,6 +7,78 @@ import MetalKit
 
 @MainActor
 final class InkRegressionTests: XCTestCase {
+    func testBrushPoliciesKeepMarkerConstantAndTransparent() {
+        XCTAssertEqual(InkBrush.width(kind: .marker, base: 24, force: 0, altitude: .pi/2), 24)
+        XCTAssertEqual(InkBrush.width(kind: .marker, base: 24, force: 1, altitude: .pi/6), 24)
+        XCTAssertEqual(InkBrush.opacity(kind: .marker, colorAlpha: 1), 0.3)
+        XCTAssertGreaterThan(InkBrush.width(kind: .pencil, base: 3, force: 1, altitude: .pi/6),
+                             InkBrush.width(kind: .pencil, base: 3, force: 1, altitude: .pi/2))
+    }
+
+    func testPartialEraserSplitsLongSegmentAndWholeEraserRemovesIt() {
+        let stroke = InkStroke(kind: .pen,r: 0,g: 0,b: 0,a: 1,
+                               points: [InkPoint(x: 0,y: 0,width: 2),InkPoint(x: 100,y: 0,width: 2)])
+        let a = CGPoint(x: 50,y: -30), b = CGPoint(x: 50,y: 30)
+        let partial = InkEraser.erase([stroke],from: a,to: b,radius: 10,whole: false)
+        XCTAssertTrue(partial.changed)
+        XCTAssertEqual(partial.strokes.count,2)
+        XCTAssertEqual(partial.strokes.first?.points.first?.x,0)
+        XCTAssertEqual(partial.strokes.last?.points.last?.x,100)
+        XCTAssertEqual(partial.strokes[0].points.last!.x,39,accuracy: 0.1)
+        XCTAssertEqual(partial.strokes[1].points.first!.x,61,accuracy: 0.1)
+        XCTAssertTrue(InkEraser.erase([stroke],from: a,to: b,radius: 10,whole: true).strokes.isEmpty)
+        XCTAssertFalse(InkEraser.erase([stroke],from: CGPoint(x: 200,y: 0),to: CGPoint(x: 200,y: 0),radius: 10,whole: false).changed)
+    }
+
+    func testMetalMarkerSelfOverlapUsesOneLayerOfAlpha() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
+        let canvas = InkMetalCanvasView()
+        canvas.frame = CGRect(x: 0,y: 0,width: 64,height: 64)
+        let stroke = InkStroke(kind: .marker,r: 1,g: 1,b: 0,a: 0.3,
+                               points: [10.0,54,10,54].map { InkPoint(x: $0,y: 32,width: 20) })
+        canvas.renderItems = [InkRenderItem(stroke: stroke,clip: canvas.bounds)]
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,width: 64,height: 64,mipmapped: false)
+        desc.usage = [.renderTarget,.shaderRead]; desc.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: desc))
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        func alpha() throws -> Double {
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            XCTAssertTrue(canvas.encodeFrame(to: target,commandBuffer: command))
+            command.commit(); command.waitUntilCompleted()
+            XCTAssertNil(command.error)
+            var bytes = [UInt8](repeating: 0,count: 64*64*4)
+            bytes.withUnsafeMutableBytes { target.getBytes($0.baseAddress!,bytesPerRow: 64*4,from: MTLRegionMake2D(0,0,64,64),mipmapLevel: 0) }
+            return Double(bytes[(32*64+32)*4+3])/255
+        }
+        XCTAssertEqual(try alpha(),0.3,accuracy: 2.0/255)
+        canvas.renderItems.append(InkRenderItem(stroke: stroke,clip: canvas.bounds))
+        XCTAssertEqual(try alpha(),0.51,accuracy: 2.0/255)
+    }
+
+    func testMetalInkSharesPDFDocumentTransformDuringScroll() throws {
+        let view = PDFView(frame: CGRect(x: 0,y: 0,width: 400,height: 400))
+        view.displayMode = .singlePageContinuous
+        let doc = PDFDocument()
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 400,height: 600)).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0,y: 0,width: 400,height: 600))
+        }
+        doc.insert(try XCTUnwrap(PDFPage(image: image)),at: 0)
+        doc.insert(try XCTUnwrap(PDFPage(image: image)),at: 1)
+        view.document = doc; view.layoutDocumentView()
+        let host = MetalInkHost(); host.attach(to: view,store: nil,docSha: "scroll-test")
+        let documentView = try XCTUnwrap(view.documentView)
+        XCTAssertTrue(host.superview === documentView)
+        let page = try XCTUnwrap(doc.page(at: 0))
+        let pdfPoint = CGPoint(x: 100,y: 300)
+        let local = host.convert(view.convert(pdfPoint,from: page),from: view)
+        let scroll = try XCTUnwrap(documentView.superview as? UIScrollView)
+        scroll.contentOffset.y += 100
+        let inkPoint = host.convert(local,to: view)
+        let paperPoint = view.convert(pdfPoint,from: page)
+        XCTAssertEqual(inkPoint.x,paperPoint.x,accuracy: 0.01)
+        XCTAssertEqual(inkPoint.y,paperPoint.y,accuracy: 0.01)
+    }
+
     func testMetalShaderCompilesAndEmptyFrameCanDraw() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal is unavailable") }
         let canvas = InkMetalCanvasView()
