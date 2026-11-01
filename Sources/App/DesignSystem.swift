@@ -275,6 +275,84 @@ struct DSPillButtonStyle: ButtonStyle {
     }
 }
 
+/// Shared page hierarchy. Actions wrap below the title when space is constrained.
+struct DSPageHeading<Actions: View>: View {
+    let title: String
+    let eyebrow: String
+    let subtitle: String
+    @ViewBuilder var actions: () -> Actions
+
+    private var heading: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Text(eyebrow)
+                .font(DS.Fonts.micro).tracking(2)
+                .foregroundStyle(DS.accent)
+            Text(title)
+                .font(DS.Fonts.display3)
+                .foregroundStyle(DS.foreground1)
+                .accessibilityAddTraits(.isHeader)
+            Text(subtitle)
+                .font(DS.Fonts.subhead)
+                .foregroundStyle(DS.foreground3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: DS.Space.l) {
+                heading
+                Spacer(minLength: DS.Space.m)
+                actions().fixedSize(horizontal: true, vertical: false)
+            }
+            VStack(alignment: .leading, spacing: DS.Space.m) {
+                heading
+                actions()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One search contract for the library and vocabulary, with a 44pt clear target.
+struct DSSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            Image(systemName: "magnifyingglass")
+                .font(DS.Fonts.subhead)
+                .foregroundStyle(focused ? DS.accent : DS.foreground3)
+                .accessibilityHidden(true)
+            TextField(placeholder, text: $text)
+                .font(DS.Fonts.body)
+                .foregroundStyle(DS.foreground1)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($focused)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(DS.foreground3)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(DSPressableButtonStyle())
+                .accessibilityLabel("清除搜索")
+            }
+        }
+        .padding(.leading, DS.Space.m)
+        .padding(.trailing, text.isEmpty ? DS.Space.m : DS.Space.x3s)
+        .frame(minHeight: 50)
+        .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.regular)
+            .strokeBorder(focused ? DS.accent.opacity(0.6) : DS.foreground1.opacity(0.07), lineWidth: 1))
+    }
+}
+
 /// 圆形图标按钮:阅读页顶栏 / 工具条。
 struct DSIconButton: View {
     let systemImage: String
@@ -292,7 +370,8 @@ struct DSIconButton: View {
                 .foregroundStyle(foreground)
                 .frame(width: size, height: size)
                 .background(background, in: Circle())
-                .contentShape(Circle())
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
         .accessibilityLabel(accessibility ?? systemImage)

@@ -1137,7 +1137,8 @@ final class ReaderCoordinator: NSObject {
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
         if let hit = pageHit(viewPoint),
-           let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
+           let word = SelectionGeometry.initialWord(on: hit.page, at: hit.point,
+               tolerance: min(8, 6 / max(pdfView.scaleFactor, 0.1))),
            SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
             DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
             applySelection(word, src: "doubleTap")
@@ -1185,7 +1186,7 @@ final class ReaderCoordinator: NSObject {
             return
         }
         let pageIndex = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) } ?? -1
-        let key = "\(pageIndex)|\(text.count)|\(text.hashValue)"
+        let key = "\(pageIndex)|\(SelectionGeometry.identity(for: selection))|\(text)"
         guard key != appliedKey else { return }
         appliedKey = key
         appliedCharCount = text.count

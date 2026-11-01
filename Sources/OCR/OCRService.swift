@@ -126,27 +126,29 @@ enum OCRService {
 
     // MARK: - 命中与几何
 
-    /// 页坐标点 → 词索引(容差:水平 ±15%、垂直 ±35%;多个候选取中心最近者)。
+    /// Exact word boxes outrank padded neighbours; padding is bounded by line height.
     static func wordIndex(at pagePoint: CGPoint, in words: [OCRWord], pageBounds: CGRect) -> Int? {
         guard !words.isEmpty, pageBounds.width > 1, pageBounds.height > 1 else { return nil }
-        let nx = Double((pagePoint.x - pageBounds.minX) / pageBounds.width)
-        let nyTop = Double(1 - (pagePoint.y - pageBounds.minY) / pageBounds.height)
-        var best: (idx: Int, d: Double)?
+        var best: (idx: Int, exact: Bool, distance: CGFloat)?
         for (i, word) in words.enumerated() {
-            let padX = word.w * 0.15
-            let padY = word.h * 0.35
-            let inside = nx >= word.x - padX && nx <= word.x + word.w + padX
-                && nyTop >= word.y - padY && nyTop <= word.y + word.h + padY
-            guard inside else { continue }
-            let dx = nx - (word.x + word.w / 2)
-            let dy = nyTop - (word.y + word.h / 2)
-            let d = dx * dx + dy * dy
-            if best == nil || d < (best?.d ?? .infinity) { best = (i, d) }
+            let rect = pageRect(from: word, pageBounds: pageBounds)
+            guard SelectionGeometry.isValid(rect) else { continue }
+            let padX = min(rect.width * 0.15, rect.height * 0.35)
+            let padY = rect.height * 0.35
+            guard rect.insetBy(dx: -padX, dy: -padY).contains(pagePoint) else { continue }
+            let exact = rect.contains(pagePoint)
+            let dx = max(rect.minX - pagePoint.x, 0, pagePoint.x - rect.maxX)
+            let dy = max(rect.minY - pagePoint.y, 0, pagePoint.y - rect.maxY)
+            let distance = dx * dx + dy * dy
+            if best == nil || (exact && !best!.exact)
+                || (exact == best!.exact && distance < best!.distance) {
+                best = (i, exact, distance)
+            }
         }
         return best?.idx
     }
 
-    /// 归一化词框 → 页坐标矩形(PDF 坐标,左下原点;含 pageBounds 原点偏移)。
+    /// Normalized top-left OCR coordinates to PDF media-box coordinates.
     static func pageRect(from word: OCRWord, pageBounds: CGRect) -> CGRect {
         CGRect(
             x: pageBounds.minX + CGFloat(word.x) * pageBounds.width,

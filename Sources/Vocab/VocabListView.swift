@@ -94,8 +94,6 @@ struct VocabListView: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
-                        header
-                        searchField
                         groupStrip
 
                         if words.isEmpty {
@@ -107,7 +105,7 @@ struct VocabListView: View {
                     }
                     .padding(.horizontal, DS.Layout.pageMargin)
                     .padding(.top, DS.Space.xs)
-                    .padding(.bottom, 128)
+                    .padding(.bottom, DS.Space.l)
                 }
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name:"vocab-scroll")
@@ -117,8 +115,15 @@ struct VocabListView: View {
                 .onDrop(of:[UTType.text],delegate:VocabGridDropDelegate(enter:{},leave:{scheduleDragCancel()},finish:{finishCardDrag(commit:true)},update:{point in updateEdgeScroll(y:point.y)}))
                 }
 
-                dockLayer
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: DS.Space.m) { header; searchField }
+                    .padding(.horizontal, DS.Layout.pageMargin)
+                    .padding(.top, DS.Space.s)
+                    .padding(.bottom, DS.Space.m)
+                    .background(DS.background1)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { dockLayer }
             .toolbar(.hidden, for: .navigationBar)
             .task { reload() }
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: filter)
@@ -179,39 +184,13 @@ struct VocabListView: View {
     // MARK: - 页头(与文档库同一套版式)
 
     private var header: some View {
-        HStack(alignment: .center, spacing: DS.Space.m) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
-                    Text("生词本")
-                        .font(DS.Fonts.display3)
-                        .foregroundStyle(DS.foreground1)
-                    Text("VOCAB")
-                        .font(DS.Fonts.micro)
-                        .tracking(1.4)
-                        .foregroundStyle(DS.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(DS.accentContainer, in: Capsule())
-                }
-                Text(headerSubtitle)
-                    .font(DS.Fonts.subhead)
-                    .foregroundStyle(DS.foreground3)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: DS.Space.s)
-
-            HStack(spacing: DS.Space.x2s) {
-                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:16,foreground:DS.accent,background:DS.background2,accessibility:"知识图谱") { showGraph=true }
+        DSPageHeading(title: "生词本", eyebrow: "WORDS · COLLECTION", subtitle: headerSubtitle) {
+            HStack(spacing: DS.Space.xs) {
+                DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", foreground: DS.accent,
+                             background: DS.accentContainer, accessibility: "知识图谱") { showGraph = true }
                 moreMenu
-                DSIconButton(
-                    systemImage: "xmark",
-                    size: 40,
-                    iconSize: 14,
-                    foreground: DS.foreground2,
-                    background: DS.background2,
-                    accessibility: "关闭生词本"
-                ) {
+                DSIconButton(systemImage: "xmark", iconSize: 14, background: DS.background2,
+                             accessibility: "关闭生词本") {
                     if let onClose { onClose() } else { dismiss() }
                 }
             }
@@ -286,43 +265,18 @@ struct VocabListView: View {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(DS.foreground2)
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)
                 .background(DS.background2, in: Circle())
                 .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
         }
         .accessibilityLabel("更多")
     }
 
-    // MARK: - 搜索框(与文档库同一个胶囊)
+    // MARK: - 共享搜索与分组过滤
 
     private var searchField: some View {
-        HStack(spacing: DS.Space.xs) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(DS.foreground3)
-            TextField("搜索生词", text: $searchText)
-                .font(DS.Fonts.subhead)
-                .foregroundStyle(DS.foreground1)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(DS.foreground4)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("清除搜索")
-            }
-        }
-        .padding(.horizontal, DS.Space.m)
-        .frame(height: 46)
-        .background(DS.background2, in: Capsule())
-        .overlay(Capsule().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+        DSSearchField(placeholder: "搜索生词", text: $searchText)
     }
-
-    // MARK: - 分组过滤条(拖动单词到这里 = 换分组)
 
     private var groupStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {

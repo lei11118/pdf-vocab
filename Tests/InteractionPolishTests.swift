@@ -2,6 +2,7 @@ import XCTest
 import UIKit
 import PDFKit
 import MetalKit
+import SwiftUI
 @testable import PdfVocab
 
 @MainActor
@@ -22,6 +23,116 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertEqual(picked.string?.trimmingCharacters(in:.whitespacesAndNewlines),"Hello")
         XCTAssertNil(SelectionGeometry.initialWord(on:page,at:CGPoint(x:350,y:250)))
     }
+    func testRepeatedWordsHaveDistinctSelectionIdentity() throws {
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 300)).pdfData { ctx in
+            ctx.beginPage()
+            ("word word" as NSString).draw(at: CGPoint(x: 30, y: 60), withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+        }
+        let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
+        let first = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: 4)))
+        let second = try XCTUnwrap(page.selection(for: NSRange(location: 5, length: 4)))
+        XCTAssertEqual(first.string, second.string)
+        XCTAssertNotEqual(SelectionGeometry.identity(for: first), SelectionGeometry.identity(for: second))
+        let repeated = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: 4)))
+        XCTAssertEqual(SelectionGeometry.identity(for: first), SelectionGeometry.identity(for: repeated))
+    }
+
+    func testWordHitRecoversGapAndPrefersExactGlyphWithoutJumpingLines() {
+        let text = "a b c" as NSString
+        let boxes = [CGRect(x: 0, y: 0, width: 8, height: 20), .zero,
+                     CGRect(x: 12, y: 0, width: 8, height: 20), .zero,
+                     CGRect(x: 0, y: 40, width: 8, height: 20)]
+        func hit(_ p: CGPoint, near: Int = 1) -> Int? {
+            SelectionGeometry.wordCharacter(text: text, near: near, at: p, tolerance: 6, bounds: { boxes[$0] })
+        }
+        XCTAssertEqual(hit(CGPoint(x: 11, y: 10)), 2)
+        XCTAssertEqual(hit(CGPoint(x: 13, y: 10), near: 0), 2)
+        XCTAssertNil(hit(CGPoint(x: 30, y: 10)))
+        XCTAssertNil(hit(CGPoint(x: 4, y: 30)))
+        XCTAssertEqual(hit(CGPoint(x: 4, y: 45)), 4)
+    }
+
+    func testOCRExactBoxBeatsPaddedShortNeighbour() {
+        let words = [OCRWord(text: "a", x: 0.1, y: 0.2, w: 0.01, h: 0.02, line: 0),
+                     OCRWord(text: "extraordinary", x: 0.112, y: 0.2, w: 0.2, h: 0.02, line: 0)]
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        XCTAssertEqual(OCRService.wordIndex(at: CGPoint(x: 113, y: 790), in: words, pageBounds: bounds), 1)
+        XCTAssertEqual(OCRService.wordIndex(at: CGPoint(x: 105, y: 790), in: words, pageBounds: bounds), 0)
+        XCTAssertNil(OCRService.wordIndex(at: CGPoint(x: 500, y: 790), in: words, pageBounds: bounds))
+    }
+
+    func testDoubleTapMovesBetweenRepeatedWordsAfterRotationAndZoom() throws {
+        let bytes = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 500)).pdfData { ctx in
+            ctx.beginPage()
+            ("word word" as NSString).draw(at: CGPoint(x: 70, y: 100), withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: bytes)), page = try XCTUnwrap(document.page(at: 0))
+        page.setBounds(CGRect(x: 20, y: 30, width: 360, height: 440), for: .cropBox)
+        for rotation in [0, 90, 180, 270] {
+            page.rotation = rotation
+            let view = PDFView(frame: CGRect(x: 0, y: 0, width: 900, height: 1100))
+            view.displayMode = .singlePageContinuous
+            view.document = document
+            view.scaleFactor = 1.5
+            view.layoutDocumentView()
+            var selected: [String] = []
+            let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { info in
+                if let info { selected.append(info.text) }
+            })
+            coordinator.pdfView = view
+            coordinator.hapticsEnabled = false
+            for start in [0, 5] {
+                let word = try XCTUnwrap(page.selection(for: NSRange(location: start, length: 4)))
+                let box = word.bounds(for: page)
+                let tap = CompletedWordTap(point: view.convert(CGPoint(x: box.midX, y: box.midY), from: page))
+                coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: tap)
+                let highlight = try XCTUnwrap(page.annotations.first { $0.type == PDFAnnotationSubtype.highlight.rawValue })
+                XCTAssertEqual(highlight.bounds.midX, box.midX, accuracy: 1)
+                XCTAssertEqual(highlight.bounds.midY, box.midY, accuracy: 1)
+            }
+            XCTAssertEqual(selected, ["word", "word"])
+            coordinator.clearTempHighlight()
+        }
+    }
+
+    /// Review actual SwiftUI renders alongside the geometric regression tests.
+    func testPageLayoutReviewSnapshots() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared), store = VocabStore(db: db)
+        var ids: [Int64] = []
+        for surface in ["serendipity", "luminous", "resilience", "wanderlust"] {
+            let lemma = "ui-review-" + UUID().uuidString.lowercased()
+            ids.append(try XCTUnwrap(store.collectHeadword(lemma: lemma, surface: surface)))
+        }
+        defer { for id in ids { store.deleteWord(id: id) } }
+        let folder = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true).appendingPathComponent("UIReview")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let cases: [(String, CGSize, AnyView)] = [
+            ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),
+            ("vocab-ipad", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
+            ("vocab-split", CGSize(width: 480, height: 900), AnyView(VocabListView(store: store))),
+            ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark)))
+        ]
+        for (name, size, content) in cases {
+            let host = UIHostingController(rootView: content)
+            let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+            window.rootViewController = host
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            host.view.frame = window.bounds
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(300))
+            let image = UIGraphicsImageRenderer(size: size).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+            try XCTUnwrap(image.pngData()).write(to: folder.appendingPathComponent(name + ".png"))
+            XCTAssertEqual(image.size, size)
+        }
+    }
+
     func testRulerTracksDocumentInsteadOfViewport() {
         let host=UIView(frame:CGRect(x:0,y:0,width:500,height:500))
         let document=UIView(frame:CGRect(x:0,y:0,width:500,height:1500));host.addSubview(document)
@@ -181,4 +292,15 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertTrue(store.isDone(docSha: sha))
     }
 
+}
+
+@MainActor
+private final class CompletedWordTap: UITapGestureRecognizer {
+    let point: CGPoint
+    init(point: CGPoint) { self.point = point; super.init(target: nil, action: nil) }
+    override var state: UIGestureRecognizer.State {
+        get { .ended }
+        set { }
+    }
+    override func location(in view: UIView?) -> CGPoint { point }
 }

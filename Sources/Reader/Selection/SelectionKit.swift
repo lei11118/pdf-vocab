@@ -162,15 +162,46 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 
 enum SelectionGeometry {
 
+    /// Include text ranges and geometry: repeated words on a page are distinct selections.
+    static func identity(for selection: PDFSelection) -> String {
+        selection.pages.map { page in
+            let ranges = (0..<selection.numberOfTextRanges(on: page)).map {
+                NSStringFromRange(selection.range(at: $0, on: page))
+            }.joined(separator: ",")
+            return "\(ObjectIdentifier(page))|\(ranges)|\(NSStringFromCGRect(selection.bounds(for: page)))"
+        }.joined(separator: ";")
+    }
+
+    /// Recover a nearby lexical glyph when PDFKit returns a space or a neighbour.
+    /// Exact glyph hits win; the bounded tolerance never jumps to a distant line.
+    static func wordCharacter(text: NSString, near index: Int, at point: CGPoint,
+                              tolerance: CGFloat, bounds: (Int) -> CGRect) -> Int? {
+        guard index != NSNotFound, index >= 0, index < text.length else { return nil }
+        var best: (index: Int, distance: CGFloat)?
+        for candidate in max(0, index - 8)...min(text.length - 1, index + 8) {
+            let ch = text.character(at: candidate)
+            guard WordPicker.isWordChar(ch) || WordPicker.isCJK(ch) || ch == 45 else { continue }
+            let rect = bounds(candidate)
+            guard isValid(rect) else { continue }
+            let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+            let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+            let limit = min(max(0, tolerance), rect.height * 0.25)
+            guard dx <= limit, dy <= limit else { continue }
+            let distance = dx * dx + dy * dy
+            if best == nil || distance < best!.distance { best = (candidate, distance) }
+        }
+        return best?.index
+    }
+
     /// Reconstruct a whole visual word instead of trusting PDF text-run splits.
-    static func initialWord(on page: PDFPage, at point: CGPoint) -> PDFSelection? {
-        guard let text=page.string else { return nil }
-        let ns=text as NSString,index=page.characterIndex(at:point)
-        guard index != NSNotFound,index>=0,index<ns.length,
-              page.characterBounds(at:index).insetBy(dx:-2,dy:-2).contains(point),
-              let range=visualWordRange(text:ns,at:index,bounds:{page.characterBounds(at:$0)}),
-              let word=page.selection(for:range),isSane(word,maxPages:1,maxChars:100),
-              isSingleWordText(lookupText(for:word)) else { return nil }
+    static func initialWord(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
+        guard let text = page.string else { return nil }
+        let ns = text as NSString
+        guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
+                                       tolerance: tolerance, bounds: { page.characterBounds(at: $0) }),
+              let range = visualWordRange(text: ns, at: index, bounds: { page.characterBounds(at: $0) }),
+              let word = page.selection(for: range), isSane(word, maxPages: 1, maxChars: 100),
+              isSingleWordText(lookupText(for: word)) else { return nil }
         return word
     }
 

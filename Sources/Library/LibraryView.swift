@@ -27,11 +27,7 @@ struct LibraryView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
-                        libraryHeader
-
-                        if !documents.isEmpty {
-                            searchField
-                        }
+                        workspaceSummary
 
                         if documents.isEmpty {
                             emptyState
@@ -49,10 +45,21 @@ struct LibraryView: View {
                     }
                     .padding(.horizontal, DS.Layout.pageMargin)
                     .padding(.top, DS.Space.xs)
-                    .padding(.bottom, 124)
+                    .padding(.bottom, DS.Space.l)
                 }
                 .scrollIndicators(.hidden)
-
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: DS.Space.m) {
+                    libraryHeader
+                    if !documents.isEmpty { searchField }
+                }
+                .padding(.horizontal, DS.Layout.pageMargin)
+                .padding(.top, DS.Space.s)
+                .padding(.bottom, DS.Space.m)
+                .background(DS.background1)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomDock
                     .contentTransition(.numericText(value: Double(vocabCount)))
                     .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: vocabCount)
@@ -140,52 +147,18 @@ struct LibraryView: View {
     // MARK: - v0.16.0 Library Home
 
     private var libraryHeader: some View {
-        HStack(alignment: .center, spacing: DS.Space.m) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: DS.Space.xs) {
-                    Text("跃文")
-                        .font(DS.Fonts.display3)
-                        .foregroundStyle(DS.foreground1)
-                    Text("READ · NOTE")
-                        .font(DS.Fonts.micro)
-                        .tracking(1.4)
-                        .foregroundStyle(DS.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(DS.accentContainer, in: Capsule())
-                }
-                Text("把英文读成自己的")
-                    .font(DS.Fonts.subhead)
-                    .foregroundStyle(DS.foreground3)
-            }
-
-            Spacer(minLength: DS.Space.s)
-
-            HStack(spacing: DS.Space.x2s) {
-                DSIconButton(systemImage:"point.3.connected.trianglepath.dotted",size:40,iconSize:17,foreground:DS.accent,background:DS.accentContainer,accessibility:"知识图谱") { showGraph=true }
+        DSPageHeading(title: "跃文", eyebrow: "READ · NOTE", subtitle: "把英文读成自己的") {
+            HStack(spacing: DS.Space.xs) {
                 Text(Date.now, format: .dateTime.month(.abbreviated).day())
-                    .font(DS.Fonts.caption2)
-                    .foregroundStyle(DS.foreground3)
-                    .lineLimit(1)
-
+                    .font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
                 Menu {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Label("设置", systemImage: "gearshape")
-                    }
-                    Button {
-                        showDiagnostics = true
-                    } label: {
-                        Label("诊断日志", systemImage: "stethoscope")
-                    }
+                    Button { showSettings = true } label: { Label("设置", systemImage: "gearshape") }
+                    Button { showDiagnostics = true } label: { Label("诊断日志", systemImage: "stethoscope") }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(DS.foreground2)
-                        .frame(width: 40, height: 40)
+                        .font(DS.Fonts.headline).foregroundStyle(DS.foreground2)
+                        .frame(width: 44, height: 44)
                         .background(DS.background2, in: Circle())
-                        .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
                 }
                 .accessibilityLabel("更多设置")
             }
@@ -193,30 +166,31 @@ struct LibraryView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: DS.Space.xs) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(DS.foreground3)
-            TextField("搜索书名", text: $query)
-                .font(DS.Fonts.subhead)
-                .foregroundStyle(DS.foreground1)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(DS.foreground4)
+        DSSearchField(placeholder: "搜索书名", text: $query)
+    }
+
+    private var workspaceSummary: some View {
+        Button { showGraph = true } label: {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(DS.Fonts.title2)
+                    .foregroundStyle(DS.accent)
+                    .frame(width: 52, height: 52)
+                    .background(DS.accentContainer, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
+                VStack(alignment: .leading, spacing: DS.Space.x3s) {
+                    Text("知识图谱").font(DS.Fonts.headline).foregroundStyle(DS.foreground1)
+                    Text("\(documents.count) 本文档 · \(vocabCount) 个生词")
+                        .font(DS.Fonts.caption).foregroundStyle(DS.foreground3)
+                        .contentTransition(.numericText())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("清除搜索")
+                Spacer(minLength: DS.Space.xs)
+                Image(systemName: "arrow.up.right")
+                    .font(DS.Fonts.subhead).foregroundStyle(DS.accent)
             }
+            .dsCard()
         }
-        .padding(.horizontal, DS.Space.m)
-        .frame(height: 46)
-        .background(DS.background2, in: Capsule())
-        .overlay(Capsule().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityHint("打开词根词缀与同近义关系图谱")
     }
 
     private var libraryGrid: some View {
