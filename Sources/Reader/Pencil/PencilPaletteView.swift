@@ -21,7 +21,6 @@ struct PencilPaletteView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         VStack(spacing: DS.Space.xs) {
@@ -393,7 +392,6 @@ struct PencilPaletteView: View {
                                 .font(DS.Fonts.micro)
                         }
                         .foregroundStyle(selected ? DS.accent : DS.foreground2)
-                .offset(y: selected && !reduceMotion ? -3 : 0)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
                         .background(

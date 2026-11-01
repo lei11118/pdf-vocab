@@ -134,7 +134,7 @@ final class InteractionPolishTests:XCTestCase {
             ("vocab-large-type", CGSize(width: 480, height: 1100), AnyView(VocabListView(store: store).dynamicTypeSize(.xxxLarge))),
             ("vocab-compact", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
             ("graph-ipad", CGSize(width: 834, height: 1194), AnyView(VocabGraphView(store: store, words: store.listWords()))),
-            ("graph-reduce-motion", CGSize(width: 480, height: 900), AnyView(VocabGraphView(store: store, words: store.listWords()).environment(\.accessibilityReduceMotion, true))),
+            ("graph-dark-split", CGSize(width: 480, height: 900), AnyView(VocabGraphView(store: store, words: store.listWords()).preferredColorScheme(.dark))),
             ("reader-ipad", CGSize(width: 834, height: 1194), AnyView(ReaderView(doc: record, store: docs))),
             ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs)))
         ]

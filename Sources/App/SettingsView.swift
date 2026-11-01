@@ -119,8 +119,6 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(DS.background1.ignoresSafeArea())
-            .scrollContentBackground(.hidden)
-            .background(DS.background1)
             .tint(DS.accent)
             .buttonStyle(DSPressableButtonStyle())
             .navigationTitle("")
