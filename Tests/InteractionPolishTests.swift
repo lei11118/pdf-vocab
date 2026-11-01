@@ -191,6 +191,11 @@ final class InteractionPolishTests:XCTestCase {
         try sample.write(to: sampleURL)
         let record = try docs.importFile(from: sampleURL)
         defer { try? docs.delete(record); try? FileManager.default.removeItem(at: sampleURL) }
+        let workspace = WorkspaceStore(db: db)
+        let reviewFolder = try workspace.save(name: "Language & ideas", icon: "books.vertical")
+        let physicsFolder = try workspace.save(name: "物理与世界", icon: "atom")
+        defer { try? workspace.delete(folder: reviewFolder); try? workspace.delete(folder: physicsFolder) }
+        try workspace.move(docSha: record.sha256, to: reviewFolder.id)
         let savedCompact = UserDefaults.standard.object(forKey: "vocabCompactLayout")
         defer {
             if let savedCompact { UserDefaults.standard.set(savedCompact, forKey: "vocabCompactLayout") }
@@ -198,6 +203,7 @@ final class InteractionPolishTests:XCTestCase {
         }
         let cases: [(String, CGSize, AnyView)] = [
             ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),
+            ("workspace-folder-editor", CGSize(width: 480, height: 900), AnyView(WorkspaceFolderEditor(folder: reviewFolder, onSave: { _, _ in }))),
             ("vocab-ipad", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
             ("vocab-split", CGSize(width: 480, height: 900), AnyView(VocabListView(store: store))),
             ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark))),

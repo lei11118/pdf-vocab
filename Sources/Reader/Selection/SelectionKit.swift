@@ -202,9 +202,19 @@ enum SelectionGeometry {
     static func initialWord(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
         guard let text = page.string else { return nil }
         let ns = text as NSString
+        // Use the same range API for glyph geometry and the resulting selection.
+        // Some PDFs expose a characterBounds index sequence that differs from
+        // their string/range sequence (line breaks and text runs in particular).
+        var glyphs: [Int: CGRect] = [:]
+        func bounds(_ index: Int) -> CGRect {
+            if let cached = glyphs[index] { return cached }
+            let rect = page.selection(for: NSRange(location: index, length: 1))?.bounds(for: page) ?? .null
+            glyphs[index] = rect
+            return rect
+        }
         guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
-                                       tolerance: tolerance, bounds: { page.characterBounds(at: $0) }),
-              let range = visualWordRange(text: ns, at: index, bounds: { page.characterBounds(at: $0) }),
+                                       tolerance: tolerance, bounds: bounds),
+              let range = visualWordRange(text: ns, at: index, bounds: bounds),
               let word = page.selection(for: range), isSane(word, maxPages: 1, maxChars: 100),
               isSingleWordText(lookupText(for: word)),
               containsTouch(word, on: page, point: point, tolerance: tolerance) else { return nil }
@@ -273,16 +283,17 @@ enum SelectionGeometry {
                         let start=i
                         while i<NSMaxRange(range),let next=Unicode.Scalar(ns.character(at:i)),CharacterSet.whitespaces.contains(next) { i+=1 }
                         if start>range.location,i<NSMaxRange(range),
-                           joinsWord(page.characterBounds(at:start-1),page.characterBounds(at:i),acrossSpace:true) { continue }
+                           joinsWord(page.selection(for: NSRange(location: start-1, length: 1))?.bounds(for: page) ?? .null,
+                                     page.selection(for: NSRange(location: i, length: 1))?.bounds(for: page) ?? .null, acrossSpace:true) { continue }
                         units.append(32)
                     } else { units.append(ch);i+=1 }
                 }
                 let text=String(utf16CodeUnits:units,count:units.count)
                 if let previous=previousBounds,!pieces.isEmpty,
-                   joinsWord(previous,page.characterBounds(at:range.location),acrossSpace:true) {
+                   joinsWord(previous,page.selection(for: NSRange(location: range.location, length: 1))?.bounds(for: page) ?? .null,acrossSpace:true) {
                     pieces[pieces.count-1]+=text
                 } else { pieces.append(text) }
-                if range.length>0 { previousBounds=page.characterBounds(at:NSMaxRange(range)-1) }
+                if range.length>0 { previousBounds=page.selection(for: NSRange(location: NSMaxRange(range)-1, length: 1))?.bounds(for: page) }
             }
         }
         return pieces.isEmpty ? (selection.string ?? "") : pieces.joined(separator:" ")
