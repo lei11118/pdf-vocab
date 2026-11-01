@@ -149,6 +149,33 @@ final class InteractionPolishTests:XCTestCase {
         }
     }
 
+    func testOCRTilesCoverMediaBoxWithOverlap() {
+        let bounds = CGRect(x: 31, y: -27, width: 1200, height: 1600)
+        let tiles = OCRService.regions(for: bounds)
+        XCTAssertEqual(tiles.count, 4)
+        XCTAssertGreaterThan(tiles[0].intersection(tiles[1]).width, 0)
+        for x in stride(from: bounds.minX, through: bounds.maxX - 1, by: 35) {
+            for y in stride(from: bounds.minY, through: bounds.maxY - 1, by: 35) {
+                XCTAssertTrue(tiles.contains { $0.contains(CGPoint(x: x, y: y)) })
+            }
+        }
+    }
+
+    func testOCRPageLevelDetectionAndSmallText() throws {
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 1200, height: 1600)).pdfData { context in
+            context.beginPage()
+            ("Small typography alignment" as NSString).draw(at: CGPoint(x: 300, y: 400), withAttributes: [.font: UIFont.systemFont(ofSize: 9)])
+            context.beginPage()
+        }
+        let doc = try XCTUnwrap(PDFDocument(data: data))
+        let text = try XCTUnwrap(doc.page(at: 0)), blank = try XCTUnwrap(doc.page(at: 1))
+        XCTAssertFalse(OCRService.needsOCR(page: text))
+        XCTAssertTrue(OCRService.needsOCR(page: blank))
+        let words = OCRService.recognize(page: text)
+        XCTAssertTrue(words.contains { $0.text.lowercased() == "typography" })
+        XCTAssertTrue(words.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.x+$0.w <= 1.001 && $0.y+$0.h <= 1.001 })
+    }
+
     func testRulerTracksDocumentInsteadOfViewport() {
         let host=UIView(frame:CGRect(x:0,y:0,width:500,height:500))
         let document=UIView(frame:CGRect(x:0,y:0,width:500,height:1500));host.addSubview(document)

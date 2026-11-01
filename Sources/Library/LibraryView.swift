@@ -27,7 +27,7 @@ struct LibraryView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
-                        workspaceSummary
+                        if query.isEmpty { learningDesk }
 
                         if documents.isEmpty {
                             emptyState
@@ -36,10 +36,6 @@ struct LibraryView: View {
                             noSearchResults
                                 .padding(.top, DS.Space.xxl)
                         } else {
-                            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                               let recent = resumeDocument {
-                                resumeCard(recent)
-                            }
                             libraryGrid
                         }
                     }
@@ -169,28 +165,43 @@ struct LibraryView: View {
         DSSearchField(placeholder: "搜索书名", text: $query)
     }
 
-    private var workspaceSummary: some View {
-        Button { showGraph = true } label: {
-            HStack(spacing: DS.Space.m) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(DS.Fonts.title2)
-                    .foregroundStyle(DS.accent)
-                    .frame(width: 52, height: 52)
-                    .background(DS.accentContainer, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
-                VStack(alignment: .leading, spacing: DS.Space.x3s) {
-                    Text("知识图谱").font(DS.Fonts.headline).foregroundStyle(DS.foreground1)
-                    Text("\(documents.count) 本文档 · \(vocabCount) 个生词")
-                        .font(DS.Fonts.caption).foregroundStyle(DS.foreground3)
-                        .contentTransition(.numericText())
-                }
-                Spacer(minLength: DS.Space.xs)
-                Image(systemName: "arrow.up.right")
-                    .font(DS.Fonts.subhead).foregroundStyle(DS.accent)
+    private var learningDesk: some View {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            if let recent = resumeDocument {
+                DSSectionHeader(title: "接着读", subtitle: "回到上次停留的位置")
+                resumeCard(recent)
             }
-            .dsCard()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.m) {
+                    deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
+                    deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                }
+                VStack(spacing: DS.Space.m) {
+                    deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
+                    deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                }
+            }
+        }
+    }
+
+    private func deskAction(title: String, detail: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: DS.Space.l) {
+                HStack {
+                    Image(systemName: icon).font(.title2).foregroundStyle(DS.accent)
+                    Spacer()
+                    Image(systemName: "arrow.up.right").foregroundStyle(DS.foreground3)
+                }
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text(title).font(.title3.weight(.semibold)).foregroundStyle(DS.foreground1)
+                    Text(detail).font(.subheadline).foregroundStyle(DS.foreground2)
+                }
+            }
+            .padding(DS.Space.l)
+            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+            .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
         }
         .buttonStyle(DSPressableButtonStyle())
-        .accessibilityHint("打开词根词缀与同近义关系图谱")
     }
 
     private var libraryGrid: some View {

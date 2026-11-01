@@ -34,6 +34,7 @@ struct VocabListView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("vocabCompactLayout") private var compactLayout = false
     @State private var words: [VocabStore.WordSummary] = []
     @State private var groups: [VocabStore.GroupSummary] = []
     @State private var filter: Filter = .all
@@ -94,6 +95,11 @@ struct VocabListView: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
+                        Picker("浏览密度", selection: $compactLayout) {
+                            Label("卡片", systemImage: "square.grid.2x2").tag(false)
+                            Label("紧凑", systemImage: "rectangle.grid.1x2").tag(true)
+                        }
+                        .pickerStyle(.segmented)
                         groupStrip
 
                         if words.isEmpty {
@@ -378,7 +384,7 @@ struct VocabListView: View {
             LazyVGrid(
                 columns: [
                     GridItem(
-                        .adaptive(minimum: 250, maximum: 380),
+                        .adaptive(minimum: compactLayout ? 360 : 250, maximum: compactLayout ? 900 : 380),
                         spacing: DS.Layout.cardGap,
                         alignment: .top
                     )
@@ -420,6 +426,7 @@ struct VocabListView: View {
             }
         } label: {
             VocabCardView(
+                compact: compactLayout,
                 word: word,
                 store: store,
                 ordinal: (sortMode == .manual && !isSearching) ? ordinal : nil,
@@ -932,6 +939,7 @@ private struct CardDropModifier: ViewModifier {
 // MARK: - 生词卡(与文档库的卡片同一套:白面 + 细边 + 轻阴影)
 
 private struct VocabCardView: View {
+    var compact = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let word: VocabStore.WordSummary
     let store: VocabStore
@@ -1007,7 +1015,7 @@ private struct VocabCardView: View {
             footer
         }
         .padding(DS.Space.m)
-        .frame(maxWidth: .infinity, minHeight: 176, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: compact ? 108 : 176, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                 .fill(selected ? DS.accentContainer : DS.background2)

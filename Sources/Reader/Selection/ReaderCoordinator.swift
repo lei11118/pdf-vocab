@@ -945,7 +945,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 页面 OCR 词框(缓存 + 懒加载);未识别或无词返回 nil。
     private func ocrWords(for page: PDFPage) -> [OCRWord]? {
-        guard docScanned, let ocrStore, !docSha.isEmpty,
+        guard let ocrStore, !docSha.isEmpty,
               let idx = pdfView?.document?.index(for: page) else { return nil }
         if let cached = ocrWordsCache[idx] { return cached.isEmpty ? nil : cached }
         let words = ocrStore.words(docSha: docSha, page: idx)

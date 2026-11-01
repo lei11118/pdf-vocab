@@ -21,6 +21,11 @@ enum OCRService {
 
     // MARK: - 扫描版判定
 
+    /// Mixed PDFs need page-level inspection; a text cover says nothing about later scans.
+    static func needsOCR(page: PDFPage) -> Bool {
+        (page.string ?? "").filter { !$0.isWhitespace }.count < 12
+    }
+
     /// 采样前 4 页:多数页无文字层 → 判为扫描版。
     static func isScanned(document: PDFDocument) -> Bool {
         let count = document.pageCount
@@ -46,7 +51,7 @@ enum OCRService {
             if i>0 && i%32==0, let fresh=PDFDocument(url:url) { doc=fresh }
             autoreleasepool {
                 guard let page=doc.page(at:i) else { return }
-                let words=recognize(page:page)
+                let words = needsOCR(page: page) ? recognize(page: page) : []
                 if !Task.isCancelled { store.save(docSha:docSha,page:i,words:words) }
             }
         }
@@ -65,8 +70,8 @@ enum OCRService {
     }
     // Render in canonical, unrotated PDF media coordinates. PDFKit thumbnails
     // rotate the image; OCR boxes must instead share the exact page-space CTM.
-    static func recognitionImage(page: PDFPage, size: CGSize) -> CGImage? {
-        let bounds = page.bounds(for: .mediaBox)
+    static func recognitionImage(page: PDFPage, size: CGSize, region: CGRect? = nil) -> CGImage? {
+        let bounds = region ?? page.bounds(for: .mediaBox)
         guard let ref = page.pageRef, bounds.width > 1, bounds.height > 1,
               size.width.isFinite, size.height.isFinite, size.width > 1, size.height > 1,
               let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height),
@@ -80,12 +85,56 @@ enum OCRService {
         return context.makeImage()
     }
 
+    /// Overlapping tiles preserve small glyphs without allocating a whole oversized page.
+    static func regions(for bounds: CGRect) -> [CGRect] {
+        guard bounds.width > 1, bounds.height > 1 else { return [] }
+        return (0..<2).flatMap { row in (0..<2).map { column in
+            CGRect(x: bounds.minX + CGFloat(column) * bounds.width * 0.5,
+                   y: bounds.minY + CGFloat(row) * bounds.height * 0.5,
+                   width: bounds.width * 0.5, height: bounds.height * 0.5)
+                .insetBy(dx: -16, dy: -16).intersection(bounds)
+        } }
+    }
+
     static func recognize(page: PDFPage) -> [OCRWord] {
-        let pageBounds = page.bounds(for: .mediaBox)
+        let bounds = page.bounds(for: .mediaBox)
+        var words: [OCRWord] = []
+        for region in regions(for: bounds) {
+            if Task.isCancelled { return [] }
+            let local = autoreleasepool { recognizeRegion(page: page, region: region) }
+            for word in local {
+                let rect = pageRect(from: word, pageBounds: region)
+                let mapped = OCRWord(text: word.text,
+                    x: Double((rect.minX-bounds.minX)/bounds.width),
+                    y: Double((bounds.maxY-rect.maxY)/bounds.height),
+                    w: Double(rect.width/bounds.width), h: Double(rect.height/bounds.height), line: 0)
+                let duplicate = words.contains { other in
+                    let box = pageRect(from: other, pageBounds: bounds)
+                    let overlap = box.intersection(rect)
+                    return !overlap.isNull && overlap.width*overlap.height > min(box.width*box.height,rect.width*rect.height)*0.65
+                }
+                if !duplicate { words.append(mapped) }
+            }
+        }
+        // Restore reading order and line IDs after tile merging.
+        words.sort { $0.y == $1.y ? $0.x < $1.x : $0.y < $1.y }
+        var line = -1, baseline: Double = -1, height: Double = 0
+        let ordered = words.map { word in
+            if baseline < 0 || abs(word.y-baseline) > min(height,word.h)*0.45 {
+                line += 1; baseline=word.y; height=word.h
+            }
+            return OCRWord(text:word.text,x:word.x,y:word.y,w:word.w,h:word.h,line:line)
+        }
+    return ordered.sorted { $0.line == $1.line ? $0.x < $1.x : $0.line < $1.line }
+    }
+
+    private static func recognizeRegion(page: PDFPage, region: CGRect) -> [OCRWord] {
+        let pageBounds = region
         guard pageBounds.width > 1, pageBounds.height > 1 else { return [] }
-        let target=renderingSize(for:pageBounds)
+        let factor = min(4.2, min(4096/max(pageBounds.width,pageBounds.height),sqrt(6_000_000/(pageBounds.width*pageBounds.height))))
+        let target = CGSize(width:floor(pageBounds.width*factor),height:floor(pageBounds.height*factor))
         guard target.width>1,target.height>1 else { return [] }
-        guard let cgImage = recognitionImage(page: page, size: target) else { return [] }
+        guard let cgImage = recognitionImage(page: page, size: target, region: region) else { return [] }
 
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate

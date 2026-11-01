@@ -110,13 +110,13 @@ enum DS {
     enum Fonts {
         /// v0.16.0:UI 声部使用 SF Rounded 近似 Proxima Soft 的圆润人文感;
         /// 展示标题更粗、更圆,正文仍保持系统默认以保证中英混排可读性。
-        static let display3 = Font.system(size: 28, weight: .bold, design: .rounded)
-        static let title1 = Font.system(size: 26, weight: .bold, design: .rounded)
-        static let title2 = Font.system(size: 22, weight: .bold, design: .rounded)
-        static let headline = Font.system(size: 17, weight: .semibold, design: .rounded)
-        static let subhead = Font.system(size: 15, weight: .regular, design: .rounded)
-        static let body = Font.system(size: 17, weight: .regular)
-        static let caption = Font.system(size: 13, weight: .regular, design: .rounded)
+        static let display3 = Font.largeTitle
+        static let title1 = Font.title
+        static let title2 = Font.title2
+        static let headline = Font.headline
+        static let subhead = Font.subheadline
+        static let body = Font.body
+        static let caption = Font.caption
         static let caption2 = Font.system(size: 11, weight: .medium, design: .rounded)
         static let micro = Font.system(size: 10, weight: .medium, design: .rounded)
 

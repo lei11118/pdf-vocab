@@ -639,15 +639,6 @@ struct ReaderView: View {
         let ocrStore = OCRStore(db: store.db)
         if ocrStore.isDone(docSha: sha) { return }
         guard let url = try? store.pdfURL(for: doc) else { return }
-        let scanned = await Task.detached(priority: .utility) { () -> Bool in
-            guard let pdf = PDFDocument(url: url) else { return false }
-            return OCRService.isScanned(document: pdf)
-        }.value
-        guard scanned else {
-            ocrStore.markDone(docSha: sha)
-            DiagLog.log("ocr: text-layer doc, skip")
-            return
-        }
         DiagLog.log("ocr: start (scanned doc)")
         ocrRunning = true
         ocrDone = 0
