@@ -176,20 +176,25 @@ enum SelectionGeometry {
     /// Exact glyph hits win; the bounded tolerance never jumps to a distant line.
     static func wordCharacter(text: NSString, near index: Int, at point: CGPoint,
                               tolerance: CGFloat, bounds: (Int) -> CGRect) -> Int? {
-        guard index != NSNotFound, index >= 0, index < text.length else { return nil }
+        guard text.length > 0 else { return nil }
+        let hint = index == NSNotFound ? 0 : min(max(index, 0), text.length - 1)
         var best: (index: Int, distance: CGFloat)?
-        for candidate in max(0, index - 8)...min(text.length - 1, index + 8) {
+        func inspect(_ candidate: Int) {
             let ch = text.character(at: candidate)
-            guard WordPicker.isWordChar(ch) || WordPicker.isCJK(ch) || ch == 45 else { continue }
+            guard WordPicker.isWordChar(ch) || WordPicker.isCJK(ch) || ch == 45 else { return }
             let rect = bounds(candidate)
-            guard isValid(rect) else { continue }
+            guard isValid(rect) else { return }
             let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
             let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
             let limit = min(max(0, tolerance), rect.height * 0.25)
-            guard dx <= limit, dy <= limit else { continue }
+            guard dx <= limit, dy <= limit else { return }
             let distance = dx * dx + dy * dy
             if best == nil || distance < best!.distance { best = (candidate, distance) }
         }
+        for candidate in max(0, hint - 8)...min(text.length - 1, hint + 8) { inspect(candidate) }
+        // Broken text runs can give a character index far from the visible hit.
+        // Only scan the full page on a missed local hit; require the same geometry.
+        if best == nil { for candidate in 0..<text.length { inspect(candidate) } }
         return best?.index
     }
 
@@ -201,8 +206,19 @@ enum SelectionGeometry {
                                        tolerance: tolerance, bounds: { page.characterBounds(at: $0) }),
               let range = visualWordRange(text: ns, at: index, bounds: { page.characterBounds(at: $0) }),
               let word = page.selection(for: range), isSane(word, maxPages: 1, maxChars: 100),
-              isSingleWordText(lookupText(for: word)) else { return nil }
+              isSingleWordText(lookupText(for: word)),
+              containsTouch(word, on: page, point: point, tolerance: tolerance) else { return nil }
         return word
+    }
+
+    /// PDFKit can return a plausible word whose selected range belongs elsewhere.
+    /// Validate the final selection, not only the character used to construct it.
+    static func containsTouch(_ selection: PDFSelection, on page: PDFPage,
+                              point: CGPoint, tolerance: CGFloat) -> Bool {
+        selection.selectionsByLine().contains {
+            let rect = $0.bounds(for: page)
+            return isValid(rect) && rect.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+        }
     }
 
     static func joinsWord(_ left:CGRect,_ right:CGRect,acrossSpace:Bool)->Bool {

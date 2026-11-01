@@ -8,6 +8,7 @@ import PDFKit
 /// 计算 SHA-256 → 去重 → 移动到 PDFs/<sha>.pdf → 入库。
 /// 先落地再处理,兼容 iCloud/网盘等文件提供商(读 FileHandle 前先 copy 触发物化)。
 struct DocumentStore: Sendable {
+    private static let normalizationLock = NSLock()
     let db: AppDatabase
 
     var pdfDirectory: URL {
@@ -36,6 +37,8 @@ struct DocumentStore: Sendable {
     /// 为阅读准备的 URL:优先"规范化副本"(非破坏性,原文件不动),生成失败则回退原文件。
     /// 依据:对 PDFKit 有行为异常的非线性化文档,社区实测"重存一份副本"可恢复正常行为。
     func normalizedForReading(_ rec: DocumentRecord) -> URL {
+        Self.normalizationLock.lock()
+        defer { Self.normalizationLock.unlock() }
         guard let original = try? pdfURL(for: rec) else { return URL(fileURLWithPath: "/") }
         let norm = original.deletingLastPathComponent().appendingPathComponent(rec.sha256 + ".norm.pdf")
 
@@ -50,7 +53,7 @@ struct DocumentStore: Sendable {
             DiagLog.log("normalize: 原文件打不开")
             return original
         }
-        let tmp = norm.appendingPathExtension("tmp")
+        let tmp = norm.appendingPathExtension(UUID().uuidString + ".tmp")
         try? FileManager.default.removeItem(at: tmp)
         let ok = src.write(to: tmp)
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -110,6 +113,11 @@ struct DocumentStore: Sendable {
             throw ImportError.encryptedPDF
         }
 
+        // PDFKit reads lazily: capture metadata before moving its backing file.
+        let pageCount = pdf.pageCount
+        guard pageCount > 0, pdf.page(at: 0) != nil else { throw ImportError.unreadablePDF }
+        let hasTextLayer = Self.detectTextLayer(pdf)
+
         // 5) 移入正式位置 + 入库
         let dest = destDir.appendingPathComponent("\(sha).pdf")
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
@@ -119,8 +127,8 @@ struct DocumentStore: Sendable {
             sha256: sha,
             title: Self.displayTitle(from: url),
             fileName: "\(sha).pdf",
-            pageCount: pdf.pageCount,
-            hasTextLayer: Self.detectTextLayer(pdf),
+            pageCount: pageCount,
+            hasTextLayer: hasTextLayer,
             importedAt: Date(),
             lastPage: 0,
             pageX: 0,

@@ -8,6 +8,8 @@ struct ReaderView: View {
     let doc: DocumentRecord
     let store: DocumentStore
 
+    @State private var pdfLoadFailed = false
+    @State private var pdfLoadAttempt = 0
     @State private var currentPage: Int
     @State private var resolvedURL: URL?
     @State private var optimizing = false
@@ -679,9 +681,23 @@ struct ReaderView: View {
 
     private var pdfArea: some View {
         Group {
-            if let resolvedURL {
+            if pdfLoadFailed {
+                ContentUnavailableView {
+                    Label("文档暂时无法打开", systemImage: "doc.badge.ellipsis")
+                } description: {
+                    Text("可重试读取原文件；若仍失败，请重新导入 PDF。原文件与批注会保留。")
+                } actions: {
+                    Button("重新打开原文件") {
+                        resolvedURL = try? store.pdfURL(for: doc)
+                        pdfLoadAttempt += 1
+                        pdfLoadFailed = false
+                    }.buttonStyle(DSPillButtonStyle())
+                }
+            } else if let resolvedURL {
                 PDFKitView(
                     url: resolvedURL,
+                    onLoadFailed: { pdfLoadFailed = true },
+                    fallbackURL: try? store.pdfURL(for: doc),
                     restore: doc.readingState,
                     handle: readerHandle,
                     docSha: doc.sha256,
@@ -768,6 +784,7 @@ struct ReaderView: View {
                         showTranslate = true
                     }
                 )
+                .id(pdfLoadAttempt)
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -818,6 +835,7 @@ struct ReaderView: View {
             let url = await Task.detached(priority: .userInitiated) {
                 store.normalizedForReading(doc)
             }.value
+            guard !Task.isCancelled else { return }
             resolvedURL = url
             optimizing = false
         }

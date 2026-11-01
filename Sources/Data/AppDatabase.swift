@@ -200,6 +200,18 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["wordId","mode"])
             }
         }
+        migrator.registerMigration("v13.workspaceFolders") { db in
+            try db.create(table: "workspace_folder") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("icon", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(table: "workspace_document") { t in
+                t.column("docSha", .text).primaryKey().references("document", column: "sha256", onDelete: .cascade)
+                t.column("folderId", .text).notNull().references("workspace_folder", onDelete: .cascade)
+            }
+        }
         return migrator
     }
 }

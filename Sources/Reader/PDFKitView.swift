@@ -16,6 +16,8 @@ final class ReaderHandle {
 /// PDFView 的 SwiftUI 包装:渲染 + 取词交互(详见 ReaderCoordinator)+ 阅读位置恢复。
 struct PDFKitView: UIViewRepresentable {
     let url: URL
+    var onLoadFailed: () -> Void = {}
+    var fallbackURL: URL? = nil
     var restore: ReadingState?
     let handle: ReaderHandle
     var docSha: String = ""
@@ -95,11 +97,33 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.installGestures(on: view)
         context.coordinator.installObservers()
 
-        if let document = PDFDocument(url: url) {
+        let loaded = Self.openDocument(at: url) ?? fallbackURL.flatMap { Self.openDocument(at: $0) }
+        if let document = loaded {
             view.document = document
             context.coordinator.documentDidLoad(document)
+        } else {
+            DiagLog.log("pdf.open: failed file=\(url.lastPathComponent)")
+            DispatchQueue.main.async { onLoadFailed() }
         }
         return view
+    }
+
+    static func openDocument(at url: URL) -> PDFDocument? {
+        func usable(_ document: PDFDocument?) -> PDFDocument? {
+            guard let document else { return nil }
+            if document.isLocked && !document.unlock(withPassword: "") { return nil }
+            guard document.pageCount > 0, document.page(at: 0) != nil else { return nil }
+            return document
+        }
+        if let document = usable(PDFDocument(url: url)) { return document }
+        // A bounded data-backed retry avoids another file-backed provider failure.
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size <= 64 * 1024 * 1024, let data = try? Data(contentsOf: url),
+           let document = usable(PDFDocument(data: data)) {
+            DiagLog.log("pdf.open: data retry succeeded")
+            return document
+        }
+        return nil
     }
 
     func updateUIView(_ uiView: PDFView, context: Context) {

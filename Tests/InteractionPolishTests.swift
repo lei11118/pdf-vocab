@@ -97,6 +97,77 @@ final class InteractionPolishTests:XCTestCase {
         }
     }
 
+    func testSelectionCannotJumpFromEditionToHorizon() throws {
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 650, height: 300)).pdfData { ctx in
+            ctx.beginPage()
+            ("New Horizon College English Fourth Edition" as NSString).draw(at: CGPoint(x: 20, y: 80),
+                withAttributes: [.font: UIFont.systemFont(ofSize: 22)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: data)), page = try XCTUnwrap(document.page(at: 0))
+        let text = try XCTUnwrap(page.string) as NSString
+        let horizon = try XCTUnwrap(page.selection(for: text.range(of: "Horizon")))
+        let edition = try XCTUnwrap(page.selection(for: text.range(of: "Edition")))
+        let rect = edition.bounds(for: page), point = CGPoint(x: rect.midX, y: rect.midY)
+        XCTAssertFalse(SelectionGeometry.containsTouch(horizon, on: page, point: point, tolerance: 2))
+        XCTAssertTrue(SelectionGeometry.containsTouch(edition, on: page, point: point, tolerance: 2))
+        let picked = try XCTUnwrap(SelectionGeometry.initialWord(on: page, at: point))
+        XCTAssertEqual(picked.string, "Edition")
+        // Simulate a corrupt PDFKit index, farther than the old +/-8 search.
+        let index = SelectionGeometry.wordCharacter(text: text, near: 0, at: point, tolerance: 2,
+                                                     bounds: { page.characterBounds(at: $0) })
+        XCTAssertTrue(NSLocationInRange(try XCTUnwrap(index), text.range(of: "Edition")))
+    }
+
+    func testLaserRevivesAllVisibleStrokesButNotExpiredStrokes() {
+        let laser = InkLaserOverlay(frame: .zero)
+        var time: CFTimeInterval = 100
+        laser.now = { time }
+        laser.begin(at: .zero); laser.append(CGPoint(x: 10, y: 10)); laser.finish()
+        time += 0.4
+        laser.begin(at: CGPoint(x: 20, y: 20))
+        XCTAssertEqual(laser.strokeCount, 2); XCTAssertEqual(laser.pointCount, 3)
+        laser.finish(); time += 0.4
+        laser.begin(at: CGPoint(x: 30, y: 30))
+        XCTAssertEqual(laser.strokeCount, 3)
+        laser.finish(); time += 0.65
+        laser.begin(at: CGPoint(x: 40, y: 40))
+        XCTAssertEqual(laser.strokeCount, 1); XCTAssertEqual(laser.pointCount, 1)
+        laser.clear(); XCTAssertEqual(laser.strokeCount, 0)
+    }
+
+    func testWorkspaceFolderCRUDPreservesImportedDocumentAndReadingState() throws {
+        let db = try XCTUnwrap(AppDatabase.shared), docs = DocumentStore(db: db), workspace = WorkspaceStore(db: db)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+        let bytes = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 500)).pdfData { ctx in
+            for _ in 0..<3 {
+                ctx.beginPage()
+                (("Workspace test " + UUID().uuidString) as NSString).draw(at: CGPoint(x: 30, y: 60),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 20)])
+            }
+        }
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let doc = try docs.importFile(from: url)
+        defer { try? docs.delete(doc) }
+        XCTAssertEqual(doc.pageCount, 3); XCTAssertTrue(doc.hasTextLayer)
+        let file = try docs.pdfURL(for: doc)
+        XCTAssertEqual(PDFKitView.openDocument(at: file)?.pageCount, 3)
+        let folder = try workspace.save(name: "  Physics  ", icon: "atom")
+        defer { try? workspace.delete(folder: folder) }
+        XCTAssertEqual(folder.name, "Physics")
+        try workspace.move(docSha: doc.sha256, to: folder.id)
+        XCTAssertEqual(try workspace.membership()[doc.sha256], folder.id)
+        let renamed = try workspace.save(id: folder.id, name: "English", icon: "books.vertical")
+        XCTAssertEqual(renamed.id, folder.id); XCTAssertEqual(renamed.icon, "books.vertical")
+        try docs.saveReadingState(ReadingState(page: 2, pageX: 0.1, pageY: 0.2, zoom: 2, zoomAuto: false), for: doc.sha256)
+        try workspace.delete(folder: renamed)
+        XCTAssertNil(try workspace.membership()[doc.sha256])
+        XCTAssertEqual(try docs.document(sha256: doc.sha256)?.lastPage, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertThrowsError(try workspace.save(name: " ", icon: "folder"))
+        XCTAssertNil(PDFKitView.openDocument(at: url.appendingPathExtension("missing")))
+    }
+
     /// Review actual SwiftUI renders alongside the geometric regression tests.
     func testPageLayoutReviewSnapshots() async throws {
         let db = try XCTUnwrap(AppDatabase.shared), store = VocabStore(db: db)

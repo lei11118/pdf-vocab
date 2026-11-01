@@ -1136,6 +1136,10 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, gesture.state == .ended else { return }
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
+        if let hit = pageHit(viewPoint) {
+            DiagLog.log(String(format: "doubleTap.hit: page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f",
+                currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y, hit.point.x, hit.point.y, pdfView.scaleFactor))
+        }
         if let hit = pageHit(viewPoint),
            let word = SelectionGeometry.initialWord(on: hit.page, at: hit.point,
                tolerance: min(8, 6 / max(pdfView.scaleFactor, 0.1))),
