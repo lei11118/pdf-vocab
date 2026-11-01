@@ -2461,7 +2461,9 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         if markMode && toolSession?.kind == .laser { return false }
         if gestureRecognizer.view is SelectionHandleView { return true }
         if touch.view is InkEditingOverlay { return false }
-        if let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
+        // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
+        let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
+        if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
         return true
     }
 

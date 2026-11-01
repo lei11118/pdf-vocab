@@ -168,7 +168,7 @@ enum SelectionGeometry {
             let ranges = (0..<selection.numberOfTextRanges(on: page)).map {
                 NSStringFromRange(selection.range(at: $0, on: page))
             }.joined(separator: ",")
-            return "\(ObjectIdentifier(page))|\(ranges)|\(NSStringFromCGRect(selection.bounds(for: page)))"
+            return "\(ObjectIdentifier(page))|\(ranges)|\(NSCoder.string(for: selection.bounds(for: page)))"
         }.joined(separator: ";")
     }
 
