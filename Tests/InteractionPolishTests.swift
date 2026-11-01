@@ -57,9 +57,14 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertTrue(canvas.encodeFrame(to:target,commandBuffer:command));command.commit();command.waitUntilCompleted()
         var bytes=[UInt8](repeating:0,count:256*256*4)
         bytes.withUnsafeMutableBytes { target.getBytes($0.baseAddress!,bytesPerRow:256*4,from:MTLRegionMake2D(0,0,256,256),mipmapLevel:0) }
-        let edge=bytes[(128*256+88)*4+3]
+        func alpha(_ x:Int,_ y:Int)->UInt8 {
+            let row:Int=y*256
+            let offset:Int=(row+x)*4+3
+            return bytes[offset]
+        }
+        let edge:UInt8=alpha(88,128)
         XCTAssertGreaterThan(edge,0);XCTAssertLessThan(edge,255)
-        XCTAssertEqual(bytes[(128*256+128)*4+3],255)
-        XCTAssertEqual(bytes[(128*256+80)*4+3],0)
+        XCTAssertEqual(alpha(128,128),255)
+        XCTAssertEqual(alpha(80,128),0)
     }
 }
