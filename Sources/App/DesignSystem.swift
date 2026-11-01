@@ -217,6 +217,8 @@ struct DSPressableButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
             .offset(y: configuration.isPressed && !reduceMotion ? 2 : 0)
             .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.9 : 1)
@@ -258,6 +260,8 @@ struct DSReliefButtonStyle: ButtonStyle {
     var radius: CGFloat = 18
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .background(DSReliefSurface(radius: radius, inset: configuration.isPressed))
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
             .opacity(enabled ? 1 : 0.38)

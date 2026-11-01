@@ -249,9 +249,9 @@ struct VocabGraphView: View {
         let dragging=nodeStarts[word.id] != nil
         return HStack(spacing:6) {
             Circle().fill(DS.accent).frame(width:5,height:5)
-            Text(word.surface).font(DS.Fonts.caption2).lineLimit(1).foregroundStyle(DS.foreground1)
+            Text(word.surface).font(DS.Fonts.caption).lineLimit(1).foregroundStyle(DS.foreground1)
         }
-        .frame(width:labelSizes[word.id]?.width ?? 60,height:34)
+        .frame(width:labelSizes[word.id]?.width ?? 60,height:44)
         .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         .background(DSReliefSurface(radius: 17, inset: dragging))
     }
@@ -276,9 +276,9 @@ struct VocabGraphView: View {
             }
     }
     private func nodeSize(_ word:VocabStore.WordSummary)->CGSize {
-        let font=UIFont.systemFont(ofSize:11,weight:.medium)
+        let font=UIFont.preferredFont(forTextStyle: .caption1)
         let width=(word.surface as NSString).size(withAttributes:[.font:font]).width
-        return CGSize(width:max(60,min(240,ceil(width)+40)),height:34)
+        return CGSize(width:max(60,min(240,ceil(width)+40)),height:44)
     }
     private var nodeSizes:[Int64:CGSize] { labelSizes }
     private func screen(_ point: CGPoint, center: CGPoint) -> CGPoint { CGPoint(x:center.x+pan.width+point.x*zoom,y:center.y+pan.height+point.y*zoom) }
