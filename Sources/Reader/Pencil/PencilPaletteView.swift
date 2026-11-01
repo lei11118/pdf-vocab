@@ -136,12 +136,9 @@ struct PencilPaletteView: View {
             Image(systemName: tool.systemImage)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(selected ? DS.accent : DS.foreground2)
-                .offset(y: selected && !reduceMotion ? -3 : 0)
+
                 .frame(width: 44, height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                        .fill(selected ? DS.accentContainer : Color.clear)
-                )
+                .background(DSReliefSurface(radius: 16, inset: selected))
                 .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -167,10 +164,7 @@ struct PencilPaletteView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(session.rulerActive ? DS.accent : DS.foreground2)
                 .frame(width: 44, height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                        .fill(session.rulerActive ? DS.accentContainer : Color.clear)
-                )
+                .background(DSReliefSurface(radius: 16, inset: session.rulerActive))
                 .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -249,15 +243,7 @@ struct PencilPaletteView: View {
         }
         .padding(DS.Space.s)
         .frame(width: 280, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .fill(DS.background2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .strokeBorder(DS.foreground1.opacity(0.08), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.13), radius: 20, x: 0, y: 10)
+        .background(DSReliefSurface(radius: 28))
     }
 
     private var header: some View {

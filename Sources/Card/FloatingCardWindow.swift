@@ -19,6 +19,7 @@ struct FloatingCardWindow: View {
     /// v0.13.0:整句卡「翻译」(透传给 WordCardPanel)
     var onTranslate: ((String) -> Void)? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
     @State private var moveBase: CGPoint?
@@ -53,17 +54,12 @@ struct FloatingCardWindow: View {
                 .opacity(isCompact ? 1 : 0)
                 .allowsHitTesting(isCompact)
         }
-        .animation(.easeInOut(duration: 0.25), value: isCompact)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: isCompact)
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         // v0.8.0:整窗触摸判定 = 窗口形状——形状之外一律不拦截(交给下层 PDF),杜绝"摸到窗口外的空气也能拖动"
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08))
-                .allowsHitTesting(false)
-        )
         .overlay {
             // v0.6.7:白色缩放手柄 = 窗口右下边缘的一段弧(半径随圆角连续变化,始终贴合)
             CornerGripArc(cornerRadius: cornerRadius)
@@ -72,11 +68,11 @@ struct FloatingCardWindow: View {
                     style: StrokeStyle(lineWidth: resizeActive ? 4.5 : 3.5, lineCap: .round)
                 )
                 .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: resizeActive)
+                .animation(reduceMotion ? nil : DS.Motion.spring, value: resizeActive)
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .bottomTrailing) { resizeHitArea }
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
+        .background(DSReliefSurface(radius: cornerRadius))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: currentPosition.x, y: currentPosition.y)
         .onAppear {

@@ -95,11 +95,13 @@ struct VocabListView: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.l) {
-                        Picker("浏览密度", selection: $compactLayout) {
-                            Label("卡片", systemImage: "square.grid.2x2").tag(false)
-                            Label("紧凑", systemImage: "rectangle.grid.1x2").tag(true)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: DS.Space.l) {
+                                searchField.frame(minWidth: 240)
+                                densityPicker.frame(width: 200)
+                            }
+                            VStack(spacing: DS.Space.m) { searchField; densityPicker }
                         }
-                        .pickerStyle(.segmented)
                         groupStrip
                         dockLayer
 
@@ -124,7 +126,7 @@ struct VocabListView: View {
 
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: DS.Space.m) { header; searchField }
+                VStack(spacing: DS.Space.m) { header }
                     .padding(.horizontal, DS.Layout.pageMargin)
                     .padding(.top, DS.Space.s)
                     .padding(.bottom, DS.Space.m)
@@ -275,13 +277,22 @@ struct VocabListView: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(DS.foreground2)
                 .frame(width: 44, height: 44)
-                .background(DS.background2, in: Rectangle())
-                .overlay(Rectangle().strokeBorder(DS.foreground1.opacity(0.5), lineWidth: 1))
+                .background(DSReliefSurface(radius: 22))
         }
         .accessibilityLabel("更多")
     }
 
     // MARK: - 共享搜索与分组过滤
+
+    private var densityPicker: some View {
+        Picker("浏览密度", selection: $compactLayout) {
+            Label("卡片", systemImage: "square.grid.2x2").tag(false)
+            Label("紧凑", systemImage: "rectangle.grid.1x2").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .padding(6)
+        .background(DSReliefSurface(radius: 20, inset: true))
+    }
 
     private var searchField: some View {
         DSSearchField(placeholder: "搜索生词", text: $searchText)
@@ -652,7 +663,7 @@ struct VocabListView: View {
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(DS.accent)
                 .frame(width: 64, height: 64)
-                .background(DS.accentContainer, in: Rectangle())
+                .background(DSReliefSurface(radius: 18, inset: true))
             Text(emptyTitle)
                 .font(DS.Fonts.title2)
                 .foregroundStyle(DS.foreground1)
@@ -776,11 +787,9 @@ struct VocabListView: View {
 
     private var dockLayer: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            dockContent.padding(.vertical, 6)
+            dockContent.padding(DS.Space.s)
         }
-        .padding(.horizontal, DS.Space.xs)
-        .background(DS.background2)
-        .overlay(alignment: .bottom) { Rectangle().fill(DS.foreground1).frame(height: 1) }
+        .background(DSReliefSurface(radius: 24, inset: true))
         .contentTransition(.numericText())
     }
 
@@ -862,7 +871,7 @@ struct VocabListView: View {
             .foregroundStyle(DS.onAccent)
             .padding(.horizontal, DS.Space.m)
             .frame(minHeight: 44)
-            .background(DS.accent, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
+            .background(DSReliefSurface(radius: 16, fill: DS.accent))
             .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -994,7 +1003,7 @@ private struct VocabCardView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(DS.accent)
                         .frame(width: 44, height: 44)
-                        .background(DS.accentContainer, in: Rectangle())
+                        .background(DSReliefSurface(radius: 18, inset: true))
                 }
                 .buttonStyle(DSPressableButtonStyle())
                 .accessibilityLabel("发音")
@@ -1022,18 +1031,10 @@ private struct VocabCardView: View {
         }
         .padding(DS.Space.m)
         .frame(maxWidth: .infinity, minHeight: compact ? 108 : 176, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .fill(selected ? DS.accentContainer : DS.background2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                .strokeBorder(
-                    selected ? DS.accent : DS.foreground1.opacity(0.5),
-                    lineWidth: 0.8
-                )
-        )
-        .shadow(color: .black.opacity(dragging ? 0.14 : 0), radius: 18, x: 0, y: 9)
+        .background(DSReliefSurface(radius: 26, inset: selected))
+        .overlay(alignment: .topTrailing) {
+            if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accent).padding(8) }
+        }
         .scaleEffect(dragging && !reduceMotion ? 1.02 : 1)
         .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: dragging)
         .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selected)

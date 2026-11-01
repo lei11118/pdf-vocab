@@ -27,19 +27,11 @@ struct LibraryView: View {
 
                 GeometryReader { geometry in
                     ScrollView {
-                        if geometry.size.width >= 760 && query.isEmpty {
-                            HStack(alignment: .top, spacing: DS.Space.xl) {
-                                learningDesk.frame(width: 256)
-                                bookshelfContent.frame(maxWidth: .infinity)
-                            }
-                            .padding(DS.Layout.pageMargin)
-                        } else {
-                            VStack(alignment: .leading, spacing: DS.Space.l) {
-                                if query.isEmpty { learningDesk }
-                                bookshelfContent
-                            }
-                            .padding(DS.Layout.pageMargin)
+                        VStack(alignment: .leading, spacing: DS.Space.xl) {
+                            if query.isEmpty { learningDesk }
+                            bookshelfContent
                         }
+                        .padding(DS.Layout.pageMargin)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -148,7 +140,7 @@ struct LibraryView: View {
                     Image(systemName: "ellipsis")
                         .font(DS.Fonts.headline).foregroundStyle(DS.foreground2)
                         .frame(width: 44, height: 44)
-                        .background(DS.background2, in: Rectangle())
+                        .background(DSReliefSurface(radius: 22))
                 }
                 .accessibilityLabel("更多设置")
             }
@@ -166,11 +158,11 @@ struct LibraryView: View {
                 resumeCard(recent)
             }
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .bottom, spacing: DS.Space.m) {
+                HStack(alignment: .center, spacing: DS.Space.l) {
                     deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
                     deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
                 }
-                VStack(spacing: DS.Space.m) {
+                VStack(spacing: DS.Space.l) {
                     deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
                     deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
                 }
@@ -179,23 +171,23 @@ struct LibraryView: View {
     }
 
     private func deskAction(title: String, detail: String, icon: String, action: @escaping () -> Void) -> some View {
-        let primary = title == "词汇收藏"
-        return Button(action: action) {
-            VStack(alignment: .leading, spacing: DS.Space.l) {
-                HStack {
-                    Image(systemName: icon).font(.largeTitle.weight(.bold)).foregroundStyle(primary ? DS.onAccent : DS.accent)
-                    Spacer()
-                    Image(systemName: "arrow.up.right").foregroundStyle(primary ? DS.onAccent : DS.foreground2)
-                }
+        Button(action: action) {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(DS.accent)
+                    .frame(width: 54, height: 54)
+                    .background(DSReliefSurface(radius: 18, inset: true))
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text(title).font(.title.weight(.black)).foregroundStyle(primary ? DS.onAccent : DS.foreground1)
-                    Text(detail).font(.subheadline).foregroundStyle(primary ? DS.onAccent : DS.foreground2)
+                    Text(title).font(DS.Fonts.headline).foregroundStyle(DS.foreground1)
+                    Text(detail).font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
                 }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DS.foreground3)
             }
             .padding(DS.Space.l)
-            .frame(minWidth: 180, maxWidth: .infinity, minHeight: title == "词汇收藏" ? 190 : 150, alignment: .leading)
-            .background(primary ? DS.accent : DS.signal.opacity(0.25))
-            .overlay(Rectangle().strokeBorder(DS.foreground1, lineWidth: 1.5))
+            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+            .background(DSReliefSurface())
         }
         .buttonStyle(DSPressableButtonStyle())
     }
@@ -243,10 +235,10 @@ struct LibraryView: View {
         NavigationLink(value: doc) {
             HStack(spacing: DS.Space.s) {
                 DocumentCoverThumbnail(doc: doc, url: try? store.pdfURL(for: doc))
-                    .frame(width: 64)
+                    .frame(width: 104)
 
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text(doc.lastPage > 0 ? "继续阅读" : "从这本开始")
+                    Text(doc.lastPage > 0 ? "继续阅读" : "准备好，开始阅读")
                         .font(DS.Fonts.caption2)
                         .tracking(0.8)
                         .foregroundStyle(DS.accent)
@@ -283,12 +275,9 @@ struct LibraryView: View {
                     .foregroundStyle(DS.accent)
                     .frame(width: 24, height: 44)
             }
-            .padding(DS.Space.m)
-            .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
-                    .strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8)
-            )
+            .padding(DS.Space.l)
+            .frame(minHeight: 204)
+            .background(DSReliefSurface(radius: 30))
 
             .contentShape(Rectangle())
         }

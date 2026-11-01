@@ -423,13 +423,12 @@ struct ReaderView: View {
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(DS.foreground2)
                         .frame(width: 38, height: 38)
-                        .background(DS.background1, in: Rectangle())
-                        .overlay(Rectangle().strokeBorder(DS.foreground1.opacity(0.5), lineWidth: 1))
+                        .background(DSReliefSurface(radius: 20))
                 }
                 .accessibilityLabel("更多")
             }
-            .frame(maxWidth: .infinity)
-            .padding(5)
+            .frame(maxWidth: 900)
+            .padding(8)
             .dsFloatingPanel(radius: DS.Radius.pill)
             .padding(.horizontal, DS.Space.m)
             .padding(.top, DS.Space.xs)
@@ -490,7 +489,7 @@ struct ReaderView: View {
         VStack(spacing: DS.Space.xs) {
             DSIconButton(systemImage: "magnifyingglass", accessibility: "全文搜索") { showSearch = true }
             DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline = true }
-            Rectangle().fill(DS.foreground1).frame(width: 24, height: 1)
+            Rectangle().fill(DS.foreground3.opacity(0.2)).frame(width: 24, height: 1)
             DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab = true }
             DSIconButton(systemImage: "chart.bar.doc.horizontal", accessibility: "词频分析") { showAnalyze = true }
         }
@@ -545,7 +544,7 @@ struct ReaderView: View {
             .foregroundStyle(active ? DS.accent : DS.foreground3)
             .padding(.horizontal, DS.Space.s)
             .frame(minHeight: 44)
-            .background(active ? DS.accentContainer : Color.clear, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
+            .background(DSReliefSurface(radius: 18, inset: active))
             .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         }
         .buttonStyle(DSPressableButtonStyle())

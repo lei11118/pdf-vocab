@@ -95,7 +95,7 @@ struct WordCardView: View {
         }
         .padding(DS.Space.l)
         .background(DS.background2)
-        .overlay(alignment: .top) { Rectangle().fill(DS.accent).frame(height: 3) }
+
         .task(id: term) { await load() }
     }
 

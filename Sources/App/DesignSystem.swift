@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Constructivist reading workspace: paper, carbon, vermilion; geometry carries hierarchy.
+/// Neumorphic reading workspace: one material, soft relief and legible content.
 enum DS {
 
     // MARK: - 采样品牌 / 内容色(references/tokens.json · sampled)
@@ -11,13 +11,13 @@ enum DS {
     /// 主操作蓝(Chat 发送按钮采样)
     static let actionBlue = dynamic(light: 0x4377FF, dark: 0x6B95FF)
     /// 选中底(文本工具栏选中态采样)
-    static let selectedTint = dynamic(light: 0xF7E6DF, dark: 0x452923)
+    static let selectedTint = dynamic(light: 0xDDE2EF, dark: 0x30394D)
     /// 中性面(卡片容器底)
-    static let surfaceNeutral = dynamic(light: 0xF4F0E6, dark: 0x151513)
+    static let surfaceNeutral = dynamic(light: 0xE9ECF0, dark: 0x242933)
     /// 内容卡片面
-    static let surfaceWhite = dynamic(light: 0xFFFFFF, dark: 0x232320)
+    static let surfaceWhite = dynamic(light: 0xE9ECF0, dark: 0x242933)
     /// 工具图标描边灰
-    static let iconGray = dynamic(light: 0x53534B, dark: 0xBEBBB0)
+    static let iconGray = dynamic(light: 0x505A6A, dark: 0xB8C3D3)
     /// 录音/警示红
     static let recordRed = dynamic(light: 0xED5279, dark: 0xFF6E8C)
     /// 暖白纸面(画布外沿)
@@ -36,30 +36,30 @@ enum DS {
     // MARK: - 语义色(自动适配浅色 / 深色)
 
     /// 背景 1:页面底(中性灰)
-    static let background1 = dynamic(light: 0xF4F0E6, dark: 0x151513)
+    static let background1 = dynamic(light: 0xE9ECF0, dark: 0x242933)
     /// 背景 2:卡片 / 面板
-    static let background2 = dynamic(light: 0xFFFFFF, dark: 0x232320)
+    static let background2 = dynamic(light: 0xE9ECF0, dark: 0x242933)
     /// 背景 3:浮层(工具托盘、词卡)
-    static let background3 = dynamic(light: 0xFFFFFF, dark: 0x2B2B26)
+    static let background3 = dynamic(light: 0xE9ECF0, dark: 0x2A303B)
     /// 背景 4:选中底 / 强调容器
-    static let background4 = dynamic(light: 0xF7E6DF, dark: 0x452923)
+    static let background4 = dynamic(light: 0xDDE2EF, dark: 0x30394D)
 
     /// 前景 1:主文字
-    static let foreground1 = dynamic(light: 0x181916, dark: 0xF5F0E5)
+    static let foreground1 = dynamic(light: 0x292F3C, dark: 0xEAEFF6)
     /// 前景 2:次文字 / 图标灰
-    static let foreground2 = dynamic(light: 0x53534B, dark: 0xBEBBB0)
+    static let foreground2 = dynamic(light: 0x505A6A, dark: 0xB8C3D3)
     /// 前景 3:弱提示
-    static let foreground3 = dynamic(light: 0x69695E, dark: 0xAAA698)
+    static let foreground3 = dynamic(light: 0x596475, dark: 0xB3BED0)
     /// 前景 4:禁用 / 极弱
     static let foreground4 = dynamic(light: 0xC3C9D4, dark: 0x4E5665)
 
     /// 主强调(选中、当前工具、链接)
-    static let accent = dynamic(light: 0xAD281C, dark: 0xFF9B85)
+    static let accent = dynamic(light: 0x58638E, dark: 0xADBDF5)
     /// 主色浅底(选中容器)
-    static let accentContainer = dynamic(light: 0xF7E6DF, dark: 0x452923)
+    static let accentContainer = dynamic(light: 0xDDE2EF, dark: 0x30394D)
     /// 主色上的文字 / 图标
-    static let onAccent = dynamic(light: 0xFFFFFF, dark: 0x26130F)
-    static let signal = dynamic(light: 0xD4AA27, dark: 0xE5BD49)
+    static let onAccent = dynamic(light: 0xFFFFFF, dark: 0x232D46)
+    static let signal = dynamic(light: 0x7C998E, dark: 0xA0C6B6)
     /// 次级强调
     static let secondary = dynamic(light: 0x6E7C91, dark: 0x8E9AAD)
 
@@ -97,10 +97,10 @@ enum DS {
     // MARK: - 圆角(sharp / regular / comfy / pill)
 
     enum Radius {
-        static let sharp: CGFloat = 2
-        static let regular: CGFloat = 2
-        static let comfy: CGFloat = 2
-        static let pill: CGFloat = 2
+        static let sharp: CGFloat = 14
+        static let regular: CGFloat = 18
+        static let comfy: CGFloat = 28
+        static let pill: CGFloat = 999
     }
 
     // MARK: - 语义字号(references/tokens.json · inferred)
@@ -108,9 +108,9 @@ enum DS {
     enum Fonts {
         /// v0.16.0:UI 声部使用 SF Rounded 近似 Proxima Soft 的圆润人文感;
         /// 展示标题更粗、更圆,正文仍保持系统默认以保证中英混排可读性。
-        static let display3 = Font.largeTitle.weight(.black)
-        static let title1 = Font.title.weight(.bold)
-        static let title2 = Font.title2.weight(.bold)
+        static let display3 = Font.system(.largeTitle, design: .rounded, weight: .bold)
+        static let title1 = Font.system(.title, design: .rounded, weight: .semibold)
+        static let title2 = Font.system(.title2, design: .rounded, weight: .semibold)
         static let headline = Font.headline
         static let subhead = Font.subheadline
         static let body = Font.body
@@ -144,8 +144,8 @@ enum DS {
     // MARK: - 布局与封面
 
     enum Layout {
-        static let pageMargin: CGFloat = 24
-        static let cardGap: CGFloat = 16
+        static let pageMargin: CGFloat = 28
+        static let cardGap: CGFloat = 24
         static let libraryGridMin: CGFloat = 164
         static let coverAspect: CGFloat = 0.72
     }
@@ -167,42 +167,21 @@ enum DS {
     struct PaperCard: ViewModifier {
         var radius: CGFloat = DS.Radius.comfy
         var padding: CGFloat = DS.Space.m
-
         func body(content: Content) -> some View {
-            content
-                .padding(padding)
-                .background(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(DS.background2)
-
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(DS.foreground1.opacity(0.6), lineWidth: 1)
-                )
+            content.padding(padding).background(DSReliefSurface(radius: radius))
         }
     }
 
-    /// v0.16.0:悬浮面板 —— 工具托盘 / 阅读页顶栏 / 底部动作条共用。
-    /// 白面 + 细边 + 一层柔和阴影;不靠重投影制造层级。
     struct FloatingPanel: ViewModifier {
         var radius: CGFloat = DS.Radius.comfy
         var padding: CGFloat = 0
-
         func body(content: Content) -> some View {
-            content
-                .padding(padding)
-                .background(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(DS.background3)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(DS.foreground1.opacity(0.7), lineWidth: 1.5)
-                )
-
+            content.padding(padding).background(DSReliefSurface(radius: min(radius, 30)))
         }
     }
+
+    static let reliefLight = dynamic(light: 0xFFFFFF, dark: 0x3A4352)
+    static let reliefDark = dynamic(light: 0xB3BFCE, dark: 0x11151D)
 
     // MARK: - 动态色工具
 
@@ -240,35 +219,78 @@ struct DSPressableButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
             .offset(y: configuration.isPressed && !reduceMotion ? 2 : 0)
-            .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.86 : 1)
+            .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.9 : 1)
+            .overlay {
+                if configuration.isPressed {
+                    RoundedRectangle(cornerRadius: DS.Radius.regular)
+                        .stroke(DS.reliefDark.opacity(0.45), lineWidth: 3)
+                        .blur(radius: 3)
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.regular))
+                        .allowsHitTesting(false)
+                }
+            }
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
     }
 }
 
-/// 主 / 次按钮胶囊样式,替代系统 bordered 的冷硬边线。
+/// A tactile control that presses into the same material as the page.
 struct DSPillButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prominent = true
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(DS.Fonts.headline)
-            .padding(.horizontal, DS.Space.m)
-            .frame(minHeight: 44)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.sharp).fill(prominent ? DS.accent : DS.background2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.sharp).strokeBorder(
-                    prominent ? Color.clear : DS.foreground1.opacity(0.09),
-                    lineWidth: 0.8
-                )
-            )
+            .padding(.horizontal, DS.Space.l)
+            .frame(minHeight: 48)
             .foregroundStyle(prominent ? DS.onAccent : DS.foreground1)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
-            .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.88 : 1)
+            .background(DSReliefSurface(radius: 18, inset: configuration.isPressed,
+                                       fill: prominent ? DS.accent : DS.background1))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(enabled ? 1 : 0.38)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
+    }
+}
+
+struct DSReliefButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var radius: CGFloat = 18
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(DSReliefSurface(radius: radius, inset: configuration.isPressed))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .opacity(enabled ? 1 : 0.38)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
+    }
+}
+
+/// Native inner shadows, constrained to the shape rather than blurred content.
+struct DSReliefSurface: View {
+    var radius: CGFloat = DS.Radius.comfy
+    var inset = false
+    var fill: Color = DS.background1
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        Group {
+            if inset {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(fill.shadow(.inner(color: DS.reliefDark.opacity(0.65), radius: 5, x: 4, y: 4))
+                        .shadow(.inner(color: DS.reliefLight.opacity(0.9), radius: 5, x: -4, y: -4)))
+            } else {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(fill)
+                    .shadow(color: DS.reliefLight.opacity(0.9), radius: 8, x: -6, y: -6)
+                    .shadow(color: DS.reliefDark.opacity(0.6), radius: 9, x: 7, y: 7)
+            }
+        }
+        .overlay {
+            if contrast == .increased {
+                RoundedRectangle(cornerRadius: radius).strokeBorder(DS.foreground2.opacity(0.6), lineWidth: 1)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -305,8 +327,7 @@ struct DSPageHeading<Actions: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, DS.Space.m)
-        .overlay(alignment: .bottom) { Rectangle().fill(DS.foreground1).frame(height: 3) }
+        .padding(.bottom, DS.Space.xs)
     }
 }
 
@@ -343,9 +364,8 @@ struct DSSearchField: View {
         .padding(.leading, DS.Space.m)
         .padding(.trailing, text.isEmpty ? DS.Space.m : DS.Space.x3s)
         .frame(minHeight: 50)
-        .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.regular)
-            .strokeBorder(focused ? DS.accent : DS.foreground1.opacity(0.5), lineWidth: focused ? 2 : 1))
+        .background(DSReliefSurface(radius: DS.Radius.regular, inset: true))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.regular).strokeBorder(focused ? DS.accent.opacity(0.6) : .clear, lineWidth: 1))
     }
 }
 
@@ -369,11 +389,11 @@ struct DSIconButton: View {
                 .font(.system(size: iconSize, weight: .semibold))
                 .foregroundStyle(foreground)
                 .frame(width: size, height: size)
-                .background(background, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
+                .background(background.opacity(0.25), in: Circle())
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(DSPressableButtonStyle())
+        .buttonStyle(DSReliefButtonStyle(radius: 22))
         .accessibilityLabel(accessibility ?? systemImage)
     }
 }
@@ -398,15 +418,7 @@ struct DSChip: View {
         .padding(.horizontal, DS.Space.s)
         .frame(height: 30)
         .foregroundStyle(selected ? tint : DS.foreground2)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.sharp).fill(selected ? tint.opacity(0.12) : DS.background2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.sharp).strokeBorder(
-                selected ? tint.opacity(0.24) : DS.foreground1.opacity(0.07),
-                lineWidth: 0.8
-            )
-        )
+        .background(DSReliefSurface(radius: 15, inset: selected))
     }
 }
 

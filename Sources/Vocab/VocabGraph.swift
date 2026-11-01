@@ -156,7 +156,7 @@ struct VocabGraphView: View {
                 DSPageHeading(title: "知识图谱", eyebrow: "", subtitle: "从一个词，找到另一条阅读路径") {
                     DSIconButton(systemImage: "xmark", accessibility: "关闭知识图谱") { dismiss() }
                 }
-                Picker("连线方式", selection: $mode) { ForEach(VocabGraphMode.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
+                Picker("连线方式", selection: $mode) { ForEach(VocabGraphMode.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).padding(6).background(DSReliefSurface(radius: 20, inset: true))
                 DSSearchField(placeholder: "搜索生词", text: $search)
                 HStack {
                     Text("\(shown.count) / \(words.count) 词 · \(data.edges.count) 条关联").font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
@@ -167,7 +167,9 @@ struct VocabGraphView: View {
                 GeometryReader { geometry in
                     let center=CGPoint(x:geometry.size.width/2,y:geometry.size.height/2)
                     ZStack {
-                        DS.background1
+                        Color.clear
+                            .background(DSReliefSurface(radius: 30, inset: true))
+                            .contentShape(Rectangle())
                             .gesture(DragGesture().onChanged { value in pan=CGSize(width:panStart.width+value.translation.width,height:panStart.height+value.translation.height) }.onEnded { _ in panStart=pan })
                             .simultaneousGesture(SpatialTapGesture().onEnded { value in
                                 if let edge=data.edges.first(where: { edge in
@@ -199,12 +201,11 @@ struct VocabGraphView: View {
                         }
                     }
                     .coordinateSpace(name:"vocab-graph")
-                    .clipped().background(DS.background2)
-                    .overlay(Rectangle().strokeBorder(DS.foreground1, lineWidth: 1.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 30))
                     .overlay(alignment: .topTrailing) { graphCanvasControls.padding(DS.Space.s) }
                     .simultaneousGesture(MagnificationGesture().onChanged { zoom=max(0.2,min(4,zoomStart*$0)) }.onEnded { _ in zoomStart=zoom })
                 }
-                Text("红线：词根词缀词例 · 灰线：共享英文义项；点击连线查看依据。最多展示 250 词，可搜索定位。")
+                Text("紫线：词根词缀词例 · 灰线：共享英文义项；点击连线查看依据。最多展示 250 词，可搜索定位。")
                     .font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
             }
             .padding(DS.Space.m).background(DS.background1)
@@ -252,9 +253,7 @@ struct VocabGraphView: View {
         }
         .frame(width:labelSizes[word.id]?.width ?? 60,height:34)
         .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
-        .background(DS.background2,in:RoundedRectangle(cornerRadius: DS.Radius.sharp))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.sharp).stroke(DS.accent.opacity(0.35),lineWidth:0.8))
-        .shadow(color:Color.black.opacity(dragging ? 0.15:0),radius:12,y:3)
+        .background(DSReliefSurface(radius: 17, inset: dragging))
     }
     private func nodeDrag(_ word:VocabStore.WordSummary)->some Gesture {
         DragGesture(minimumDistance:0,coordinateSpace:.named("vocab-graph"))

@@ -51,7 +51,8 @@ struct PencilArcMenu: View {
 
             arcShape
                 .fill(DS.background3)
-                .shadow(color: .black.opacity(0.20), radius: 24, x: 0, y: 10)
+                .shadow(color: DS.reliefLight.opacity(0.8), radius: 10, x: -5, y: -5)
+                .shadow(color: DS.reliefDark.opacity(0.65), radius: 12, x: 6, y: 6)
 
             ForEach(entries) { entry in
                 arcButton(entry)
