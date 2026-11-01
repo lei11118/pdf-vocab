@@ -45,11 +45,13 @@ struct PencilPaletteView: View {
             if let dragChanged = onDockDragChanged {
                 dockGrip(onChanged: dragChanged)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView(.horizontal, showsIndicators: true) {
                 barContent
             }
-            .frame(maxWidth: 720)
+            .frame(maxWidth: 560)
             .fixedSize(horizontal: false, vertical: true)
+            divider
+            paletteActions.fixedSize(horizontal: true, vertical: false)
         }
         .dsFloatingPanel(radius: DS.Radius.pill)
     }
@@ -79,7 +81,14 @@ struct PencilPaletteView: View {
 
             rulerButton
 
-            divider
+        }
+        .padding(.horizontal, DS.Space.xs)
+        .padding(.vertical, DS.Space.s)
+    }
+
+    /// Undo/redo and the style control stay visible while tool kinds scroll.
+    private var paletteActions: some View {
+        HStack(spacing: 4) {
 
             Button {
                 DiagLog.log("palette: expand -> \(!expanded)")
@@ -110,8 +119,8 @@ struct PencilPaletteView: View {
             compactIcon("arrow.uturn.backward", label: "撤销", action: onUndo)
             compactIcon("arrow.uturn.forward", label: "重做", action: onRedo)
         }
-        .padding(.horizontal, DS.Space.x3s)
-        .padding(.vertical, 5)
+        .padding(.horizontal, DS.Space.xs)
+        .padding(.vertical, DS.Space.s)
     }
 
     private var divider: some View {

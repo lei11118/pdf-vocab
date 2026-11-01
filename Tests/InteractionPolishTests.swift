@@ -156,7 +156,7 @@ final class InteractionPolishTests:XCTestCase {
             host.view.frame = window.bounds
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
-            try await Task.sleep(for: .milliseconds(500))
+            try await Task.sleep(for: .milliseconds(name.hasPrefix("graph-") ? 2500 : 500))
             var drawn = false
             let image = UIGraphicsImageRenderer(size: size).image { _ in
                 drawn = host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
