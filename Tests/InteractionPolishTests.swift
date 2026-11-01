@@ -164,6 +164,10 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertNil(try workspace.membership()[doc.sha256])
         XCTAssertEqual(try docs.document(sha256: doc.sha256)?.lastPage, 2)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        try FileManager.default.removeItem(at: file)
+        let repaired = try docs.importFile(from: url)
+        XCTAssertEqual(repaired.sha256, doc.sha256); XCTAssertEqual(repaired.lastPage, 2)
+        XCTAssertEqual(PDFKitView.openDocument(at: file)?.pageCount, 3)
         XCTAssertThrowsError(try workspace.save(name: " ", icon: "folder"))
         XCTAssertNil(PDFKitView.openDocument(at: url.appendingPathExtension("missing")))
     }

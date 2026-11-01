@@ -105,7 +105,16 @@ struct DocumentStore: Sendable {
 
         // 3) 哈希 + 去重
         let sha = try Self.sha256(ofFileAt: staged)
-        if let existing = try document(sha256: sha) { return existing }
+        if let existing = try document(sha256: sha) {
+            let existingURL = try pdfURL(for: existing)
+            if !fm.fileExists(atPath: existingURL.path) {
+                // Reimport must repair a missing local copy without resetting
+                // progress, vocabulary occurrences or ink associated with its SHA.
+                try fm.copyItem(at: staged, to: existingURL)
+                DiagLog.log("import: restored missing local PDF")
+            }
+            return existing
+        }
 
         // 4) 能否解析(含加密检测)
         guard let pdf = PDFDocument(url: staged) else { throw ImportError.unreadablePDF }
