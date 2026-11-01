@@ -166,9 +166,13 @@ enum SelectionGeometry {
     static func initialWord(on page: PDFPage, at point: CGPoint) -> PDFSelection? {
         guard let word=page.selectionForWord(at:point),
               isSane(word,maxPages:1,maxChars:100),
-              WordPicker.countWords(in:word.string ?? "")==1,
+              isSingleWordText(word.string ?? ""),
               word.bounds(for:page).insetBy(dx:-3,dy:-3).contains(point) else { return nil }
         return word
+    }
+    static func isSingleWordText(_ value:String)->Bool {
+        let text=value.trimmingCharacters(in:.whitespacesAndNewlines).trimmingCharacters(in:.punctuationCharacters)
+        return text.range(of:#"^[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*$"#,options:.regularExpression) != nil
     }
 
     static func distanceSquared(_ a: CGPoint, _ b: CGPoint) -> CGFloat {

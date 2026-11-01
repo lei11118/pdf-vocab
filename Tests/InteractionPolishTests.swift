@@ -7,6 +7,10 @@ import MetalKit
 @MainActor
 final class InteractionPolishTests:XCTestCase {
     func testWordPickingStartsWithOneWordAndRejectsWhitespace() throws {
+        XCTAssertTrue(SelectionGeometry.isSingleWordText("don't"))
+        XCTAssertTrue(SelectionGeometry.isSingleWordText("well-known"))
+        XCTAssertFalse(SelectionGeometry.isSingleWordText("word word"))
+        XCTAssertFalse(SelectionGeometry.isSingleWordText("whole line selected"))
         let data=UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:300)).pdfData { ctx in
             ctx.beginPage()
             ("Hello world again" as NSString).draw(at:CGPoint(x:30,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:24)])
