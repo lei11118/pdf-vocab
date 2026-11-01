@@ -407,26 +407,6 @@ struct ReaderView: View {
                     } label: {
                         Label("清空本页手写", systemImage: "eraser.line.dashed")
                     }
-                    Button {
-                        showVocab = true
-                    } label: {
-                        Label("生词本", systemImage: "text.book.closed")
-                    }
-                    Button {
-                        showSearch = true
-                    } label: {
-                        Label("全文搜索", systemImage: "magnifyingglass")
-                    }
-                    Button {
-                        showOutline = true
-                    } label: {
-                        Label("目录与书签", systemImage: "list.bullet.indent")
-                    }
-                    Button {
-                        showAnalyze = true
-                    } label: {
-                        Label("词频分析 · 批量收录", systemImage: "chart.bar.doc.horizontal")
-                    }
                     Divider()
                     Button {
                         showSettings = true
@@ -598,6 +578,7 @@ struct ReaderView: View {
 
     private func reader(for url: URL) -> some View {
         pdfArea
+            .transaction { $0.animation = nil }
             .overlay {
                 // v0.12.0(M7):夜间模式(降低纸张亮度;不改动页面内容)
                 if nightMode {
@@ -635,7 +616,7 @@ struct ReaderView: View {
                     }
                 }
             }
-            .animation(.easeInOut(duration: 0.18), value: cardContent)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: cardContent)
             .overlay {
                 // v0.15.0:挤压 → 围绕笔尖的弧形工具盘(撤销 / 钢笔 / 铅笔 / 荧光笔 / 橡皮)
                 GeometryReader { geo in
@@ -649,7 +630,7 @@ struct ReaderView: View {
                     }
                 }
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.88), value: markMode)
+            .animation(reduceMotion ? nil : DS.Motion.spring, value: arcAnchor)
     }
 
     /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
@@ -744,7 +725,7 @@ struct ReaderView: View {
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
-                        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                        withAnimation(reduceMotion ? nil : DS.Motion.quickSpring) {
                             if arcAnchor == nil {
                                 arcAnchor = point
                             } else {
@@ -753,7 +734,7 @@ struct ReaderView: View {
                         }
                     },
                     onFocusToggle: {
-                        withAnimation(.easeInOut(duration: DS.Motion.base)) { focusMode.toggle() }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: DS.Motion.base)) { focusMode.toggle() }
                     },
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },

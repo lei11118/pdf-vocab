@@ -498,7 +498,7 @@ struct VocabListView: View {
         }
         let base=edgeDirection<0 ? (visible.first?.offset ?? 0):(visible.last?.offset ?? words.count-1)
         let index=max(0,min(words.count-1,base+edgeDirection*2))
-        withAnimation(.linear(duration:0.12)) { scrollProxy?.scrollTo(words[index].id,anchor:edgeDirection<0 ? .top:.bottom) }
+        withAnimation(reduceMotion ? nil : .linear(duration:0.12)) { scrollProxy?.scrollTo(words[index].id,anchor:edgeDirection<0 ? .top:.bottom) }
         let work=DispatchWorkItem { stepEdgeScroll() };edgeWork=work
         DispatchQueue.main.asyncAfter(deadline:.now()+0.18,execute:work)
     }
