@@ -86,7 +86,9 @@ final class InteractionPolishTests:XCTestCase {
                 let box = word.bounds(for: page)
                 let tap = CompletedWordTap(point: view.convert(CGPoint(x: box.midX, y: box.midY), from: page))
                 coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: tap)
-                let highlight = try XCTUnwrap(page.annotations.first { $0.type == PDFAnnotationSubtype.highlight.rawValue })
+                XCTAssertEqual(selected.count, start == 0 ? 1 : 2, "rotation=\(rotation), start=\(start)")
+                XCTAssertEqual(page.annotations.count, 1, "rotation=\(rotation), start=\(start)")
+                let highlight = try XCTUnwrap(page.annotations.first, "rotation=\(rotation), start=\(start)")
                 XCTAssertEqual(highlight.bounds.midX, box.midX, accuracy: 1)
                 XCTAssertEqual(highlight.bounds.midY, box.midY, accuracy: 1)
             }
