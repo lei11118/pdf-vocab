@@ -118,7 +118,7 @@ struct VocabAnalyzeSheet: View {
                                         .background(active ? Color.accentColor : Color(.secondarySystemBackground), in: Capsule())
                                         .foregroundStyle(active ? Color.white : Color.primary)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(DSPressableButtonStyle())
                             }
                         }
                         .padding(.vertical, 2)
@@ -167,7 +167,7 @@ struct VocabAnalyzeSheet: View {
                             Spacer(minLength: 0)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DSPressableButtonStyle())
                 }
             } header: {
                 Text("候选单词(按出现次数排序,最多显示 2000)")

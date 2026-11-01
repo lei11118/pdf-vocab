@@ -101,6 +101,7 @@ struct VocabListView: View {
                         }
                         .pickerStyle(.segmented)
                         groupStrip
+                        dockLayer
 
                         if words.isEmpty {
                             emptyState
@@ -129,9 +130,11 @@ struct VocabListView: View {
                     .padding(.bottom, DS.Space.m)
                     .background(DS.background1)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { dockLayer }
+
             .toolbar(.hidden, for: .navigationBar)
             .task { reload() }
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: compactLayout)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: listMode)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: filter)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selectedIds)
             .onChange(of: searchText) { _, _ in reload() }
@@ -649,7 +652,7 @@ struct VocabListView: View {
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(DS.accent)
                 .frame(width: 64, height: 64)
-                .background(DS.accentContainer, in: Circle())
+                .background(DS.accentContainer, in: Rectangle())
             Text(emptyTitle)
                 .font(DS.Fonts.title2)
                 .foregroundStyle(DS.foreground1)
@@ -742,7 +745,7 @@ struct VocabListView: View {
                                 }
                                 .foregroundStyle(DS.accent)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(DSPressableButtonStyle())
                         }
                         .padding(DS.Space.s)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -772,10 +775,13 @@ struct VocabListView: View {
     // MARK: - 底部动作条(与文档库同一个悬浮胶囊)
 
     private var dockLayer: some View {
-        dockContent
-            .padding(5)
-            .dsFloatingPanel(radius: DS.Radius.pill)
-            .padding(.bottom, DS.Space.m)
+        ScrollView(.horizontal, showsIndicators: false) {
+            dockContent.padding(.vertical, 6)
+        }
+        .padding(.horizontal, DS.Space.xs)
+        .background(DS.background2)
+        .overlay(alignment: .bottom) { Rectangle().fill(DS.foreground1).frame(height: 1) }
+        .contentTransition(.numericText())
     }
 
     private var dockContent: some View {
@@ -788,7 +794,7 @@ struct VocabListView: View {
             }
             .foregroundStyle(DS.foreground2)
             .padding(.horizontal, DS.Space.s)
-            .frame(height: 42)
+            .frame(minHeight: 44)
 
             Rectangle()
                 .fill(DS.foreground1.opacity(0.09))
@@ -839,8 +845,8 @@ struct VocabListView: View {
             }
             .foregroundStyle(DS.foreground2)
             .padding(.horizontal, DS.Space.s)
-            .frame(height: 42)
-            .contentShape(Capsule())
+            .frame(minHeight: 44)
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         }
         .buttonStyle(DSPressableButtonStyle())
     }
@@ -855,9 +861,9 @@ struct VocabListView: View {
             }
             .foregroundStyle(DS.onAccent)
             .padding(.horizontal, DS.Space.m)
-            .frame(height: 42)
-            .background(DS.accent, in: Capsule())
-            .contentShape(Capsule())
+            .frame(minHeight: 44)
+            .background(DS.accent, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         }
         .buttonStyle(DSPressableButtonStyle())
     }
@@ -987,8 +993,8 @@ private struct VocabCardView: View {
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(DS.accent)
-                        .frame(width: 30, height: 30)
-                        .background(DS.accentContainer, in: Circle())
+                        .frame(width: 44, height: 44)
+                        .background(DS.accentContainer, in: Rectangle())
                 }
                 .buttonStyle(DSPressableButtonStyle())
                 .accessibilityLabel("发音")
@@ -1023,11 +1029,11 @@ private struct VocabCardView: View {
         .overlay(
             RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                 .strokeBorder(
-                    selected ? DS.accent.opacity(0.24) : DS.foreground1.opacity(0.07),
+                    selected ? DS.accent : DS.foreground1.opacity(0.5),
                     lineWidth: 0.8
                 )
         )
-        .shadow(color: .black.opacity(dragging ? 0.14 : 0.05), radius: dragging ? 18 : 12, x: 0, y: dragging ? 9 : 4)
+        .shadow(color: .black.opacity(dragging ? 0.14 : 0), radius: 18, x: 0, y: 9)
         .scaleEffect(dragging && !reduceMotion ? 1.02 : 1)
         .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: dragging)
         .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selected)
@@ -1050,7 +1056,7 @@ private struct VocabCardView: View {
                     .foregroundStyle(DS.foreground3)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DSPressableButtonStyle())
             } else if let title = word.sourceDocTitle {
                 Text(title)
                     .font(DS.Fonts.micro)

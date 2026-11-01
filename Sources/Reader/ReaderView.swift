@@ -66,6 +66,7 @@ struct ReaderView: View {
     @State private var dockBounds: CGSize = .zero
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
 
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
@@ -259,8 +260,11 @@ struct ReaderView: View {
             .overlay {
                 dockLayer
             }
-            .animation(.easeInOut(duration: DS.Motion.base), value: focusMode)
-            .animation(DS.Motion.spring, value: markMode)
+            .overlay(alignment: .trailing) {
+                if !focusMode && !markMode { readerActionRail }
+            }
+            .animation(reduceMotion ? nil : DS.Motion.spring, value: focusMode)
+            .animation(reduceMotion ? nil : DS.Motion.spring, value: markMode)
     }
 
     /// v0.24.0:底部工具区 —— 用 GeometryReader 拿容器尺寸,让工具条能自由拖动、
@@ -439,12 +443,12 @@ struct ReaderView: View {
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(DS.foreground2)
                         .frame(width: 38, height: 38)
-                        .background(DS.background1, in: Circle())
-                        .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+                        .background(DS.background1, in: Rectangle())
+                        .overlay(Rectangle().strokeBorder(DS.foreground1.opacity(0.5), lineWidth: 1))
                 }
                 .accessibilityLabel("更多")
             }
-            .frame(maxWidth: 900)
+            .frame(maxWidth: .infinity)
             .padding(5)
             .dsFloatingPanel(radius: DS.Radius.pill)
             .padding(.horizontal, DS.Space.m)
@@ -476,9 +480,9 @@ struct ReaderView: View {
             .shadow(color: .black.opacity(dockDragActive ? 0.18 : 0), radius: dockDragActive ? 18 : 0, y: 8)
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
-            .animation(dockDragActive ? nil : DS.Motion.spring, value: dockOffset)
-            .animation(DS.Motion.quickSpring, value: dockDragActive)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(dockDragActive || reduceMotion ? nil : DS.Motion.spring, value: dockOffset)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: dockDragActive)
+            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         } else if !focusMode {
             HStack(spacing: 3) {
                 readingModeSegment(
@@ -497,8 +501,23 @@ struct ReaderView: View {
             .padding(4)
             .dsFloatingPanel(radius: DS.Radius.pill)
             .padding(.bottom, DS.Space.m)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    /// Reading actions live next to the page rather than in the document header.
+    private var readerActionRail: some View {
+        VStack(spacing: DS.Space.xs) {
+            DSIconButton(systemImage: "magnifyingglass", accessibility: "全文搜索") { showSearch = true }
+            DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline = true }
+            Rectangle().fill(DS.foreground1).frame(width: 24, height: 1)
+            DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab = true }
+            DSIconButton(systemImage: "chart.bar.doc.horizontal", accessibility: "词频分析") { showAnalyze = true }
+        }
+        .padding(4)
+        .dsFloatingPanel()
+        .padding(.trailing, DS.Space.xs)
+        .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
     }
 
     // MARK: - v0.24.0 工具条拖动
@@ -517,14 +536,14 @@ struct ReaderView: View {
         let snapped = ToolDockPosition.snapped(dockOffset, bounds: dockBounds, dockSize: dockSize)
         dockDragActive = false
         dockDragOrigin = nil
-        withAnimation(DS.Motion.spring) { dockOffset = snapped }
+        withAnimation(reduceMotion ? nil : DS.Motion.spring) { dockOffset = snapped }
         ToolDockPosition.save(snapped, docSha: doc.sha256, bounds: dockBounds)
         if pencilHaptics { PencilHaptics.selectionCompleted(at: .zero) }
         DiagLog.log("dock: moved to (\(Int(snapped.width)), \(Int(snapped.height)))")
     }
 
     private func resetDock() {
-        withAnimation(DS.Motion.spring) { dockOffset = .zero }
+        withAnimation(reduceMotion ? nil : DS.Motion.spring) { dockOffset = .zero }
         ToolDockPosition.save(.zero, docSha: doc.sha256, bounds: dockBounds)
         if pencilHaptics { PencilHaptics.selectionCompleted(at: .zero) }
         DiagLog.log("dock: reset")
@@ -545,9 +564,9 @@ struct ReaderView: View {
             }
             .foregroundStyle(active ? DS.accent : DS.foreground3)
             .padding(.horizontal, DS.Space.s)
-            .frame(height: 36)
-            .background(active ? DS.accentContainer : Color.clear, in: Capsule())
-            .contentShape(Capsule())
+            .frame(minHeight: 44)
+            .background(active ? DS.accentContainer : Color.clear, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
         }
         .buttonStyle(DSPressableButtonStyle())
         .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
@@ -785,7 +804,7 @@ struct ReaderView: View {
                     .font(.caption2)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(.regularMaterial, in: Capsule())
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                     .padding(.bottom, 44)
             }
         }
@@ -797,7 +816,7 @@ struct ReaderView: View {
                         .font(.caption2)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(.regularMaterial, in: Capsule())
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                         .allowsHitTesting(false)
                 }
                 // v0.12.0(M7):批注版导出进度
@@ -806,7 +825,7 @@ struct ReaderView: View {
                         .font(.caption2)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(.regularMaterial, in: Capsule())
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                         .allowsHitTesting(false)
                 }
             }
@@ -978,7 +997,7 @@ private struct PageJumpSheet: View {
                     .foregroundStyle(index == current ? .primary : .secondary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DSPressableButtonStyle())
         .task(id: index) {
             loader.request(index)
         }

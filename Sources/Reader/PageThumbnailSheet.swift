@@ -68,7 +68,7 @@ struct PageThumbnailSheet: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DSPressableButtonStyle())
         .onAppear { load(index) }
         .accessibilityLabel("第 \(index + 1) 页")
         .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())

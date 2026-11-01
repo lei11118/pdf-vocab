@@ -74,6 +74,9 @@ struct VocabularyDetailView: View {
                 }
                 .padding(16)
             }
+            .background(DS.background2)
+            .buttonStyle(DSPressableButtonStyle())
+            .tint(DS.accent)
             .navigationTitle("生词详情")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

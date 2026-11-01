@@ -109,13 +109,37 @@ final class InteractionPolishTests:XCTestCase {
         let folder = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
                                                 appropriateFor: nil, create: true).appendingPathComponent("UIReview")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Real imported sample exercises the reading chrome and populated home.
+        let docs = DocumentStore(db: db)
+        let sampleURL = FileManager.default.temporaryDirectory.appendingPathComponent("Reading workspace " + UUID().uuidString + ".pdf")
+        let sample = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 820)).pdfData { ctx in
+            ctx.beginPage()
+            ("The architecture of language" as NSString).draw(at: CGPoint(x: 50, y: 100), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 26)])
+            ("Every word connects to another idea. Read, annotate, and explore." as NSString).draw(in: CGRect(x: 50, y: 170, width: 480, height: 200), withAttributes: [.font: UIFont.systemFont(ofSize: 20)])
+        }
+        try sample.write(to: sampleURL)
+        let record = try docs.importFile(from: sampleURL)
+        defer { try? docs.delete(record); try? FileManager.default.removeItem(at: sampleURL) }
+        let savedCompact = UserDefaults.standard.object(forKey: "vocabCompactLayout")
+        defer {
+            if let savedCompact { UserDefaults.standard.set(savedCompact, forKey: "vocabCompactLayout") }
+            else { UserDefaults.standard.removeObject(forKey: "vocabCompactLayout") }
+        }
         let cases: [(String, CGSize, AnyView)] = [
             ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),
             ("vocab-ipad", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
             ("vocab-split", CGSize(width: 480, height: 900), AnyView(VocabListView(store: store))),
-            ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark)))
+            ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark))),
+            ("library-split", CGSize(width: 480, height: 900), AnyView(LibraryView(store: docs))),
+            ("vocab-large-type", CGSize(width: 480, height: 1100), AnyView(VocabListView(store: store).dynamicTypeSize(.xxxLarge))),
+            ("vocab-compact", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
+            ("graph-ipad", CGSize(width: 834, height: 1194), AnyView(VocabGraphView(store: store, words: store.listWords()))),
+            ("graph-reduce-motion", CGSize(width: 480, height: 900), AnyView(VocabGraphView(store: store, words: store.listWords()).environment(\.accessibilityReduceMotion, true))),
+            ("reader-ipad", CGSize(width: 834, height: 1194), AnyView(ReaderView(doc: record, store: docs))),
+            ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs)))
         ]
         for (name, size, content) in cases {
+            UserDefaults.standard.set(name == "vocab-compact", forKey: "vocabCompactLayout")
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
             let host = UIHostingController(rootView: content)

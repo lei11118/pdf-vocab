@@ -37,6 +37,11 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    DSPageHeading(title: "设置", eyebrow: "", subtitle: "调整你的阅读与书写方式") { EmptyView() }
+                        .listRowBackground(DS.background1)
+                }
+
+                Section {
                     Toggle("选词后自动发音", isOn: $autoSpeakOnSelect)
                 } header: {
                     Text("查词")
@@ -114,7 +119,11 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(DS.background1.ignoresSafeArea())
-            .navigationTitle("设置")
+            .scrollContentBackground(.hidden)
+            .background(DS.background1)
+            .tint(DS.accent)
+            .buttonStyle(DSPressableButtonStyle())
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

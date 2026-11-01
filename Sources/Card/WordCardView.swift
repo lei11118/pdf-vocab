@@ -93,7 +93,9 @@ struct WordCardView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(DS.Space.l)
+        .background(DS.background2)
+        .overlay(alignment: .top) { Rectangle().fill(DS.accent).frame(height: 3) }
         .task(id: term) { await load() }
     }
 
@@ -187,7 +189,7 @@ struct WordCardView: View {
                             .font(.caption2)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(DS.accentContainer, in: Capsule())
+                            .background(DS.accentContainer, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                             .foregroundStyle(DS.accent)
                     }
                 }
@@ -228,7 +230,7 @@ struct WordCardView: View {
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                         }
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(DSPressableButtonStyle())
                                 }
                             }
                         } else {
@@ -327,10 +329,10 @@ struct SentenceCardView: View {
                                         .font(.callout)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(DS.accentContainer, in: Capsule())
+                                        .background(DS.accentContainer, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                                         .foregroundStyle(DS.accent)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(DSPressableButtonStyle())
                             }
                         }
                     }
@@ -348,9 +350,10 @@ private func closeButton(_ action: @escaping () -> Void) -> some View {
     Button(action: action) {
         Image(systemName: "xmark.circle.fill")
             .font(.title3)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.foreground2)
+            .frame(width: 44, height: 44)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(DSPressableButtonStyle())
 }
 
 /// 简单流式布局(词块自动换行)
@@ -440,7 +443,7 @@ struct CompactCardView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.accentColor)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DSPressableButtonStyle())
             .accessibilityLabel("发音")
             if let translation, !translation.isEmpty {
                 Text(translation)
@@ -454,7 +457,7 @@ struct CompactCardView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DSPressableButtonStyle())
             .accessibilityLabel("关闭")
         }
         .padding(.leading, 16)

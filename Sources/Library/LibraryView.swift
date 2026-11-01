@@ -25,40 +25,34 @@ struct LibraryView: View {
             ZStack(alignment: .bottom) {
                 DS.background1.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: DS.Space.l) {
-                        if query.isEmpty { learningDesk }
-
-                        if documents.isEmpty {
-                            emptyState
-                                .padding(.top, DS.Space.xxl)
-                        } else if filteredDocuments.isEmpty {
-                            noSearchResults
-                                .padding(.top, DS.Space.xxl)
+                GeometryReader { geometry in
+                    ScrollView {
+                        if geometry.size.width >= 760 && query.isEmpty {
+                            HStack(alignment: .top, spacing: DS.Space.xl) {
+                                learningDesk.frame(width: 256)
+                                bookshelfContent.frame(maxWidth: .infinity)
+                            }
+                            .padding(DS.Layout.pageMargin)
                         } else {
-                            libraryGrid
+                            VStack(alignment: .leading, spacing: DS.Space.l) {
+                                if query.isEmpty { learningDesk }
+                                bookshelfContent
+                            }
+                            .padding(DS.Layout.pageMargin)
                         }
                     }
-                    .padding(.horizontal, DS.Layout.pageMargin)
-                    .padding(.top, DS.Space.xs)
-                    .padding(.bottom, DS.Space.l)
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: DS.Space.m) {
                     libraryHeader
-                    if !documents.isEmpty { searchField }
+
                 }
                 .padding(.horizontal, DS.Layout.pageMargin)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.m)
                 .background(DS.background1)
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                bottomDock
-                    .contentTransition(.numericText(value: Double(vocabCount)))
-                    .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: vocabCount)
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: DocumentRecord.self) { doc in
@@ -154,7 +148,7 @@ struct LibraryView: View {
                     Image(systemName: "ellipsis")
                         .font(DS.Fonts.headline).foregroundStyle(DS.foreground2)
                         .frame(width: 44, height: 44)
-                        .background(DS.background2, in: Circle())
+                        .background(DS.background2, in: Rectangle())
                 }
                 .accessibilityLabel("更多设置")
             }
@@ -168,11 +162,11 @@ struct LibraryView: View {
     private var learningDesk: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
             if let recent = resumeDocument {
-                DSSectionHeader(title: "接着读", subtitle: "回到上次停留的位置")
+                DSSectionHeader(title: "接着读")
                 resumeCard(recent)
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: DS.Space.m) {
+                HStack(alignment: .bottom, spacing: DS.Space.m) {
                     deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
                     deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
                 }
@@ -188,31 +182,35 @@ struct LibraryView: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: DS.Space.l) {
                 HStack {
-                    Image(systemName: icon).font(.title2).foregroundStyle(DS.accent)
+                    Image(systemName: icon).font(.largeTitle.weight(.bold)).foregroundStyle(DS.accent)
                     Spacer()
                     Image(systemName: "arrow.up.right").foregroundStyle(DS.foreground3)
                 }
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text(title).font(.title3.weight(.semibold)).foregroundStyle(DS.foreground1)
+                    Text(title).font(.title.weight(.black)).foregroundStyle(DS.foreground1)
                     Text(detail).font(.subheadline).foregroundStyle(DS.foreground2)
                 }
             }
             .padding(DS.Space.l)
-            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-            .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular))
+            .frame(minWidth: 180, maxWidth: .infinity, minHeight: title == "词汇收藏" ? 190 : 150, alignment: .leading)
+            .background(title == "词汇收藏" ? DS.background2 : DS.signal.opacity(0.25))
+            .overlay(Rectangle().strokeBorder(DS.foreground1, lineWidth: 1.5))
         }
         .buttonStyle(DSPressableButtonStyle())
     }
 
+    private var bookshelfContent: some View {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            shelfHeading
+            if !documents.isEmpty { searchField }
+            if documents.isEmpty { emptyState }
+            else if filteredDocuments.isEmpty { noSearchResults }
+            else { libraryGrid }
+        }
+    }
+
     private var libraryGrid: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            DSSectionHeader(
-                title: query.isEmpty ? "书架" : "搜索结果",
-                subtitle: query.isEmpty
-                    ? "\(filteredDocuments.count) 本 · 最近导入优先"
-                    : "\(filteredDocuments.count) 本匹配"
-            )
-
             LazyVGrid(
                 columns: [
                     GridItem(
@@ -242,9 +240,9 @@ struct LibraryView: View {
 
     private func resumeCard(_ doc: DocumentRecord) -> some View {
         NavigationLink(value: doc) {
-            HStack(spacing: DS.Space.l) {
+            HStack(spacing: DS.Space.s) {
                 DocumentCoverThumbnail(doc: doc, url: try? store.pdfURL(for: doc))
-                    .frame(width: 104)
+                    .frame(width: 64)
 
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Text(doc.lastPage > 0 ? "继续阅读" : "从这本开始")
@@ -282,8 +280,7 @@ struct LibraryView: View {
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(DS.accent)
-                    .frame(width: 40, height: 40)
-                    .background(DS.accentContainer, in: Circle())
+                    .frame(width: 24, height: 44)
             }
             .padding(DS.Space.m)
             .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous))
@@ -291,62 +288,23 @@ struct LibraryView: View {
                 RoundedRectangle(cornerRadius: DS.Radius.comfy, style: .continuous)
                     .strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8)
             )
-            .shadow(color: .black.opacity(0.06), radius: 16, x: 0, y: 7)
+
             .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
     }
 
-    private var bottomDock: some View {
-        HStack(spacing: DS.Space.x3s) {
-            Button {
-                showVocab = true
-            } label: {
-                HStack(spacing: DS.Space.x2s) {
-                    Image(systemName: "text.book.closed.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("生词本")
-                        .font(DS.Fonts.caption2)
-                    if vocabCount > 0 {
-                        Text("\(vocabCount)")
-                            .font(DS.Fonts.micro.monospacedDigit())
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(DS.accentContainer, in: Capsule())
-                            .foregroundStyle(DS.accent)
-                    }
-                }
-                .foregroundStyle(DS.foreground2)
-                .padding(.horizontal, DS.Space.s)
-                .frame(height: 42)
-                .contentShape(Capsule())
+    private var shelfHeading: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(query.isEmpty ? "书架" : "搜索结果").font(DS.Fonts.title1)
+                Text("\(filteredDocuments.count) 本文档").font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
             }
-            .buttonStyle(DSPressableButtonStyle())
-
-            Rectangle()
-                .fill(DS.foreground1.opacity(0.09))
-                .frame(width: 1, height: 22)
-
-            Button {
-                showImporter = true
-            } label: {
-                HStack(spacing: DS.Space.x2s) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .bold))
-                    Text("导入 PDF")
-                        .font(DS.Fonts.caption2)
-                }
-                .foregroundStyle(DS.onAccent)
-                .padding(.horizontal, DS.Space.m)
-                .frame(height: 42)
-                .background(DS.accent, in: Capsule())
-                .contentShape(Capsule())
-            }
-            .buttonStyle(DSPressableButtonStyle())
+            Spacer()
+            Button { showImporter = true } label: { Label("导入 PDF", systemImage: "plus") }
+                .buttonStyle(DSPillButtonStyle())
         }
-        .padding(5)
-        .dsFloatingPanel(radius: DS.Radius.pill)
-        .padding(.bottom, DS.Space.m)
+        .padding(.top, DS.Space.l)
     }
 
     private var noSearchResults: some View {
@@ -376,45 +334,17 @@ struct LibraryView: View {
 
     private var emptyState: some View {
         VStack(spacing: DS.Space.l) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                    .fill(DS.coverBlueLight)
-                    .frame(width: 132, height: 168)
-                    .rotationEffect(.degrees(-7))
-                    .offset(x: -12, y: 5)
-                    .shadow(color: .black.opacity(0.08), radius: 12, y: 6)
-
-                RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                    .fill(DS.coverCream)
-                    .frame(width: 132, height: 168)
-                    .rotationEffect(.degrees(4))
-                    .offset(x: 10, y: -2)
-                    .shadow(color: .black.opacity(0.10), radius: 14, y: 7)
-
-                VStack(spacing: DS.Space.s) {
-                    Image(systemName: "text.book.closed.fill")
-                        .font(.system(size: 34, weight: .medium))
-                        .foregroundStyle(DS.accent)
-                    Text("PDF")
-                        .font(DS.Fonts.micro)
-                        .tracking(2)
-                        .foregroundStyle(DS.foreground3)
-                }
-                .frame(width: 132, height: 168)
-                .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                        .strokeBorder(.white.opacity(0.7), lineWidth: 0.8)
-                )
-                .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
-            }
-            .frame(height: 190)
+            Image(systemName: "doc.badge.plus")
+                .font(.system(size: 60, weight: .black))
+                .foregroundStyle(DS.accent)
+                .frame(height: 100)
+                .accessibilityHidden(true)
 
             VStack(spacing: DS.Space.x3s) {
                 Text("把第一份 PDF 放上书架")
                     .font(DS.Fonts.title2)
                     .foregroundStyle(DS.foreground1)
-                Text("选中单词查词,按住 Pencil 随手批注。\n所有内容只留在这台 iPad 上。")
+                Text("双击单词查词，用 Pencil 随手批注。\n所有内容只留在这台 iPad 上。")
                     .font(DS.Fonts.subhead)
                     .foregroundStyle(DS.foreground3)
                     .multilineTextAlignment(.center)

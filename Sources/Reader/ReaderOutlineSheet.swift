@@ -59,7 +59,7 @@ struct ReaderOutlineSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DSPressableButtonStyle())
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 bookmarkStore.remove(docSha: docSha, page: bm.page)
@@ -102,7 +102,7 @@ struct ReaderOutlineSheet: View {
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DSPressableButtonStyle())
                     }
                 } header: {
                     Text("目录")

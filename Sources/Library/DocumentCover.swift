@@ -54,9 +54,9 @@ struct DocumentCoverThumbnail: View {
             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
-                    .strokeBorder(.white.opacity(0.38), lineWidth: 0.8)
+                    .strokeBorder(DS.foreground1.opacity(0.65), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 6)
+
         }
         .aspectRatio(DS.Layout.coverAspect, contentMode: .fit)
         .task(id: doc.sha256) { await loadThumbnail() }

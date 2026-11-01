@@ -59,7 +59,7 @@ struct ReaderSearchSheet: View {
                         }
                         .padding(.vertical, 2)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DSPressableButtonStyle())
                 }
             }
             .listStyle(.insetGrouped)

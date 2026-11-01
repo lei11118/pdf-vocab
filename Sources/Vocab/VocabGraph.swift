@@ -153,20 +153,15 @@ struct VocabGraphView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: DS.Space.s) {
-                HStack(alignment:.firstTextBaseline) {
-                    VStack(alignment:.leading,spacing:4) {
-                        Text("词与词的星群").font(DS.Fonts.display3).foregroundStyle(DS.foreground1)
-                        Text("LEXICAL ATLAS").font(DS.Fonts.caption2).tracking(3).foregroundStyle(DS.accent)
-                    }
-                    Spacer()
-                    Image(systemName:"circle.hexagongrid").font(.system(size:32,weight:.ultraLight)).foregroundStyle(DS.accent.opacity(0.5))
-                }.padding(.vertical,DS.Space.s)
+                DSPageHeading(title: "知识图谱", eyebrow: "", subtitle: "从一个词，找到另一条阅读路径") {
+                    DSIconButton(systemImage: "xmark", accessibility: "关闭知识图谱") { dismiss() }
+                }
                 Picker("连线方式", selection: $mode) { ForEach(VocabGraphMode.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
-                TextField("搜索生词", text: $search).textFieldStyle(.roundedBorder)
+                DSSearchField(placeholder: "搜索生词", text: $search)
                 HStack {
                     Text("\(shown.count) / \(words.count) 词 · \(data.edges.count) 条关联").font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
                     Spacer()
-                    Button("复位视图") { pan = .zero; panStart = .zero; zoom = 1; zoomStart = 1 }
+
                 }
                 if loading { ProgressView() }
                 GeometryReader { geometry in
@@ -204,19 +199,17 @@ struct VocabGraphView: View {
                         }
                     }
                     .coordinateSpace(name:"vocab-graph")
-                    .clipped().background(DS.background2,in:RoundedRectangle(cornerRadius:24))
-                    .overlay(RoundedRectangle(cornerRadius:24).stroke(DS.foreground3.opacity(0.12),lineWidth:0.8)).clipShape(RoundedRectangle(cornerRadius:24))
+                    .clipped().background(DS.background2)
+                    .overlay(Rectangle().strokeBorder(DS.foreground1, lineWidth: 1.5))
+                    .overlay(alignment: .topTrailing) { graphCanvasControls.padding(DS.Space.s) }
                     .simultaneousGesture(MagnificationGesture().onChanged { zoom=max(0.2,min(4,zoomStart*$0)) }.onEnded { _ in zoomStart=zoom })
                 }
-                Text("蓝线：词根词缀词例 · 灰线：共享英文义项；点击连线查看依据。最多展示 250 词，可搜索定位。")
+                Text("红线：词根词缀词例 · 灰线：共享英文义项；点击连线查看依据。最多展示 250 词，可搜索定位。")
                     .font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
             }
             .padding(DS.Space.m).background(DS.background1)
-            .navigationTitle("知识图谱").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement:.topBarLeading) { Button("返回") { dismiss() } }
-                ToolbarItem(placement:.topBarTrailing) { Button("数据来源") { sources=true } }
-            }
+            .toolbar(.hidden, for: .navigationBar)
+            .buttonStyle(DSPressableButtonStyle())
             .task(id:mode.rawValue+":"+search) { await load() }
             .onReceive(clock) { _ in tickPhysics() }
             .onDisappear { persistPositions();simulationTicks=0 }
@@ -230,6 +223,20 @@ struct VocabGraphView: View {
             }
         }
     }
+    private var graphCanvasControls: some View {
+        VStack(spacing: DS.Space.xs) {
+            DSIconButton(systemImage: "scope", accessibility: "复位视图") {
+                withAnimation(reduceMotion ? nil : DS.Motion.spring) {
+                    pan = .zero; panStart = .zero; zoom = 1; zoomStart = 1
+                }
+            }
+            Text("\(Int(zoom * 100))%")
+                .font(DS.Fonts.monoCaption).contentTransition(.numericText())
+            DSIconButton(systemImage: "info.circle", accessibility: "数据来源") { sources = true }
+        }
+        .padding(4).dsFloatingPanel()
+    }
+
     private func graphNode(_ word:VocabStore.WordSummary,point:CGPoint,center:CGPoint)->some View {
         nodeLabel(word)
             .scaleEffect(zoom).position(screen(point,center:center))
@@ -244,10 +251,10 @@ struct VocabGraphView: View {
             Text(word.surface).font(DS.Fonts.caption2).lineLimit(1).foregroundStyle(DS.foreground1)
         }
         .frame(width:labelSizes[word.id]?.width ?? 60,height:34)
-        .contentShape(Capsule())
-        .background(DS.background2,in:Capsule())
-        .overlay(Capsule().stroke(DS.accent.opacity(0.35),lineWidth:0.8))
-        .shadow(color:DS.accent.opacity(dragging ? 0.2:0.08),radius:dragging ? 12:6,y:3)
+        .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sharp))
+        .background(DS.background2,in:RoundedRectangle(cornerRadius: DS.Radius.sharp))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.sharp).stroke(DS.accent.opacity(0.35),lineWidth:0.8))
+        .shadow(color:Color.black.opacity(dragging ? 0.15:0),radius:12,y:3)
     }
     private func nodeDrag(_ word:VocabStore.WordSummary)->some Gesture {
         DragGesture(minimumDistance:0,coordinateSpace:.named("vocab-graph"))

@@ -19,6 +19,7 @@ struct PencilPaletteView: View {
     var onDockDragEnded: (() -> Void)? = nil
     var onDockReset: (() -> Void)? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -26,11 +27,12 @@ struct PencilPaletteView: View {
         VStack(spacing: DS.Space.xs) {
             if expanded {
                 stylePanel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
             compactBar
         }
-        .animation(DS.Motion.spring, value: expanded)
+        .animation(reduceMotion ? nil : DS.Motion.spring, value: expanded)
+        .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: session.kind)
         .accessibilityElement(children: .contain)
     }
 
@@ -44,15 +46,11 @@ struct PencilPaletteView: View {
             if let dragChanged = onDockDragChanged {
                 dockGrip(onChanged: dragChanged)
             }
-            Group {
-                if sizeClass == .compact {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        barContent
-                    }
-                } else {
-                    barContent
-                }
+            ScrollView(.horizontal, showsIndicators: false) {
+                barContent
             }
+            .frame(maxWidth: 720)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .dsFloatingPanel(radius: DS.Radius.pill)
     }
@@ -86,7 +84,7 @@ struct PencilPaletteView: View {
 
             Button {
                 DiagLog.log("palette: expand -> \(!expanded)")
-                withAnimation(DS.Motion.spring) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : DS.Motion.spring) { expanded.toggle() }
             } label: {
                 HStack(spacing: 5) {
                     Circle()
@@ -130,16 +128,17 @@ struct PencilPaletteView: View {
             DiagLog.log("palette: tap tool=\(tool.rawValue) selected=\(selected)")
             if selected {
                 // Notability:点当前工具 = 展开/收起风格托盘;点其他工具 = 立即切换去写。
-                withAnimation(DS.Motion.spring) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : DS.Motion.spring) { expanded.toggle() }
             } else {
                 session.select(kind: tool)
-                withAnimation(DS.Motion.spring) { expanded = false }
+                withAnimation(reduceMotion ? nil : DS.Motion.spring) { expanded = false }
             }
         } label: {
             Image(systemName: tool.systemImage)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(selected ? DS.accent : DS.foreground2)
-                .frame(width: 38, height: 38)
+                .offset(y: selected && !reduceMotion ? -3 : 0)
+                .frame(width: 44, height: 44)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
                         .fill(selected ? DS.accentContainer : Color.clear)
@@ -168,7 +167,7 @@ struct PencilPaletteView: View {
             Image(systemName: "ruler")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(session.rulerActive ? DS.accent : DS.foreground2)
-                .frame(width: 38, height: 38)
+                .frame(width: 44, height: 44)
                 .background(
                     RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous)
                         .fill(session.rulerActive ? DS.accentContainer : Color.clear)
@@ -185,7 +184,7 @@ struct PencilPaletteView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(DS.foreground2)
-                .frame(width: 34, height: 38)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -394,6 +393,7 @@ struct PencilPaletteView: View {
                                 .font(DS.Fonts.micro)
                         }
                         .foregroundStyle(selected ? DS.accent : DS.foreground2)
+                .offset(y: selected && !reduceMotion ? -3 : 0)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
                         .background(

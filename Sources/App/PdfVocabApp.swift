@@ -16,6 +16,7 @@ struct PdfVocabApp: App {
             if let store {
                 LibraryView(store: store)
                     .tint(DS.accent)
+                    .buttonStyle(DSPressableButtonStyle())
                     .preferredColorScheme(nil)
             } else {
                 ContentUnavailableView(

@@ -7,6 +7,7 @@ import SwiftUI
 /// v0.16.2:去掉原来的「撤销」扇区 —— 弧盘贴着笔尖弹出,误触一次撤销会让整页笔迹回退
 /// (真机日志抓到 30 笔 → 10 笔);撤销仍保留在工具条按钮与双指轻点。
 struct PencilArcMenu: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var session: PencilToolSession
     /// 笔尖位置(阅读页坐标)
     let anchor: CGPoint
@@ -57,7 +58,7 @@ struct PencilArcMenu: View {
                     .position(position(for: entry.id, count: entries.count))
             }
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.92)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pencil 工具盘")
     }
@@ -111,7 +112,7 @@ struct PencilArcMenu: View {
             .frame(width: 44, height: 44)
             .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DSPressableButtonStyle())
         .accessibilityLabel(entry.ruler ? (session.rulerActive ? "关闭直尺" : "打开直尺") : (entry.tool?.label ?? "工具"))
     }
 
@@ -128,7 +129,7 @@ struct PencilArcMenu: View {
     }
 
     private func dismiss() {
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
             onDismiss()
         }
     }
