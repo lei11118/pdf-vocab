@@ -45,7 +45,7 @@ final class OCRStore: @unchecked Sendable {
     func markDone(docSha: String) {
         try? db.dbQueue.write { db in
             try db.execute(
-                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 1, ?)",
+                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 2, ?)",
                 arguments: [docSha, Date()]
             )
         }
@@ -55,7 +55,8 @@ final class OCRStore: @unchecked Sendable {
         let done = (try? db.dbQueue.read { db in
             try Int.fetchOne(db, sql: "SELECT done FROM ocr_status WHERE docSha = ?", arguments: [docSha])
         }) ?? nil
-        return done == 1
+        // Version 2 stores unrotated mediaBox coordinates; rebuild legacy boxes.
+        return done == 2
     }
 
     /// v0.23.2:整本 OCR 词文本(词频分析补全扫描版用;按页/词序输出)

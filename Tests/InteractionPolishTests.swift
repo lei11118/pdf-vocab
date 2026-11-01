@@ -130,4 +130,55 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertGreaterThan(sampled,5000);XCTAssertEqual(holes,0)
     }
 
+    func testOCRCanonicalRasterIgnoresPageRotationAndCrop() throws {
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 600)).pdfData { context in
+            context.beginPage()
+            UIColor.black.setFill()
+            UIBezierPath(rect: CGRect(x: 70, y: 100, width: 130, height: 40)).fill()
+        }
+        let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
+        let size = OCRService.renderingSize(for: page.bounds(for: .mediaBox))
+        let baseline = try XCTUnwrap(OCRService.recognitionImage(page: page, size: size)?.dataProvider?.data)
+        page.setBounds(CGRect(x: 40, y: 60, width: 320, height: 480), for: .cropBox)
+        for rotation in [0, 90, 180, 270] {
+            page.rotation = rotation
+            let image = try XCTUnwrap(OCRService.recognitionImage(page: page, size: size))
+            XCTAssertEqual(try XCTUnwrap(image.dataProvider?.data) as Data, baseline as Data)
+        }
+    }
+
+    func testOCRBoxesAlignWithRenderedText() throws {
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 600)).pdfData { context in
+            context.beginPage()
+            ("Alignment" as NSString).draw(at: CGPoint(x: 80, y: 120), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 32), .foregroundColor: UIColor.black])
+        }
+        let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
+        page.setBounds(CGRect(x: 40, y: 60, width: 320, height: 480), for: .cropBox)
+        let words = OCRService.recognize(page: page)
+        let word = try XCTUnwrap(words.first { $0.text.lowercased() == "alignment" })
+        let rect = OCRService.pageRect(from: word, pageBounds: page.bounds(for: .mediaBox))
+        XCTAssertEqual(rect.minX, 80, accuracy: 8)
+        XCTAssertEqual(rect.midY, 458, accuracy: 12)
+        XCTAssertGreaterThan(rect.width, 100)
+        XCTAssertEqual(OCRService.wordIndex(at: CGPoint(x: rect.midX, y: rect.midY), in: words,
+            pageBounds: page.bounds(for: .mediaBox)), words.firstIndex { $0.text == word.text })
+    }
+
+    func testOCRMediaOriginRoundTripAndLegacyCacheInvalidation() throws {
+        let bounds = CGRect(x: 31, y: -27, width: 400, height: 600)
+        let word = OCRWord(text: "test", x: 0.2, y: 0.3, w: 0.25, h: 0.05, line: 0)
+        let rect = OCRService.pageRect(from: word, pageBounds: bounds)
+        XCTAssertEqual(rect.minX, 111, accuracy: 0.001)
+        XCTAssertEqual(rect.minY, 363, accuracy: 0.001)
+        XCTAssertEqual(OCRService.wordIndex(at: CGPoint(x: rect.midX, y: rect.midY), in: [word], pageBounds: bounds), 0)
+        let db = try XCTUnwrap(AppDatabase.shared), sha = "ocr-test-" + UUID().uuidString
+        defer { try? db.dbQueue.write { try $0.execute(sql: "DELETE FROM ocr_status WHERE docSha = ?", arguments: [sha]) } }
+        try db.dbQueue.write { try $0.execute(sql: "INSERT INTO ocr_status (docSha, done, updatedAt) VALUES (?, 1, ?)", arguments: [sha, Date()]) }
+        let store = OCRStore(db: db)
+        XCTAssertFalse(store.isDone(docSha: sha))
+        store.markDone(docSha: sha)
+        XCTAssertTrue(store.isDone(docSha: sha))
+    }
+
 }

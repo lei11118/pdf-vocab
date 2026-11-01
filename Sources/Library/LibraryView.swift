@@ -4,6 +4,7 @@ import Combine
 /// 文档库:导入 PDF、查看列表、进入阅读。
 /// 导入方式:文件选择器(UIKit 文档选择器,asCopy 模式,绕开 iOS 26 fileImporter 问题)。
 struct LibraryView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let store: DocumentStore
 
     @State private var documents: [DocumentRecord] = []
@@ -53,6 +54,8 @@ struct LibraryView: View {
                 .scrollIndicators(.hidden)
 
                 bottomDock
+                    .contentTransition(.numericText(value: Double(vocabCount)))
+                    .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: vocabCount)
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: DocumentRecord.self) { doc in
@@ -87,14 +90,14 @@ struct LibraryView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(db: store.db)
             }
-            .fullScreenCover(isPresented: $showVocab) {
+            .dsLeadingCover(isPresented: $showVocab) { close in
                 VocabListView(store: VocabStore(db: store.db), onJump: { target in
                     showVocab = false
                     // 等生词本面板收起后再推入阅读页(避免转场打架)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         readerJump = target
                     }
-                }, docStore: store)
+                }, docStore: store, onClose: close)
             }
             .fullScreenCover(isPresented:$showGraph) {
                 let vocab=VocabStore(db:store.db)

@@ -20,6 +20,8 @@ struct VocabListView: View {
     var onJump: ((VocabJumpTarget) -> Void)? = nil
     /// v0.13.0:导出时若提供,可生成「页面截图」媒体
     var docStore: DocumentStore? = nil
+    var onClose: (() -> Void)? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Filter: Equatable {
         case all
@@ -119,6 +121,8 @@ struct VocabListView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .task { reload() }
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: filter)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selectedIds)
             .onChange(of: searchText) { _, _ in reload() }
             .sheet(item: $contextWord) { word in contextSheet(word) }
             .sheet(item: $detailWord) { word in
@@ -208,7 +212,7 @@ struct VocabListView: View {
                     background: DS.background2,
                     accessibility: "关闭生词本"
                 ) {
-                    dismiss()
+                    if let onClose { onClose() } else { dismiss() }
                 }
             }
         }
@@ -225,7 +229,7 @@ struct VocabListView: View {
         Menu {
             if listMode == .browse {
                 Button {
-                    withAnimation(DS.Motion.spring) { listMode = .select }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { listMode = .select }
                 } label: {
                     Label("选择单词", systemImage: "checkmark.circle")
                 }
@@ -234,13 +238,13 @@ struct VocabListView: View {
                         sortRaw = "manual"
                         reload()
                     }
-                    withAnimation(DS.Motion.spring) { listMode = .reorder }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { listMode = .reorder }
                 } label: {
                     Label("调整顺序", systemImage: "arrow.up.arrow.down")
                 }
             } else {
                 Button {
-                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { exitSpecialMode() }
                 } label: {
                     Label(listMode == .select ? "结束选择" : "结束排序", systemImage: "checkmark")
                 }
@@ -382,6 +386,7 @@ struct VocabListView: View {
     ) -> some View {
         Button(action: action) {
             DSChip(title: title, icon: icon, selected: active)
+                .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: active)
         }
         .buttonStyle(DSPressableButtonStyle())
         .accessibilityAddTraits(active ? .isSelected : AccessibilityTraits())
@@ -429,6 +434,7 @@ struct VocabListView: View {
             ) {
                 ForEach(words) { word in
                     card(word)
+                        .transition(.opacity.combined(with: .scale(scale: reduceMotion ? 1 : 0.97)))
                 }
             }
         }
@@ -492,7 +498,7 @@ struct VocabListView: View {
             targetId=word.id
             let ids=VocabReorderPolicy.moving(words.map(\.id),source:id,target:word.id)
             let lookup=Dictionary(uniqueKeysWithValues:words.map { ($0.id,$0) })
-            withAnimation(DS.Motion.spring) { words=ids.compactMap { lookup[$0] } }
+            withAnimation(reduceMotion ? nil : DS.Motion.spring) { words=ids.compactMap { lookup[$0] } }
         },leave:{ scheduleDragCancel() },finish:{ finishCardDrag(commit:canReorder) },update:{ point in
             if let frame=cardFrames[word.id] { updateEdgeScroll(y:frame.minY+point.y) }
         }))
@@ -830,11 +836,11 @@ struct VocabListView: View {
             switch listMode {
             case .browse:
                 dockGhost(title: "选择", icon: "checkmark.circle") {
-                    withAnimation(DS.Motion.spring) { listMode = .select }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { listMode = .select }
                 }
                 dockGhost(title: "排序", icon: "arrow.up.arrow.down") {
                     if sortRaw != "manual" { sortRaw = "manual" }
-                    withAnimation(DS.Motion.spring) { listMode = .reorder }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { listMode = .reorder }
                 }
                 dockAccent(title: "导出 Anki", icon: "square.and.arrow.up") {
                     showExport = true
@@ -847,7 +853,7 @@ struct VocabListView: View {
                 }
                 .disabled(selectedIds.isEmpty)
                 dockAccent(title: "完成", icon: "checkmark") {
-                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { exitSpecialMode() }
                 }
 
             case .reorder:
@@ -856,7 +862,7 @@ struct VocabListView: View {
                     .foregroundStyle(DS.foreground3)
                     .padding(.horizontal, DS.Space.xs)
                 dockAccent(title: "完成", icon: "checkmark") {
-                    withAnimation(DS.Motion.spring) { exitSpecialMode() }
+                    withAnimation(reduceMotion ? nil : DS.Motion.spring) { exitSpecialMode() }
                 }
             }
         }
@@ -972,6 +978,7 @@ private struct CardDropModifier: ViewModifier {
 // MARK: - 生词卡(与文档库的卡片同一套:白面 + 细边 + 轻阴影)
 
 private struct VocabCardView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let word: VocabStore.WordSummary
     let store: VocabStore
     let ordinal: Int?
@@ -1059,7 +1066,9 @@ private struct VocabCardView: View {
                 )
         )
         .shadow(color: .black.opacity(dragging ? 0.14 : 0.05), radius: dragging ? 18 : 12, x: 0, y: dragging ? 9 : 4)
-        .scaleEffect(dragging ? 1.02 : 1)
+        .scaleEffect(dragging && !reduceMotion ? 1.02 : 1)
+        .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: dragging)
+        .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selected)
         .contentShape(Rectangle())
         .task(id: word.id) { await loadPreview() }
     }

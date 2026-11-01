@@ -240,16 +240,18 @@ extension View {
 
 /// 静音按压:轻微缩放到 0.985,不改变内容颜色。
 struct DSPressableButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(DS.Motion.quickSpring, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
     }
 }
 
 /// 主 / 次按钮胶囊样式,替代系统 bordered 的冷硬边线。
 struct DSPillButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prominent = true
 
     func makeBody(configuration: Configuration) -> some View {
@@ -267,9 +269,9 @@ struct DSPillButtonStyle: ButtonStyle {
                 )
             )
             .foregroundStyle(prominent ? DS.onAccent : DS.foreground1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
             .opacity(configuration.isPressed ? 0.88 : 1)
-            .animation(DS.Motion.quickSpring, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
     }
 }
 
@@ -393,5 +395,37 @@ struct PaperBackground: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+// A full-page horizontal presentation, independent of system sheet animation.
+private struct DSLeadingCover<Destination: View>: ViewModifier {
+    @Binding var isPresented: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let destination: (@escaping () -> Void) -> Destination
+
+    func body(content: Content) -> some View {
+        content
+            .allowsHitTesting(!isPresented)
+            .accessibilityHidden(isPresented)
+            .overlay {
+                ZStack {
+                    if isPresented {
+                        destination { isPresented = false }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(DS.background1.ignoresSafeArea())
+                            .transition(reduceMotion ? .opacity : .move(edge: .leading))
+                            .zIndex(1)
+                    }
+                }
+                .animation(.easeInOut(duration: reduceMotion ? DS.Motion.fast : DS.Motion.slow), value: isPresented)
+            }
+    }
+}
+
+extension View {
+    func dsLeadingCover<Destination: View>(isPresented: Binding<Bool>,
+        @ViewBuilder content: @escaping (@escaping () -> Void) -> Destination) -> some View {
+        modifier(DSLeadingCover(isPresented: isPresented, destination: content))
     }
 }

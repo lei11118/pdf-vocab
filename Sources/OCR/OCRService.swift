@@ -63,17 +63,35 @@ enum OCRService {
         let density=min(2.5,min(4096/max(bounds.width,bounds.height),sqrt(6_000_000/(bounds.width*bounds.height))))
         return CGSize(width:floor(bounds.width*density),height:floor(bounds.height*density))
     }
+    // Render in canonical, unrotated PDF media coordinates. PDFKit thumbnails
+    // rotate the image; OCR boxes must instead share the exact page-space CTM.
+    static func recognitionImage(page: PDFPage, size: CGSize) -> CGImage? {
+        let bounds = page.bounds(for: .mediaBox)
+        guard let ref = page.pageRef, bounds.width > 1, bounds.height > 1,
+              size.width.isFinite, size.height.isFinite, size.width > 1, size.height > 1,
+              let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height),
+                  bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: size))
+        context.scaleBy(x: size.width / bounds.width, y: size.height / bounds.height)
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        context.drawPDFPage(ref)
+        return context.makeImage()
+    }
+
     static func recognize(page: PDFPage) -> [OCRWord] {
         let pageBounds = page.bounds(for: .mediaBox)
         guard pageBounds.width > 1, pageBounds.height > 1 else { return [] }
         let target=renderingSize(for:pageBounds)
         guard target.width>1,target.height>1 else { return [] }
-        guard let cgImage = page.thumbnail(of: target, for: .mediaBox).cgImage else { return [] }
+        guard let cgImage = recognitionImage(page: page, size: target) else { return [] }
 
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["en-US"]
+        request.automaticallyDetectsLanguage = true
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {

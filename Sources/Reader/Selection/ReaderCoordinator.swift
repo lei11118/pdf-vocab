@@ -376,7 +376,7 @@ final class ReaderCoordinator: NSObject {
 
         let pencilPress = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
         pencilPress.delegate = self
-        pencilPress.minimumPressDuration = 0
+        pencilPress.minimumPressDuration = 0.45
         pencilPress.allowableMovement = 14
         pencilPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         view.addGestureRecognizer(pencilPress)
@@ -955,8 +955,8 @@ final class ReaderCoordinator: NSObject {
 
     /// 页坐标点 → 当前页 OCR 词索引。
     private func ocrWordIndex(at pagePoint: CGPoint, on page: PDFPage) -> Int? {
-        guard let pdfView, let words = ocrWords(for: page), !words.isEmpty else { return nil }
-        let bounds = page.bounds(for: pdfView.displayBox)
+        guard let words = ocrWords(for: page), !words.isEmpty else { return nil }
+        let bounds = page.bounds(for: .mediaBox)
         return OCRService.wordIndex(at: pagePoint, in: words, pageBounds: bounds)
     }
 
@@ -978,7 +978,7 @@ final class ReaderCoordinator: NSObject {
         let text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
         guard !text.isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
-        let bounds = page.bounds(for: pdfView.displayBox)
+        let bounds = page.bounds(for: .mediaBox)
         var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
         var rejected = 0
         for wz in sub {
@@ -1126,14 +1126,6 @@ final class ReaderCoordinator: NSObject {
             }
         }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
-        if !markMode, let hit=pageHit(point) {
-            if let word=SelectionGeometry.initialWord(on:hit.page,at:hit.point) {
-                clearHover();applySelection(word,src:"tapWord");refreshHandles();presentMenu();return
-            }
-            if let index=ocrWordIndex(at:hit.point,on:hit.page) {
-                clearHover();applyOCRSelection(page:hit.page,range:index...index,src:"tapWord");presentMenu();return
-            }
-        }
         guard !rects.isEmpty || menu.isPresented else { return }
         DiagLog.log("tap: clear all (menu+selection together)")
         clearSelection()

@@ -215,11 +215,11 @@ struct ReaderView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(db: store.db)
             }
-            .fullScreenCover(isPresented: $showVocab) {
+            .dsLeadingCover(isPresented: $showVocab) { close in
                 VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                     showVocab = false
                     readerHandle.coordinator?.jumpToVocab(target: target)
-                }, docStore: store)
+                }, docStore: store, onClose: close)
             }
             .sheet(isPresented: $showOutline) {
                 if let resolvedURL {
