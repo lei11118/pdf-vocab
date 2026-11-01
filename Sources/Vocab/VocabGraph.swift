@@ -196,35 +196,7 @@ struct VocabGraphView: View {
                         }.allowsHitTesting(false)
                         ForEach(shown) { word in
                             if let point=positions[word.id] {
-                                Group {
-                                    HStack(spacing:6) {
-                                        Circle().fill(DS.accent).frame(width:5,height:5)
-                                        Text(word.surface).font(DS.Fonts.caption2).lineLimit(1).foregroundStyle(DS.foreground1)
-                                    }.frame(width:labelSizes[word.id]?.width ?? 60,height:34)
-                                        .contentShape(Capsule())
-                                        .background(DS.background2,in:Capsule()).overlay(Capsule().stroke(DS.accent.opacity(0.35),lineWidth:0.8))
-                                        .shadow(color:DS.accent.opacity(nodeStarts[word.id] == nil ? 0.08:0.2),radius:nodeStarts[word.id] == nil ? 6:12,y:3)
-                                }
-                                .scaleEffect(zoom).position(screen(point,center:center))
-                                .gesture(DragGesture(minimumDistance:0,coordinateSpace:.named("vocab-graph")).onChanged { value in
-                                    if nodeStarts[word.id]==nil { nodeStarts[word.id]=positions[word.id] }
-                                    if hypot(value.translation.width,value.translation.height)>=5 { movedNodes.insert(word.id) }
-                                    guard movedNodes.contains(word.id) else { return }
-                                    let start=nodeStarts[word.id]!
-                                    positions[word.id]=CGPoint(x:start.x+value.translation.width/zoom,y:start.y+value.translation.height/zoom)
-                                    VocabGraphPhysics.resolveCollisions(positions:&positions,velocities:&velocities,pinned:[word.id],sizes:nodeSizes)
-                                    simulationTicks=120
-                                }.onEnded { value in
-                                    let moved=movedNodes.remove(word.id) != nil
-                                    nodeStarts[word.id]=nil
-                                    if moved {
-                                        velocities[word.id]=CGVector(dx:(value.predictedEndTranslation.width-value.translation.width)/zoom,dy:(value.predictedEndTranslation.height-value.translation.height)/zoom)
-                                        simulationTicks=120
-                                        persistPositions()
-                                    } else { detail=word }
-                                })
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityAction { detail=word }
+                                graphNode(word,point:point,center:center)
                             }
                         }
                         if !loading && data.edges.isEmpty {
@@ -257,6 +229,45 @@ struct VocabGraphView: View {
                 }
             }
         }
+    }
+    private func graphNode(_ word:VocabStore.WordSummary,point:CGPoint,center:CGPoint)->some View {
+        nodeLabel(word)
+            .scaleEffect(zoom).position(screen(point,center:center))
+            .gesture(nodeDrag(word))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { detail=word }
+    }
+    private func nodeLabel(_ word:VocabStore.WordSummary)->some View {
+        let dragging=nodeStarts[word.id] != nil
+        return HStack(spacing:6) {
+            Circle().fill(DS.accent).frame(width:5,height:5)
+            Text(word.surface).font(DS.Fonts.caption2).lineLimit(1).foregroundStyle(DS.foreground1)
+        }
+        .frame(width:labelSizes[word.id]?.width ?? 60,height:34)
+        .contentShape(Capsule())
+        .background(DS.background2,in:Capsule())
+        .overlay(Capsule().stroke(DS.accent.opacity(0.35),lineWidth:0.8))
+        .shadow(color:DS.accent.opacity(dragging ? 0.2:0.08),radius:dragging ? 12:6,y:3)
+    }
+    private func nodeDrag(_ word:VocabStore.WordSummary)->some Gesture {
+        DragGesture(minimumDistance:0,coordinateSpace:.named("vocab-graph"))
+            .onChanged { value in
+                if nodeStarts[word.id]==nil { nodeStarts[word.id]=positions[word.id] }
+                if hypot(value.translation.width,value.translation.height)>=5 { movedNodes.insert(word.id) }
+                guard movedNodes.contains(word.id),let start=nodeStarts[word.id] else { return }
+                positions[word.id]=CGPoint(x:start.x+value.translation.width/zoom,y:start.y+value.translation.height/zoom)
+                VocabGraphPhysics.resolveCollisions(positions:&positions,velocities:&velocities,pinned:[word.id],sizes:nodeSizes)
+                simulationTicks=120
+            }
+            .onEnded { value in
+                let moved=movedNodes.remove(word.id) != nil
+                nodeStarts[word.id]=nil
+                if moved {
+                    velocities[word.id]=CGVector(dx:(value.predictedEndTranslation.width-value.translation.width)/zoom,dy:(value.predictedEndTranslation.height-value.translation.height)/zoom)
+                    simulationTicks=120
+                    persistPositions()
+                } else { detail=word }
+            }
     }
     private func nodeSize(_ word:VocabStore.WordSummary)->CGSize {
         let font=UIFont.systemFont(ofSize:11,weight:.medium)
