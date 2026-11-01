@@ -808,6 +808,9 @@ final class ReaderCoordinator: NSObject {
                 holdMenuWork = nil
                 menu.dismiss()
             }
+            // Preserve the initially recognized whole word through touch jitter.
+            // Character-granular adjustment starts only after a deliberate drag.
+            guard d.didMove else { return }
             let step: CGFloat = appliedCharCount > 800 ? 8 : 3
             let dx = hit.point.x - d.lastPoint.x
             let dy = hit.point.y - d.lastPoint.y
@@ -2307,6 +2310,7 @@ final class ReaderCoordinator: NSObject {
     /// ② 若解析异常(损坏文档上 point-pair 可能返回非法选区)→ 用词边界点重试;
     /// ③ 全部失败返回 nil(保持上一个好选区,不清空)。
     private func selectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
+        if dragState.kind == .word && !dragState.didMove { return dragState.anchorWord }
         let page = dragState.page
         let anchorRect = dragState.anchorWord.bounds(for: page)
         guard SelectionGeometry.isValid(anchorRect) else { return nil }
