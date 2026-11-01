@@ -62,11 +62,12 @@ final class DocumentCanvasVocabTests: XCTestCase {
         XCTAssertEqual(ruler.rulerPosition,CGPoint(x:10000,y:200))
         ruler.resetInHost();XCTAssertEqual(ruler.rulerPosition,CGPoint(x:300,y:200))
     }
-    func testLaserTrailIsBoundedAndClears() {
+    func testLaserPreservesWholeVisibleTrailAndClears() {
         let laser=InkLaserOverlay(frame:.zero);laser.begin(at:.zero)
         for i in 0..<1000 { laser.append(CGPoint(x:i,y:i)) }
-        XCTAssertEqual(laser.pointCount,192)
-        laser.finish();laser.begin(at:.zero);XCTAssertEqual(laser.pointCount,1)
+        XCTAssertEqual(laser.pointCount,1001)
+        laser.finish();laser.begin(at:.zero);XCTAssertEqual(laser.pointCount,1002)
+        XCTAssertEqual(laser.strokeCount,2)
         laser.clear();XCTAssertEqual(laser.pointCount,0)
     }
     func testGridReorderingBothDirections() {
