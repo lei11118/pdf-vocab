@@ -722,6 +722,7 @@ final class ReaderCoordinator: NSObject {
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
         guard let pdfView else { return }
         let kind = Self.kind(of: gesture)
+        guard !(markMode && kind == "pencil") else { return }
         let viewPoint = gesture.location(in: pdfView)
 
         switch gesture.state {
@@ -974,7 +975,7 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, let words = ocrWords(for: page), !words.isEmpty,
               range.lowerBound >= 0, range.upperBound < words.count else { return }
         let sub = Array(words[range])
-        let text = sub.map { $0.text }.joined(separator: " ")
+        let text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
         guard !text.isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         let bounds = page.bounds(for: pdfView.displayBox)
@@ -997,7 +998,7 @@ final class ReaderCoordinator: NSObject {
         applyHighlightDesired(desired, rejected: rejected, t0: CFAbsoluteTimeGetCurrent())
         refreshHandles()
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
-        let wordCount = WordPicker.countWords(in: text)
+        let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
         onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm))
         if wordCount <= 1, !primaryTerm.isEmpty {
@@ -1181,7 +1182,8 @@ final class ReaderCoordinator: NSObject {
     // MARK: - 选区应用 / 高亮
 
     private func applySelection(_ selection: PDFSelection, src: String) {
-        guard let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let text = SelectionGeometry.lookupText(for:selection)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         ocrSelectionActive = false
         ocrContextOverride = nil
@@ -1199,7 +1201,7 @@ final class ReaderCoordinator: NSObject {
         updateHighlight(for: selection)
         refreshHandles()
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
-        let wordCount = WordPicker.countWords(in: text)
+        let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
         onSelectionInfo(SelectionInfo(
             text: display,
@@ -1516,6 +1518,7 @@ final class ReaderCoordinator: NSObject {
         markMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
         // 手势层级,一次性设置会被顶掉;SwiftUI 每次 updateUIView 都走这里,天然成为重臂时机。
+        pencilPressRef?.isEnabled = !on
         guard changed else {
             if on { setScrollPanPencilExcluded(true) }
             return
@@ -2460,6 +2463,9 @@ final class ReaderCoordinator: NSObject {
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // A drawing Pencil (including laser) cannot enter any selection path.
+        if markMode && touch.type == .pencil { return false }
+        if markMode && toolSession?.kind == .laser { return false }
         if gestureRecognizer.view is SelectionHandleView { return true }
         if touch.view is InkEditingOverlay { return false }
         if let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }

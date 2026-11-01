@@ -422,37 +422,43 @@ final class InkMetalCanvasView: MTKView {
             verts.append(Vertex(pos: b1, d: fb, hw: hb, clip: clipV, color: color))
         }
 
-        // ② 圆头与圆角关节(只在该补的地方补:两端 + 转角明显的点)
+        // Every joint needs coverage: even tiny turns open visible wedges.
         for i in 0..<pts.count {
             if stroke.kind == .marker, i == 0 || i == pts.count - 1,
                hypot(pts.last!.x-pts[0].x,pts.last!.y-pts[0].y) > 0.001 { continue }
-            guard visibleClip.insetBy(dx:-halves[i],dy:-halves[i]).contains(pts[i].cg),shouldRound(at: i, in: pts) else { continue }
-            appendDisc(center: pts[i].cg, radius: halves[i], clip: clipV, color: color, into: &verts)
+            guard visibleClip.insetBy(dx:-halves[i],dy:-halves[i]).contains(pts[i].cg) else { continue }
+            if i==0 || i==pts.count-1 {
+                appendDisc(center:pts[i].cg,radius:halves[i],clip:clipV,color:color,into:&verts)
+            } else {
+                let a=pts[i-1].cg,b=pts[i].cg,c=pts[i+1].cg
+                let ux=b.x-a.x,uy=b.y-a.y,vx=c.x-b.x,vy=c.y-b.y
+                if hypot(ux,uy)<0.001 || hypot(vx,vy)<0.001 {
+                    appendDisc(center:b,radius:halves[i],clip:clipV,color:color,into:&verts)
+                } else {
+                    let turn=atan2(ux*vy-uy*vx,ux*vx+uy*vy)
+                    if abs(turn)>0.000001 {
+                        // Fill only the outside circular wedge, not a whole disc
+                        // at each sample. This keeps long strokes bounded in VRAM.
+                        let sign:CGFloat=turn>0 ? -1:1
+                        let start=atan2(ux*sign,-uy*sign)
+                        appendDisc(center:b,radius:halves[i],clip:clipV,color:color,into:&verts,start:start,sweep:turn)
+                    }
+                }
+            }
         }
     }
 
-    /// 端点必补(圆头);中间点只在转角 > 20° 时补圆盘,避免退化小方块与无谓顶点
-    private func shouldRound(at index: Int, in pts: [InkPoint]) -> Bool {
-        if index == 0 || index == pts.count - 1 { return true }
-        let a = pts[index - 1].cg, b = pts[index].cg, c = pts[index + 1].cg
-        let d1 = CGPoint(x: b.x - a.x, y: b.y - a.y)
-        let d2 = CGPoint(x: c.x - b.x, y: c.y - b.y)
-        let l1 = hypot(d1.x, d1.y), l2 = hypot(d2.x, d2.y)
-        guard l1 > 0.001, l2 > 0.001 else { return true }
-        let dot = (d1.x * d2.x + d1.y * d2.y) / (l1 * l2)
-        return dot < 0.94   // cos(20°) ≈ 0.94
-    }
-
     private func appendDisc(center: CGPoint, radius: CGFloat, clip: SIMD4<Float>,
-                            color: SIMD4<Float>, into verts: inout [Vertex]) {
+                            color: SIMD4<Float>, into verts: inout [Vertex],start:CGFloat=0,sweep:CGFloat=2 * .pi) {
         let r = Float(max(0.05, radius))
         let c = SIMD2<Float>(Float(center.x), Float(center.y))
         let density=max(0.05,min(drawableSize.width/max(1,bounds.width),drawableSize.height/max(1,bounds.height)))
         let outer=r+Float(1/density)
-        let segments=max(24,min(128,Int(ceil(Double(outer)*Double(density)*2))))
+        let fullSegments=max(24,min(256,Int(ceil(Double.pi * sqrt(Double(outer)*Double(density)/0.2)))))
+        let segments=max(1,Int(ceil(Double(fullSegments)*abs(Double(sweep))/(2 * Double.pi))))
         for s in 0..<segments {
-            let t0 = Float(s) / Float(segments) * 2 * .pi
-            let t1 = Float(s + 1) / Float(segments) * 2 * .pi
+            let t0 = Float(start) + Float(s) / Float(segments) * Float(sweep)
+            let t1 = Float(start) + Float(s + 1) / Float(segments) * Float(sweep)
             let p0 = SIMD2<Float>(c.x + outer * cos(t0), c.y + outer * sin(t0))
             let p1 = SIMD2<Float>(c.x + outer * cos(t1), c.y + outer * sin(t1))
             verts.append(Vertex(pos: c, d: 0, hw: r, clip: clip, color: color))

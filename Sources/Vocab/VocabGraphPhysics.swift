@@ -4,7 +4,7 @@ import Foundation
 /// Bounded spring dynamics in graph coordinates; camera scale never affects mass.
 enum VocabGraphPhysics {
     @discardableResult
-    static func step(positions:inout [Int64:CGPoint],velocities:inout [Int64:CGVector],edges:[VocabGraphEdge],pinned:Set<Int64>,dt:CGFloat=1/30)->CGFloat {
+    static func step(positions:inout [Int64:CGPoint],velocities:inout [Int64:CGVector],edges:[VocabGraphEdge],pinned:Set<Int64>,sizes:[Int64:CGSize]=[:],dt:CGFloat=1/30)->CGFloat {
         let ids=positions.keys.sorted(),h=max(0.001,min(1/30,dt))
         var forces=Dictionary(uniqueKeysWithValues:ids.map { ($0,CGVector.zero) })
         for i in ids.indices {
@@ -39,6 +39,48 @@ enum VocabGraphPhysics {
             velocities[id]=v;positions[id]=CGPoint(x:max(-10000,min(10000,p.x+v.dx*h)),y:max(-10000,min(10000,p.y+v.dy*h)))
             energy=max(energy,hypot(v.dx,v.dy))
         }
+        resolveCollisions(positions:&positions,velocities:&velocities,pinned:pinned,sizes:sizes)
         return energy
     }
+    /// Hard separation of the full label footprint, after force integration.
+    /// A pinned node is placed first; later nodes never displace it.
+    static func resolveCollisions(positions:inout [Int64:CGPoint],velocities:inout [Int64:CGVector],pinned:Set<Int64>,sizes:[Int64:CGSize]=[:]) {
+        let ids=positions.keys.sorted { a,b in
+            if pinned.contains(a) != pinned.contains(b) { return pinned.contains(a) }
+            return a<b
+        }
+        var occupied:[CGRect]=[]
+        for id in ids {
+            guard var p=positions[id],p.x.isFinite,p.y.isFinite else { continue }
+            let size=sizes[id] ?? CGSize(width:85,height:40)
+            func box(_ q:CGPoint)->CGRect {
+                CGRect(x:q.x-size.width/2-4,y:q.y-size.height/2-4,width:size.width+8,height:size.height+8)
+            }
+            if !pinned.contains(id) {
+                let original=p
+                // Candidate boundary positions give a finite, deterministic free
+                // position even when many saved nodes start at exactly one point.
+                if occupied.contains(where:{$0.intersects(box(p))}) {
+                    var candidates:[CGPoint]=[]
+                    let hw=size.width/2+4,hh=size.height/2+4
+                    for r in occupied {
+                        candidates.append(CGPoint(x:r.maxX+hw+0.01,y:original.y))
+                        candidates.append(CGPoint(x:r.minX-hw-0.01,y:original.y))
+                        candidates.append(CGPoint(x:original.x,y:r.maxY+hh+0.01))
+                        candidates.append(CGPoint(x:original.x,y:r.minY-hh-0.01))
+                    }
+                    candidates.sort { hypot($0.x-original.x,$0.y-original.y)<hypot($1.x-original.x,$1.y-original.y) }
+                    if let free=candidates.first(where:{ q in !occupied.contains(where:{$0.intersects(box(q))}) }) { p=free }
+                    positions[id]=p
+                    // Remove velocity into a contact, preserving tangential glide.
+                    var v=velocities[id] ?? .zero
+                    if abs(p.x-original.x)>0.001 { v.dx=0 }
+                    if abs(p.y-original.y)>0.001 { v.dy=0 }
+                    velocities[id]=v
+                }
+            }
+            occupied.append(box(p))
+        }
+    }
+
 }

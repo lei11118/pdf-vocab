@@ -71,4 +71,63 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertEqual(alpha(128,128),255)
         XCTAssertEqual(alpha(80,128),0)
     }
+    func testVisualWordRepairsSplitGlyphsButPreservesRealWordSpace() {
+        let text="h e l l o world" as NSString
+        let xs:[CGFloat]=[0,8,8,16,16,24,24,32,32,40,48,56,64,72,80]
+        func box(_ i:Int)->CGRect { CGRect(x:xs[i],y:0,width:8,height:20) }
+        XCTAssertEqual(SelectionGeometry.visualWordRange(text:text,at:4,bounds:box),NSRange(location:0,length:9))
+        XCTAssertEqual(SelectionGeometry.visualWordRange(text:text,at:12,bounds:box),NSRange(location:10,length:5))
+        XCTAssertNil(SelectionGeometry.visualWordRange(text:text,at:9,bounds:box))
+        XCTAssertFalse(SelectionGeometry.joinsWord(CGRect(x:0,y:0,width:8,height:20),CGRect(x:8,y:30,width:8,height:20),acrossSpace:true))
+    }
+
+    func testFullGraphLabelsCannotOverlapEvenWhenLoadedAtOnePoint() {
+        let ids=(1...60).map { Int64($0) }
+        var points=Dictionary(uniqueKeysWithValues:ids.map { ($0,CGPoint.zero) })
+        let sizes=Dictionary(uniqueKeysWithValues:ids.map { ($0,CGSize(width:CGFloat(60+Int($0%5)*30),height:34)) })
+        var velocities:[Int64:CGVector]=[:]
+        VocabGraphPhysics.resolveCollisions(positions:&points,velocities:&velocities,pinned:[30],sizes:sizes)
+        XCTAssertEqual(points[30],.zero)
+        func check() {
+            for i in ids { for j in ids where j>i {
+                let a=points[i]!,b=points[j]!,sa=sizes[i]!,sb=sizes[j]!
+                XCTAssertTrue(abs(a.x-b.x)>=(sa.width+sb.width)/2+7.9 || abs(a.y-b.y)>=(sa.height+sb.height)/2+7.9)
+            } }
+        }
+        check()
+        let edges=ids.dropFirst().map { VocabGraphEdge(id:"\($0)",a:1,b:$0,morphology:false,evidence:"") }
+        for _ in 0..<30 {
+            VocabGraphPhysics.step(positions:&points,velocities:&velocities,edges:edges,pinned:[30],sizes:sizes)
+            check()
+        }
+    }
+
+    func testCurvedWideInkHasNoRadialCracks() throws {
+        guard let device=MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal unavailable") }
+        let canvas=InkMetalCanvasView();canvas.frame=CGRect(x:0,y:0,width:128,height:128);canvas.drawableSize=CGSize(width:512,height:512)
+        let points=(0...80).map { i in
+            let t=Double(i)/80*Double.pi*1.7
+            return InkPoint(x:64+32*cos(t),y:64+32*sin(t),width:24)
+        }
+        canvas.renderItems=[InkRenderItem(stroke:InkStroke(kind:.pen,r:0,g:0,b:0,a:1,points:points),clip:canvas.bounds)]
+        let descriptor=MTLTextureDescriptor.texture2DDescriptor(pixelFormat:.bgra8Unorm,width:512,height:512,mipmapped:false)
+        descriptor.storageMode = .shared;descriptor.usage=[.renderTarget,.shaderRead]
+        let texture=try XCTUnwrap(device.makeTexture(descriptor:descriptor)),command=try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+        XCTAssertTrue(canvas.encodeFrame(to:texture,commandBuffer:command));command.commit();command.waitUntilCompleted()
+        XCTAssertNil(command.error)
+        var bytes=[UInt8](repeating:0,count:512*512*4)
+        bytes.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!,bytesPerRow:512*4,from:MTLRegionMake2D(0,0,512,512),mipmapLevel:0) }
+        var holes=0,sampled=0
+        for i in 1..<800 {
+            let angle=Double(i)/800*Double.pi*1.7
+            for radius in stride(from:40.0,through:43.0,by:0.5) {
+                let x=Int((64+radius*cos(angle))*4),y=Int((64+radius*sin(angle))*4)
+                let offset=(y*512+x)*4+3
+                sampled+=1
+                if bytes[offset]<240 { holes+=1 }
+            }
+        }
+        XCTAssertGreaterThan(sampled,5000);XCTAssertEqual(holes,0)
+    }
+
 }

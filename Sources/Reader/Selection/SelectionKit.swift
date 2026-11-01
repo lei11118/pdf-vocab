@@ -162,13 +162,83 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 
 enum SelectionGeometry {
 
-    /// Initial picking must never silently expand to a whole line.
+    /// Reconstruct a whole visual word instead of trusting PDF text-run splits.
     static func initialWord(on page: PDFPage, at point: CGPoint) -> PDFSelection? {
-        guard let word=page.selectionForWord(at:point),
-              isSane(word,maxPages:1,maxChars:100),
-              isSingleWordText(word.string ?? ""),
-              word.bounds(for:page).insetBy(dx:-3,dy:-3).contains(point) else { return nil }
+        guard let text=page.string else { return nil }
+        let ns=text as NSString,index=page.characterIndex(at:point)
+        guard index != NSNotFound,index>=0,index<ns.length,
+              page.characterBounds(at:index).insetBy(dx:-2,dy:-2).contains(point),
+              let range=visualWordRange(text:ns,at:index,bounds:{page.characterBounds(at:$0)}),
+              let word=page.selection(for:range),isSane(word,maxPages:1,maxChars:100),
+              isSingleWordText(lookupText(for:word)) else { return nil }
         return word
+    }
+
+    static func joinsWord(_ left:CGRect,_ right:CGRect,acrossSpace:Bool)->Bool {
+        guard isValid(left),isValid(right) else { return false }
+        let height=min(left.height,right.height)
+        let gap=right.minX-left.maxX
+        return abs(left.midY-right.midY)<height*0.35 && gap>=(-height*0.4)
+            && gap<height*(acrossSpace ? 0.18:0.45)
+    }
+
+    static func visualWordRange(text:NSString,at index:Int,bounds:(Int)->CGRect)->NSRange? {
+        func letter(_ i:Int)->Bool {
+            i>=0 && i<text.length && (WordPicker.isWordChar(text.character(at:i)) || text.character(at:i)==45)
+        }
+        func space(_ i:Int)->Bool {
+            guard i>=0,i<text.length,let scalar=Unicode.Scalar(text.character(at:i)) else { return false }
+            return CharacterSet.whitespaces.contains(scalar)
+        }
+        guard index>=0,index<text.length else { return nil }
+        if WordPicker.isCJK(text.character(at:index)) { return NSRange(location:index,length:1) }
+        guard letter(index) else { return nil }
+        var first=index,last=index
+        while first>0 && index-first<100 {
+            var previous=first-1
+            while space(previous) { previous-=1 }
+            guard letter(previous),joinsWord(bounds(previous),bounds(first),acrossSpace:previous<first-1) else { break }
+            first=previous
+        }
+        while last+1<text.length && last-index<100 {
+            var next=last+1
+            while space(next) { next+=1 }
+            guard letter(next),joinsWord(bounds(last),bounds(next),acrossSpace:next>last+1) else { break }
+            last=next
+        }
+        return NSRange(location:first,length:last-first+1)
+    }
+
+    /// Remove only artificial in-word spacing; real phrase/line boundaries stay.
+    static func lookupText(for selection:PDFSelection)->String {
+        var pieces:[String]=[]
+        for page in selection.pages {
+            guard let value=page.string else { continue }
+            let ns=value as NSString
+            var previousBounds:CGRect?
+            for n in 0..<selection.numberOfTextRanges(on:page) {
+                let range=selection.range(at:n,on:page)
+                guard range.location != NSNotFound,range.location>=0,NSMaxRange(range)<=ns.length else { continue }
+                var units:[unichar]=[],i=range.location
+                while i<NSMaxRange(range) {
+                    let ch=ns.character(at:i)
+                    if let scalar=Unicode.Scalar(ch),CharacterSet.whitespaces.contains(scalar) {
+                        let start=i
+                        while i<NSMaxRange(range),let next=Unicode.Scalar(ns.character(at:i)),CharacterSet.whitespaces.contains(next) { i+=1 }
+                        if start>range.location,i<NSMaxRange(range),
+                           joinsWord(page.characterBounds(at:start-1),page.characterBounds(at:i),acrossSpace:true) { continue }
+                        units.append(32)
+                    } else { units.append(ch);i+=1 }
+                }
+                let text=String(utf16CodeUnits:units,count:units.count)
+                if let previous=previousBounds,!pieces.isEmpty,
+                   joinsWord(previous,page.characterBounds(at:range.location),acrossSpace:true) {
+                    pieces[pieces.count-1]+=text
+                } else { pieces.append(text) }
+                if range.length>0 { previousBounds=page.characterBounds(at:NSMaxRange(range)-1) }
+            }
+        }
+        return pieces.isEmpty ? (selection.string ?? "") : pieces.joined(separator:" ")
     }
     static func isSingleWordText(_ value:String)->Bool {
         let text=value.trimmingCharacters(in:.whitespacesAndNewlines).trimmingCharacters(in:.punctuationCharacters)
