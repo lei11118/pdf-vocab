@@ -179,21 +179,22 @@ struct LibraryView: View {
     }
 
     private func deskAction(title: String, detail: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let primary = title == "词汇收藏"
+        return Button(action: action) {
             VStack(alignment: .leading, spacing: DS.Space.l) {
                 HStack {
-                    Image(systemName: icon).font(.largeTitle.weight(.bold)).foregroundStyle(DS.accent)
+                    Image(systemName: icon).font(.largeTitle.weight(.bold)).foregroundStyle(primary ? DS.onAccent : DS.accent)
                     Spacer()
-                    Image(systemName: "arrow.up.right").foregroundStyle(DS.foreground3)
+                    Image(systemName: "arrow.up.right").foregroundStyle(primary ? DS.onAccent : DS.foreground2)
                 }
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text(title).font(.title.weight(.black)).foregroundStyle(DS.foreground1)
-                    Text(detail).font(.subheadline).foregroundStyle(DS.foreground2)
+                    Text(title).font(.title.weight(.black)).foregroundStyle(primary ? DS.onAccent : DS.foreground1)
+                    Text(detail).font(.subheadline).foregroundStyle(primary ? DS.onAccent : DS.foreground2)
                 }
             }
             .padding(DS.Space.l)
             .frame(minWidth: 180, maxWidth: .infinity, minHeight: title == "词汇收藏" ? 190 : 150, alignment: .leading)
-            .background(title == "词汇收藏" ? DS.background2 : DS.signal.opacity(0.25))
+            .background(primary ? DS.accent : DS.signal.opacity(0.25))
             .overlay(Rectangle().strokeBorder(DS.foreground1, lineWidth: 1.5))
         }
         .buttonStyle(DSPressableButtonStyle())

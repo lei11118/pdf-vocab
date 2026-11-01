@@ -59,7 +59,7 @@ struct PencilPaletteView: View {
         Image(systemName: "line.3.horizontal")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(DS.foreground4)
-            .frame(width: 26, height: 38)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
             .padding(.leading, DS.Space.x3s)
             .gesture(
@@ -94,7 +94,7 @@ struct PencilPaletteView: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(DS.foreground3)
                 }
-                .frame(width: 48, height: 38)
+                .frame(width: 48, height: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(DSPressableButtonStyle())

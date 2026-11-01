@@ -234,18 +234,20 @@ extension View {
 
 /// 静音按压:轻微缩放到 0.985,不改变内容颜色。
 struct DSPressableButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
             .offset(y: configuration.isPressed && !reduceMotion ? 2 : 0)
-            .opacity(configuration.isPressed ? 0.86 : 1)
+            .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.86 : 1)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
     }
 }
 
 /// 主 / 次按钮胶囊样式,替代系统 bordered 的冷硬边线。
 struct DSPillButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prominent = true
 
@@ -265,7 +267,7 @@ struct DSPillButtonStyle: ButtonStyle {
             )
             .foregroundStyle(prominent ? DS.onAccent : DS.foreground1)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.88 : 1)
+            .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.88 : 1)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: configuration.isPressed)
     }
 }
@@ -320,7 +322,7 @@ struct DSSearchField: View {
                 .font(DS.Fonts.subhead)
                 .foregroundStyle(focused ? DS.accent : DS.foreground3)
                 .accessibilityHidden(true)
-            TextField(placeholder, text: $text)
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(DS.foreground3))
                 .font(DS.Fonts.body)
                 .foregroundStyle(DS.foreground1)
                 .textInputAutocapitalization(.never)

@@ -136,7 +136,9 @@ final class InteractionPolishTests:XCTestCase {
             ("graph-ipad", CGSize(width: 834, height: 1194), AnyView(VocabGraphView(store: store, words: store.listWords()))),
             ("graph-dark-split", CGSize(width: 480, height: 900), AnyView(VocabGraphView(store: store, words: store.listWords()).preferredColorScheme(.dark))),
             ("reader-ipad", CGSize(width: 834, height: 1194), AnyView(ReaderView(doc: record, store: docs))),
-            ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs)))
+            ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs))),
+            ("palette-ipad", CGSize(width: 834, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),
+            ("palette-split", CGSize(width: 480, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1)))
         ]
         for (name, size, content) in cases {
             UserDefaults.standard.set(name == "vocab-compact", forKey: "vocabCompactLayout")

@@ -275,8 +275,8 @@ struct VocabListView: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(DS.foreground2)
                 .frame(width: 44, height: 44)
-                .background(DS.background2, in: Circle())
-                .overlay(Circle().strokeBorder(DS.foreground1.opacity(0.07), lineWidth: 0.8))
+                .background(DS.background2, in: Rectangle())
+                .overlay(Rectangle().strokeBorder(DS.foreground1.opacity(0.5), lineWidth: 1))
         }
         .accessibilityLabel("更多")
     }
