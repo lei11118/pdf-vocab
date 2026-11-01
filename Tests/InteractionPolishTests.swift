@@ -116,18 +116,32 @@ final class InteractionPolishTests:XCTestCase {
             ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark)))
         ]
         for (name, size, content) in cases {
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
             let host = UIHostingController(rootView: content)
-            let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: size)
             window.rootViewController = host
-            window.isHidden = false
-            defer { window.isHidden = true; window.rootViewController = nil }
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true; window.rootViewController = nil
+                previousKeyWindow?.makeKey()
+            }
             host.view.frame = window.bounds
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
-            try await Task.sleep(for: .milliseconds(300))
+            try await Task.sleep(for: .milliseconds(500))
+            var drawn = false
             let image = UIGraphicsImageRenderer(size: size).image { _ in
-                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                drawn = host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
             }
+            XCTAssertTrue(drawn, "\(name): hierarchy was not rendered")
+            let cg = try XCTUnwrap(image.cgImage)
+            let pixels = try XCTUnwrap(cg.dataProvider?.data) as Data
+            let strideBytes = cg.bitsPerPixel / 8
+            let samples = stride(from: 0, to: pixels.count, by: strideBytes).map { pixels[$0] }
+            let spread = Int(samples.max() ?? 0) - Int(samples.min() ?? 0)
+            XCTAssertGreaterThan(spread, 20, "\(name): screenshot is blank")
             let attachment = XCTAttachment(image: image)
             attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
             try XCTUnwrap(image.pngData()).write(to: folder.appendingPathComponent(name + ".png"))
