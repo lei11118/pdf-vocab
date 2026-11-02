@@ -38,7 +38,7 @@ final class VocabPDFView: PDFView {
         linkOutline.fillColor = UIColor.clear.cgColor
         linkOutline.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8).cgColor
         linkOutline.lineWidth = 1
-        layer.addSublayer(linkOutline)
+        if layer.sublayers?.last !== linkOutline { layer.addSublayer(linkOutline) }
         CATransaction.commit()
     }
 

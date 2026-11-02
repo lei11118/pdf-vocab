@@ -1248,7 +1248,7 @@ final class ReaderCoordinator: NSObject {
             let lineSelections = selection.selectionsByLine()
                 .prefix(Self.maxHighlightLines)
                 .filter { $0.pages.first === page }
-            var lineRects = lineSelections.map { $0.bounds(for: page) }
+            var lineRects = lineSelections.map { SelectionGeometry.placedBounds(of:$0,on:page) }
             if lineRects.isEmpty { lineRects = [selection.bounds(for: page)] }
             for rect in lineRects {
                 guard SelectionGeometry.isValid(rect) else { rejected += 1; continue }
