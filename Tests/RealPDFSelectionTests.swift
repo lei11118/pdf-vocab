@@ -1,9 +1,10 @@
 import XCTest
 import PDFKit
+import UIKit
 @testable import PdfVocab
 
 @MainActor
-final class RealPDFSelectionTests: XCTestCase {
+final class GlyphSelectionTests: XCTestCase {
     func testOriginalOpenStaxWordHits() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
         let document = try XCTUnwrap(PDFDocument(url: url))
@@ -45,5 +46,92 @@ final class RealPDFSelectionTests: XCTestCase {
             }
             XCTAssertEqual(actual, expected, "page \(index) at \(point)")
         }
+    }
+
+    func testEveryVisibleCharacterHasAnAlignedSelection() throws {
+        struct Hit: Decodable { let page: Int; let text: String; let point: [Double] }
+        let bundle = Bundle(for:Self.self)
+        let document = try XCTUnwrap(PDFDocument(url:try XCTUnwrap(bundle.url(forResource:"OpenStax-selection",withExtension:"pdf"))))
+        let data = try Data(contentsOf:XCTUnwrap(bundle.url(forResource:"OpenStax-character-hits",withExtension:"json")))
+        let hits = try JSONDecoder().decode([Hit].self,from:data)
+        var failures: [String] = []
+        for hit in hits {
+            let page = try XCTUnwrap(document.page(at:hit.page)), point = CGPoint(x:hit.point[0],y:hit.point[1])
+            let selection = SelectionGeometry.initialWord(on:page,at:point,tolerance:1)
+                ?? SelectionGeometry.initialCharacter(on:page,at:point,tolerance:1)
+            let actual = selection?.string?.precomposedStringWithCompatibilityMapping ?? "<nil>"
+            let aligned = selection.map { SelectionGeometry.placedBounds(of:$0,on:page).insetBy(dx:-1,dy:-1).contains(point) } ?? false
+            if !actual.contains(hit.text.precomposedStringWithCompatibilityMapping) || !aligned {
+                failures.append("page=\(hit.page) char=\(hit.text) point=\(point) actual=\(actual) aligned=\(aligned)")
+            }
+        }
+        print("ALL_CHARACTERS total=\(hits.count) failures=\(failures.count)")
+        for value in failures.prefix(50) { print("CHARACTER_MISS \(value)") }
+        XCTAssertTrue(failures.isEmpty,"\(failures.count)/\(hits.count) character failures: \(failures.prefix(8))")
+    }
+
+    func testEveryOriginalTextGlyphIsSelectable() throws {
+        struct Hit: Decodable { let page: Int; let text: String; let points: [[Double]] }
+        let bundle = Bundle(for: Self.self)
+        let url = try XCTUnwrap(bundle.url(forResource:"OpenStax-selection",withExtension:"pdf"))
+        let document = try XCTUnwrap(PDFDocument(url:url))
+        let fixture = try XCTUnwrap(bundle.url(forResource:"OpenStax-glyph-hits",withExtension:"json"))
+        let hits = try JSONDecoder().decode([Hit].self,from:Data(contentsOf:fixture))
+        var geometry: [[String: Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi), let text = page.string else { continue }
+            let ns = text as NSString
+            let attr = page.attributedString
+            for i in 0..<ns.length {
+                let r = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
+                guard SelectionGeometry.isValid(r) else { continue }
+                let font = i < (attr?.length ?? 0) ? attr?.attribute(.font,at:i,effectiveRange:nil) as? UIFont : nil
+                let char = ns.substring(with:NSRange(location:i,length:1))
+                geometry.append(["page":pi,"i":i,"ch":char,"rect":[r.minX,r.minY,r.width,r.height],
+                    "font":font?.fontName ?? "nil","size":font?.pointSize ?? 0,
+                    "advance":font.map { char.size(withAttributes:[.font:$0]).width } ?? 0])
+            }
+        }
+        var placement: [[String:Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi) else { continue }
+            for glyph in PDFTextLayout.glyphs(on:page) {
+                let r = glyph.rect
+                placement.append(["page":pi,"ch":glyph.text,"rect":[r.minX,r.minY,r.width,r.height]])
+            }
+        }
+        let placementAttachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:placement),uniformTypeIdentifier:"public.json")
+        placementAttachment.name = "PDF-content-stream-placement"; placementAttachment.lifetime = .keepAlways; add(placementAttachment)
+        var native: [[String:Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi) else { continue }
+            for i in 0..<page.numberOfCharacters {
+                let r = page.characterBounds(at:i)
+                guard SelectionGeometry.isValid(r) else { continue }
+                native.append(["page":pi,"i":i,"rect":[r.minX,r.minY,r.width,r.height]])
+            }
+        }
+        let nativeAttachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:native),uniformTypeIdentifier:"public.json")
+        nativeAttachment.name = "PDFKit-native-glyph-bounds"; nativeAttachment.lifetime = .keepAlways; add(nativeAttachment)
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:geometry),uniformTypeIdentifier:"public.json")
+        attachment.name = "OpenStax-PDFKit-glyphs"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        var failures: [String] = [], total = 0
+        for hit in hits {
+            let page = try XCTUnwrap(document.page(at:hit.page))
+            for (offset, coordinates) in hit.points.enumerated() {
+                total += 1
+                let point = CGPoint(x:coordinates[0],y:coordinates[1])
+                let selection = SelectionGeometry.initialWord(on:page,at:point,tolerance:1)
+                let actual = selection.map { SelectionGeometry.lookupText(for:$0) } ?? "<nil>"
+                if actual != hit.text {
+                    failures.append("page=\(hit.page) word=\(hit.text) glyph=\(offset) at=\(point) actual=\(actual)")
+                }
+            }
+        }
+        print("ALL_GLYPHS total=\(total) failures=\(failures.count)")
+        for failure in failures.prefix(100) { print("GLYPH_MISS \(failure)") }
+        XCTAssertTrue(failures.isEmpty,"\(failures.count)/\(total) glyph failures: \(failures.prefix(12))")
     }
 }

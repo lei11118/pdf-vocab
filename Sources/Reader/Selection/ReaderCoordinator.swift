@@ -674,7 +674,7 @@ final class ReaderCoordinator: NSObject {
         clearWetInk()
     }
 
-    /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放与链接单击。
+    /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放；链接改为选词菜单中明确打开。
     func suppressNativeSelection(in view: UIView?) {
         guard let view else { return }
         var disabled = 0
@@ -688,6 +688,17 @@ final class ReaderCoordinator: NSObject {
                 let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
                 // v0.6.6:回退"按类名压制私有手势"(v0.6.5 的做法在文字层 PDF 上误伤 PDFKit 文本链路,
                 // 导致"不能选词");泄漏改由 selectionDidChange 的即时清除兜底。
+                let isLinkTap = (gr as? UITapGestureRecognizer).map {
+                    $0.numberOfTapsRequired == 1 && $0.numberOfTouchesRequired == 1
+                } ?? false
+                if isLinkTap {
+                    // Preserve native controls (form fields etc.). A completed
+                    // custom tap/press wins; native tap is available only when
+                    // our recognizers deliberately decline the touch.
+                    if let tapRef { gr.require(toFail:tapRef) }
+                    if let fingerPressRef { gr.require(toFail:fingerPressRef) }
+                    if let pencilPressRef { gr.require(toFail:pencilPressRef) }
+                }
                 if (isLongPress || isMultiTap), gr.isEnabled {
                     gr.isEnabled = false
                     disabled += 1
@@ -748,13 +759,13 @@ final class ReaderCoordinator: NSObject {
             if let (page, lineRects) = orderedSelectionRects(),
                page === hit.page,
                let firstLine = lineRects.first, let lastLine = lineRects.last,
-               lineRects.contains(where: { $0.insetBy(dx: -6, dy: -6).contains(hit.point) }) {
+               lineRects.contains(where: { $0.contains(hit.point) }) {
                 let startAnchor = CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
                 let endAnchor = CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
                 let nearerStart = SelectionGeometry.distanceSquared(hit.point, startAnchor)
                     < SelectionGeometry.distanceSquared(hit.point, endAnchor)
                 let fixedPoint = nearerStart ? endAnchor : startAnchor
-                guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
+                guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
                 beginDrag(kind: .body, page: page, anchorPoint: fixedPoint, anchorWord: anchor, touchPoint: hit.point, viewPoint: viewPoint)
                 if kind == "finger" {
                     loupe.begin(at: viewPoint, widget: nil, in: pdfView)
@@ -765,7 +776,9 @@ final class ReaderCoordinator: NSObject {
 
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
-            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
+            let tolerance = min(8,6 / max(pdfView.scaleFactor,0.1))
+            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point,tolerance:tolerance)
+                ?? SelectionGeometry.initialCharacter(on:hit.page,at:hit.point,tolerance:tolerance),
                SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
                 DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
                                    SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
@@ -892,7 +905,7 @@ final class ReaderCoordinator: NSObject {
         case .began, .changed:
             let viewPoint = gesture.location(in: pdfView)
             guard let hit = pageHit(viewPoint),
-                  let word = hit.page.selectionForWord(at: hit.point),
+                  let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
                   let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty, text.count <= 40 else {
                 clearHover()
@@ -1045,7 +1058,7 @@ final class ReaderCoordinator: NSObject {
             let fixedPoint = isStart
                 ? CGPoint(x: HandleMetrics.lineRect(fromDisplay: lastLine).maxX - 0.6, y: lastLine.midY)
                 : CGPoint(x: HandleMetrics.lineRect(fromDisplay: firstLine).minX + 0.6, y: firstLine.midY)
-            guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
+            guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
             drag = DragState(kind: isStart ? .handleStart : .handleEnd,
                              page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint, didMove: true)
             lastTouchViewPoint = viewPoint
@@ -1108,15 +1121,22 @@ final class ReaderCoordinator: NSObject {
 
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
+            if let link = page.annotations.first(where: { VocabPDFView.hasTapAction($0) && $0.type != "Widget" && $0.bounds.contains(pagePoint) }),
+               let view = pdfView as? VocabPDFView {
+                jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 2
+                clearSelection()
+                view.openLink(link)
+                return
+            }
             // v0.7.0:命中「永久加亮的词」→ 打开/切换词卡(优先于菜单切换)
-            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.insetBy(dx: -6, dy: -6).contains(pagePoint) }) {
+            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.contains(pagePoint) }) {
                 DiagLog.log("tap: vocab word 「\(hit.term)」 → card")
                 clearTempOnly()
                 onVocabWordTap?(hit.term)
                 return
             }
             // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
-            let onSelection = rects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
+            let onSelection = rects.contains { $0.page === page && $0.rect.contains(pagePoint) }
             if onSelection {
                 // 点选区:只切换菜单,**永不关闭选区**
                 let anchor = menuAnchor()
@@ -1125,6 +1145,7 @@ final class ReaderCoordinator: NSObject {
                 return
             }
         }
+        if selectText(at: point, source: "tap") { return }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
         guard !rects.isEmpty || menu.isPresented else { return }
         DiagLog.log("tap: clear all (menu+selection together)")
@@ -1136,29 +1157,35 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, gesture.state == .ended else { return }
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
-        if let hit = pageHit(viewPoint) {
-            DiagLog.log(String(format: "doubleTap.hit: page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f",
-                currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y, hit.point.x, hit.point.y, pdfView.scaleFactor))
-        }
-        if let hit = pageHit(viewPoint),
-           let word = SelectionGeometry.initialWord(on: hit.page, at: hit.point,
-               tolerance: min(8, 6 / max(pdfView.scaleFactor, 0.1))),
-           SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
-            DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
-            applySelection(word, src: "doubleTap")
+        _ = selectText(at: viewPoint, source: "doubleTap")
+    }
+
+    @discardableResult
+    private func selectText(at viewPoint: CGPoint, source: String) -> Bool {
+        guard let pdfView, let hit = pageHit(viewPoint) else { return false }
+        let tolerance = min(8, 6 / max(pdfView.scaleFactor, 0.1))
+        let link = hit.page.annotations.contains { VocabPDFView.hasTapAction($0) && $0.bounds.contains(hit.point) }
+        let roundTrip = pdfView.convert(hit.point, from: hit.page)
+        DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
+            source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
+            hit.point.x, hit.point.y, pdfView.scaleFactor, hypot(roundTrip.x-viewPoint.x,roundTrip.y-viewPoint.y), link ? 1 : 0))
+        if let selection = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
+            ?? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance) {
+            DiagLog.log("selection.result: source=\(source) text=「\(SelectionGeometry.logSnippet(selection.string ?? ""))」")
+            applySelection(selection, src: source)
             refreshHandles()
             presentMenu()
             if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
-            return
+            return true
         }
-        // v0.11.0(M6):扫描版双击选词(OCR 词框)
-        if let hit = pageHit(viewPoint), let idx = ocrWordIndex(at: hit.point, on: hit.page) {
-            DiagLog.log("doubleTap: ocr word #\(idx)")
-            applyOCRSelection(page: hit.page, range: idx...idx, src: "doubleTap")
+        if let idx = ocrWordIndex(at: hit.point, on: hit.page) {
+            applyOCRSelection(page: hit.page, range: idx...idx, src: source)
             refreshHandles()
             presentMenu()
-            if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
+            return true
         }
+        DiagLog.log("selection.miss: source=\(source) page=\(currentPageIndexFor(page: hit.page))")
+        return false
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
@@ -1221,7 +1248,7 @@ final class ReaderCoordinator: NSObject {
             let lineSelections = selection.selectionsByLine()
                 .prefix(Self.maxHighlightLines)
                 .filter { $0.pages.first === page }
-            var lineRects = lineSelections.map { $0.bounds(for: page) }
+            var lineRects = lineSelections.map { SelectionGeometry.placedBounds(of:$0,on:page) }
             if lineRects.isEmpty { lineRects = [selection.bounds(for: page)] }
             for rect in lineRects {
                 guard SelectionGeometry.isValid(rect) else { rejected += 1; continue }
@@ -1972,6 +1999,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func refreshHandles() {
+        (pdfView as? VocabPDFView)?.refreshLinkOutlines()
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(),
               let firstLine = lineRects.first, let lastLine = lineRects.last else {
             hideHandles()
@@ -2329,7 +2357,7 @@ final class ReaderCoordinator: NSObject {
             return sel
         }
         // ② 词粒度兜底
-        if let currentWord = page.selectionForWord(at: current) {
+        if let currentWord = SelectionGeometry.initialWord(on:page,at:current) ?? SelectionGeometry.initialCharacter(on:page,at:current) {
             let currentRect = currentWord.bounds(for: page)
             if SelectionGeometry.isValid(currentRect) {
                 let leftPoint = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)
@@ -2466,6 +2494,11 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         if markMode && toolSession?.kind == .laser { return false }
         if gestureRecognizer.view is SelectionHandleView { return true }
         if touch.view is InkEditingOverlay { return false }
+        if gestureRecognizer === tapRef, let pdfView,
+           let hit = pageHit(touch.location(in:pdfView)),
+           hit.page.annotations.contains(where: { $0.type == "Widget" && $0.bounds.contains(hit.point) }) {
+            return false // Preserve native form control activation on a short tap.
+        }
         // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
         if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
@@ -2477,6 +2510,8 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         if gestureRecognizer.view is SelectionHandleView || otherGestureRecognizer.view is SelectionHandleView { return false }
+        // A press selecting linked text and a tap activating it are mutually exclusive.
+        if gestureRecognizer is UITapGestureRecognizer || otherGestureRecognizer is UITapGestureRecognizer { return false }
         return true
     }
 }

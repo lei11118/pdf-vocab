@@ -161,6 +161,23 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 // MARK: - 几何与合法性(全部集中于此,避免散落)
 
 enum SelectionGeometry {
+    private final class GlyphMap {
+        weak var page: PDFPage?
+        let text: String
+        let rotation: Int
+        let glyphs: [Int: CGRect]
+        let nominal: [String: CGFloat]
+        let placed: [Int: CGRect]
+        let attributed: NSAttributedString?
+        init(page: PDFPage, text: String, glyphs: [Int: CGRect], nominal: [String: CGFloat], placed: [Int:CGRect]) {
+            self.page = page; self.text = text; rotation = page.rotation
+            self.glyphs = glyphs; self.nominal = nominal; self.placed = placed
+            attributed = page.attributedString
+        }
+    }
+    // Bounded, weak page ownership; do not retain closed documents.
+    private static var glyphMaps: [GlyphMap] = []
+
 
     /// Include text ranges and geometry: repeated words on a page are distinct selections.
     static func identity(for selection: PDFSelection) -> String {
@@ -193,8 +210,9 @@ enum SelectionGeometry {
         }
         for candidate in max(0, hint - 8)...min(text.length - 1, hint + 8) { inspect(candidate) }
         // Broken text runs can give a character index far from the visible hit.
-        // Only scan the full page on a missed local hit; require the same geometry.
-        if best == nil { for candidate in 0..<text.length { inspect(candidate) } }
+        // A local tolerance hit is not proof of an exact global hit. Index
+        // sequences can diverge, so compare all geometry before accepting it.
+        if best?.distance != 0 { for candidate in 0..<text.length { inspect(candidate) } }
         return best?.index
     }
 
@@ -213,6 +231,9 @@ enum SelectionGeometry {
         // PDFKit distributes TJ word spacing into adjacent selection rectangles.
         // Recover nominal advances from matching glyphs rather than treating those
         // expanded rectangles as the visible glyph outline.
+        if let cached = glyphMaps.first(where: { $0.page === page && $0.text == text && $0.rotation == page.rotation }) {
+            glyphs = cached.glyphs; nominal = cached.nominal
+        } else {
         for i in 0..<ns.length {
             let rect = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
             glyphs[i] = rect
@@ -221,8 +242,40 @@ enum SelectionGeometry {
                 nominal[key] = min(nominal[key] ?? rect.width,rect.width)
             }
         }
-        let attributed = page.attributedString
+        glyphMaps.removeAll { $0.page == nil || $0.page === page }
+        if glyphMaps.count >= 8 { glyphMaps.removeFirst() }
+                // Match by both character and page geometry; content-stream order and
+        // PDFKit's extracted string order can differ (columns, forms, newlines).
+        var source: [unichar:[CGRect]] = [:]
+        for glyph in PDFTextLayout.glyphs(on:page) {
+            let value = glyph.text as NSString
+            guard value.length > 0 else { continue }
+            for j in 0..<value.length {
+                let rect = CGRect(x:glyph.rect.minX+glyph.rect.width*CGFloat(j)/CGFloat(value.length),
+                    y:glyph.rect.minY,width:glyph.rect.width/CGFloat(value.length),height:glyph.rect.height)
+                source[value.character(at:j),default:[]].append(rect)
+            }
+        }
+        var placed: [Int:CGRect] = [:]
+        for i in 0..<ns.length {
+            guard let raw = glyphs[i], isValid(raw), let candidates = source[ns.character(at:i)] else { continue }
+            let matches = candidates.filter {
+                abs($0.midY-raw.midY) < max(raw.height,$0.height)*0.45
+                    && abs($0.midX-raw.midX) < max(raw.width,raw.height)*0.8
+                    && $0.maxX > raw.minX && $0.minX < raw.maxX
+            }
+            if let match = matches.min(by: { distanceSquared(CGPoint(x:$0.midX,y:$0.midY),CGPoint(x:raw.midX,y:raw.midY))
+                < distanceSquared(CGPoint(x:$1.midX,y:$1.midY),CGPoint(x:raw.midX,y:raw.midY)) }) {
+                placed[i] = match
+            }
+        }
+        DiagLog.log("selection.layout: glyphs=\(ns.length) placed=\(placed.count)")
+        glyphMaps.append(GlyphMap(page:page,text:text,glyphs:glyphs,nominal:nominal,placed:placed))
+        }
+        let map = glyphMaps.first(where: { $0.page === page })
+        let attributed = map?.attributed
         func bounds(_ index: Int) -> CGRect {
+            if let rect = map?.placed[index] { return rect }
             guard let rect = glyphs[index], isValid(rect) else { return .null }
             var width = nominal[metricKey(index,rect)] ?? rect.width
             if let attributed, index < attributed.length,
@@ -235,8 +288,16 @@ enum SelectionGeometry {
         func joins(_ left: Int, _ right: Int, _ space: Bool) -> Bool {
             let hyphen = ns.character(at:left) == 45 ? left : (ns.character(at:right) == 45 ? right : -1)
             if hyphen > 0, (48...57).contains(Int(ns.character(at:hyphen-1))) { return false }
+            if let a = map?.placed[left], let b = map?.placed[right] { return joinsWord(a,b,acrossSpace:space) }
             guard let a = glyphs[left], let b = glyphs[right] else { return false }
             return joinsNominalGlyphs(a,b,leftAdvance:bounds(left).width,rightAdvance:bounds(right).width)
+        }
+        // An exact punctuation/symbol hit must not be stolen by a nearby word's
+        // tolerance. The caller can select the complete Unicode character.
+        if let character = initialCharacter(on:page,at:point,tolerance:0),
+           let value = character.string as NSString?, value.length > 0 {
+            let ch = value.character(at:0)
+            if !WordPicker.isWordChar(ch), !WordPicker.isCJK(ch), ch != 45 { return nil }
         }
         guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
                                        tolerance: tolerance, bounds: bounds),
@@ -245,6 +306,45 @@ enum SelectionGeometry {
               isSingleWordText(lookupText(for: word)),
               containsTouch(word, on: page, point: point, tolerance: tolerance) else { return nil }
         return word
+    }
+
+    static func initialCharacter(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
+        guard let text = page.string else { return nil }
+        let ns = text as NSString
+        let cached = glyphMaps.first { $0.page === page && $0.text == text && $0.rotation == page.rotation }
+        var best: (range: NSRange, distance: CGFloat)?
+        var index = 0
+        while index < ns.length {
+            let range = ns.rangeOfComposedCharacterSequence(at:index)
+            index = NSMaxRange(range)
+            guard !ns.substring(with:range).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
+            let rect = (range.length == 1 ? (cached?.placed[range.location] ?? cached?.glyphs[range.location]) : nil)
+                ?? page.selection(for:range)?.bounds(for:page) ?? .null
+            guard isValid(rect) else { continue }
+            let dx = max(rect.minX-point.x,0,point.x-rect.maxX)
+            let dy = max(rect.minY-point.y,0,point.y-rect.maxY)
+            let limit = min(max(0,tolerance),rect.height*0.25)
+            guard dx <= limit, dy <= limit else { continue }
+            let distance = dx*dx+dy*dy
+            if best == nil || distance < best!.distance { best = (range,distance) }
+        }
+        return best.flatMap { page.selection(for:$0.range) }
+    }
+
+    static func placedBounds(of selection: PDFSelection, on page: PDFPage) -> CGRect {
+        guard let map = glyphMaps.first(where: { $0.page === page }) else { return selection.bounds(for:page) }
+        let text = map.text as NSString
+        var result = CGRect.null
+        for n in 0..<selection.numberOfTextRanges(on:page) {
+            let range = selection.range(at:n,on:page)
+            guard range.location != NSNotFound,NSMaxRange(range) <= text.length else { return selection.bounds(for:page) }
+            for i in range.location..<NSMaxRange(range) {
+                if let scalar = Unicode.Scalar(text.character(at:i)), CharacterSet.whitespacesAndNewlines.contains(scalar) { continue }
+                guard let rect = map.placed[i] else { return selection.bounds(for:page) }
+                result = result.union(rect)
+            }
+        }
+        return isValid(result) ? result : selection.bounds(for:page)
     }
 
     /// PDFKit can return a plausible word whose selected range belongs elsewhere.
@@ -308,6 +408,8 @@ enum SelectionGeometry {
     static func lookupText(for selection:PDFSelection)->String {
         var pieces:[String]=[]
         for page in selection.pages {
+            let map = glyphMaps.first { $0.page === page }
+            func glyph(_ i:Int) -> CGRect { map?.placed[i] ?? page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null }
             guard let value=page.string else { continue }
             let ns=value as NSString
             var previousBounds:CGRect?
@@ -321,17 +423,17 @@ enum SelectionGeometry {
                         let start=i
                         while i<NSMaxRange(range),let next=Unicode.Scalar(ns.character(at:i)),CharacterSet.whitespaces.contains(next) { i+=1 }
                         if start>range.location,i<NSMaxRange(range),
-                           joinsWord(page.selection(for: NSRange(location: start-1, length: 1))?.bounds(for: page) ?? .null,
-                                     page.selection(for: NSRange(location: i, length: 1))?.bounds(for: page) ?? .null, acrossSpace:true) { continue }
+                           joinsWord(glyph(start-1),
+                                     glyph(i), acrossSpace:true) { continue }
                         units.append(32)
                     } else { units.append(ch);i+=1 }
                 }
                 let text=String(utf16CodeUnits:units,count:units.count)
                 if let previous=previousBounds,!pieces.isEmpty,
-                   joinsWord(previous,page.selection(for: NSRange(location: range.location, length: 1))?.bounds(for: page) ?? .null,acrossSpace:true) {
+                   joinsWord(previous,glyph(range.location),acrossSpace:true) {
                     pieces[pieces.count-1]+=text
                 } else { pieces.append(text) }
-                if range.length>0 { previousBounds=page.selection(for: NSRange(location: NSMaxRange(range)-1, length: 1))?.bounds(for: page) }
+                if range.length>0 { previousBounds=glyph(NSMaxRange(range)-1) }
             }
         }
         return (pieces.isEmpty ? (selection.string ?? "") : pieces.joined(separator:" ")).trimmingCharacters(in: .whitespacesAndNewlines)

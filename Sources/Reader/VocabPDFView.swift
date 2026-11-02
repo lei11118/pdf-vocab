@@ -6,6 +6,47 @@ import PDFKit
 /// 造成卡死甚至被系统杀死(社区已知问题)。其余菜单项(复制等)保留。
 final class VocabPDFView: PDFView {
     var handwritingMode = false
+
+    func openLink(_ annotation: PDFAnnotation) {
+        DiagLog.log("link: explicitly opened")
+        if let action = annotation.action { super.perform(action) }
+        else if let destination = annotation.destination { go(to: destination) }
+    }
+
+    static func hasTapAction(_ annotation: PDFAnnotation) -> Bool {
+        annotation.type == "Link" || annotation.action != nil || annotation.destination != nil
+    }
+
+    private let linkOutline = CAShapeLayer()
+
+    /// Display-only overlay: never mutates PDF annotations or intercepts touches.
+    func refreshLinkOutlines() {
+        let path = UIBezierPath()
+        if !handwritingMode {
+            for page in visiblePages {
+                for annotation in page.annotations where Self.hasTapAction(annotation) || annotation.type == "Widget" {
+                    let rect = convert(annotation.bounds,from:page)
+                    if rect.intersects(bounds), !rect.isEmpty { path.append(UIBezierPath(rect:rect)) }
+                }
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        linkOutline.bounds = bounds
+        linkOutline.position = CGPoint(x:bounds.midX,y:bounds.midY)
+        linkOutline.path = path.cgPath
+        linkOutline.fillColor = UIColor.clear.cgColor
+        linkOutline.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8).cgColor
+        linkOutline.lineWidth = 1
+        if layer.sublayers?.last !== linkOutline { layer.addSublayer(linkOutline) }
+        CATransaction.commit()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        refreshLinkOutlines()
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // Resolve enlarged handle targets before PDFKit's page tree can cover them.
         let handles=subviews.compactMap { $0 as? SelectionHandleView }.filter {
