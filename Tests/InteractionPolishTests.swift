@@ -257,6 +257,20 @@ final class InteractionPolishTests:XCTestCase {
             let samples = stride(from: 0, to: pixels.count, by: strideBytes).map { pixels[$0] }
             let spread = Int(samples.max() ?? 0) - Int(samples.min() ?? 0)
             XCTAssertGreaterThan(spread, 20, "\(name): screenshot is blank")
+            if name == "palette-marker-expanded" || name == "palette-brush-expanded" {
+                let scale = CGFloat(cg.width)/size.width
+                let left = Int(((size.width-280)/2-1)*scale)
+                let right = Int(((size.width+280)/2+1)*scale)
+                var outsideColor = 0
+                for y in stride(from: 0,to: cg.height,by: 2) {
+                    for x in stride(from: 0,to: cg.width,by: 2) where x < left || x > right {
+                        let offset = y*cg.bytesPerRow+x*strideBytes
+                        let rgb = [pixels[offset],pixels[offset+1],pixels[offset+2]]
+                        if Int(rgb.max()!)-Int(rgb.min()!) > 60 { outsideColor += 1 }
+                    }
+                }
+                XCTAssertEqual(outsideColor,0,"\(name): colored content escaped the 280pt panel")
+            }
             let attachment = XCTAttachment(image: image)
             attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
             try XCTUnwrap(image.pngData()).write(to: folder.appendingPathComponent(name + ".png"))

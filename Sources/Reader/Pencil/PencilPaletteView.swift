@@ -281,11 +281,11 @@ struct PencilPaletteView: View {
 
     private var inkPanel: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
-            HStack(spacing: DS.Space.xs) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: DS.Space.xs)],
+                      alignment: .leading, spacing: DS.Space.xs) {
                 ForEach(Array(session.swatches.enumerated()), id: \.offset) { pair in
                     colorDot(index: pair.offset, color: pair.element)
                 }
-                Spacer(minLength: 0)
             }
 
             // v0.17.0:任意取色(Notability 的取色器);选中后 colorIndex = -1
