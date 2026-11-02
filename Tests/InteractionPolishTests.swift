@@ -36,6 +36,29 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertTrue(view.currentPage === target,"explicit link action must remain available")
     }
 
+    func testSingleTapCanMoveToAdjacentWordAndSelectPunctuation() throws {
+        let bytes = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:300)).pdfData { ctx in
+            ctx.beginPage()
+            ("word next +" as NSString).draw(at:CGPoint(x:30,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:24)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data:bytes)), page = try XCTUnwrap(document.page(at:0))
+        let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
+        view.document = document
+        view.scaleFactor = 4.26
+        view.layoutDocumentView()
+        var picked: [String] = []
+        let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 { picked.append(info.text) } })
+        coordinator.pdfView = view
+        coordinator.hapticsEnabled = false
+        for range in [NSRange(location:0,length:4),NSRange(location:5,length:4),NSRange(location:10,length:1)] {
+            let selection = try XCTUnwrap(page.selection(for:range)), rect = selection.bounds(for:page)
+            let point = view.convert(CGPoint(x:rect.minX+1,y:rect.midY),from:page)
+            coordinator.perform(NSSelectorFromString("handleTap:"),with:CompletedWordTap(point:point))
+        }
+        XCTAssertEqual(picked,["word","next","+"])
+        coordinator.clearTempHighlight()
+    }
+
     func testNativeSingleTapSuppressionPreservesScrollAndPinch() {
         let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
         let content = UIView(frame:view.bounds)

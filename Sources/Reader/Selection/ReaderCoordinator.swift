@@ -763,7 +763,7 @@ final class ReaderCoordinator: NSObject {
                 let nearerStart = SelectionGeometry.distanceSquared(hit.point, startAnchor)
                     < SelectionGeometry.distanceSquared(hit.point, endAnchor)
                 let fixedPoint = nearerStart ? endAnchor : startAnchor
-                guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
+                guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
                 beginDrag(kind: .body, page: page, anchorPoint: fixedPoint, anchorWord: anchor, touchPoint: hit.point, viewPoint: viewPoint)
                 if kind == "finger" {
                     loupe.begin(at: viewPoint, widget: nil, in: pdfView)
@@ -774,7 +774,9 @@ final class ReaderCoordinator: NSObject {
 
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
-            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
+            let tolerance = min(8,6 / max(pdfView.scaleFactor,0.1))
+            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point,tolerance:tolerance)
+                ?? SelectionGeometry.initialCharacter(on:hit.page,at:hit.point,tolerance:tolerance),
                SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
                 DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
                                    SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
@@ -901,7 +903,7 @@ final class ReaderCoordinator: NSObject {
         case .began, .changed:
             let viewPoint = gesture.location(in: pdfView)
             guard let hit = pageHit(viewPoint),
-                  let word = hit.page.selectionForWord(at: hit.point),
+                  let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
                   let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty, text.count <= 40 else {
                 clearHover()
@@ -1054,7 +1056,7 @@ final class ReaderCoordinator: NSObject {
             let fixedPoint = isStart
                 ? CGPoint(x: HandleMetrics.lineRect(fromDisplay: lastLine).maxX - 0.6, y: lastLine.midY)
                 : CGPoint(x: HandleMetrics.lineRect(fromDisplay: firstLine).minX + 0.6, y: firstLine.midY)
-            guard let anchor = page.selectionForWord(at: fixedPoint) ?? page.selectionForLine(at: fixedPoint) else { return }
+            guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
             drag = DragState(kind: isStart ? .handleStart : .handleEnd,
                              page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint, didMove: true)
             lastTouchViewPoint = viewPoint
@@ -1118,14 +1120,14 @@ final class ReaderCoordinator: NSObject {
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
             // v0.7.0:命中「永久加亮的词」→ 打开/切换词卡(优先于菜单切换)
-            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.insetBy(dx: -6, dy: -6).contains(pagePoint) }) {
+            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.contains(pagePoint) }) {
                 DiagLog.log("tap: vocab word 「\(hit.term)」 → card")
                 clearTempOnly()
                 onVocabWordTap?(hit.term)
                 return
             }
             // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
-            let onSelection = rects.contains { $0.page === page && $0.rect.insetBy(dx: -10, dy: -10).contains(pagePoint) }
+            let onSelection = rects.contains { $0.page === page && $0.rect.contains(pagePoint) }
             if onSelection {
                 // 点选区:只切换菜单,**永不关闭选区**
                 let anchor = menuAnchor()
@@ -2354,7 +2356,7 @@ final class ReaderCoordinator: NSObject {
             return sel
         }
         // ② 词粒度兜底
-        if let currentWord = page.selectionForWord(at: current) {
+        if let currentWord = SelectionGeometry.initialWord(on:page,at:current) ?? SelectionGeometry.initialCharacter(on:page,at:current) {
             let currentRect = currentWord.bounds(for: page)
             if SelectionGeometry.isValid(currentRect) {
                 let leftPoint = CGPoint(x: anchorRect.minX + 0.6, y: anchorRect.midY)

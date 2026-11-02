@@ -167,9 +167,11 @@ enum SelectionGeometry {
         let rotation: Int
         let glyphs: [Int: CGRect]
         let nominal: [String: CGFloat]
+        let attributed: NSAttributedString?
         init(page: PDFPage, text: String, glyphs: [Int: CGRect], nominal: [String: CGFloat]) {
             self.page = page; self.text = text; rotation = page.rotation
             self.glyphs = glyphs; self.nominal = nominal
+            attributed = page.attributedString
         }
     }
     // Bounded, weak page ownership; do not retain closed documents.
@@ -244,7 +246,7 @@ enum SelectionGeometry {
         if glyphMaps.count >= 8 { glyphMaps.removeFirst() }
         glyphMaps.append(GlyphMap(page:page,text:text,glyphs:glyphs,nominal:nominal))
         }
-        let attributed = page.attributedString
+        let attributed = glyphMaps.first(where: { $0.page === page })?.attributed
         func bounds(_ index: Int) -> CGRect {
             guard let rect = glyphs[index], isValid(rect) else { return .null }
             var width = nominal[metricKey(index,rect)] ?? rect.width
