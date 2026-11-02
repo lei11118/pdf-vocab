@@ -6,14 +6,12 @@ import UIKit
 struct DiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var text: String = ""
+    @AppStorage("diagnostics.verbose") private var verbose = false
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("开发者：详细输入诊断", isOn: Binding(
-                    get: { UserDefaults.standard.bool(forKey: "diagnostics.verbose") },
-                    set: { UserDefaults.standard.set($0, forKey: "diagnostics.verbose") }
-                )).padding(.horizontal)
+                Toggle("开发者：详细输入诊断", isOn: $verbose).padding(.horizontal)
                 Button("记录环境快照 / 问题时间标记") {
                     RuntimeDiagnostics.snapshot()
                     DiagLog.log("developer: reproduction marker")

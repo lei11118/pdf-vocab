@@ -14,6 +14,22 @@ final class InkRegressionTests: XCTestCase {
         XCTAssertEqual(range.map { text.substring(with: $0) }, "magnitude")
     }
 
+    // Measured from the supplied OpenStax page 15: omitted spaces are 2.66–2.70pt
+    // at 9.5pt glyph height. The old 0.45-height threshold joined these words.
+    func testOpenStaxOmittedSpacesSeparateMagnitude() {
+        let text = "Amagnitude9earthquake" as NSString
+        let widths: [CGFloat] = [6.86,7.39,4.21,4.75,4.75,2.63,2.63,4.75,4.75,4.21,4.75,4.21,4.21,3.16,2.63,4.75,4.75,4.75,4.21,4.75,4.21]
+        var boxes: [CGRect] = []
+        var x: CGFloat = 0
+        for i in 0..<text.length {
+            if [1,10,11].contains(i) { x += 2.68 }
+            boxes.append(CGRect(x: x, y: 0, width: widths[i], height: 9.5))
+            x += widths[i]
+        }
+        let range = SelectionGeometry.visualWordRange(text: text, at: 5, bounds: { boxes[$0] })
+        XCTAssertEqual(range.map { text.substring(with: $0) }, "magnitude")
+    }
+
     func testBrushAndPenHaveDifferentPressureResponse() {
         let penLow = InkBrush.width(kind: .pen, base: 4, force: 0, altitude: .pi/2)
         let penHigh = InkBrush.width(kind: .pen, base: 4, force: 1, altitude: .pi/2)

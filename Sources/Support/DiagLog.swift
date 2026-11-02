@@ -3,7 +3,7 @@ import UIKit
 
 /// 轻量诊断日志:追加写入 Documents/diagnostics.log。
 /// 用户可在「文件」App → 我的 iPad → 跃文 → diagnostics.log 中查看并反馈。
-/// 超过 256KB 自动保留后半段。开销极小,正式版保留。
+/// 超过 2MB 自动保留后半段。开销极小,正式版保留。
 enum DiagLog {
     private static let maxBytes = 2 * 1024 * 1024
     private static let queue = DispatchQueue(label: "diaglog.write")
@@ -61,6 +61,7 @@ enum DiagLog {
 /// Local lifecycle breadcrumbs help distinguish an idle termination from input failures.
 enum RuntimeDiagnostics {
     private static var observers: [NSObjectProtocol]=[]
+    private static var responsivenessTimer: Timer?
     static func snapshot() {
         let info = Bundle.main.infoDictionary ?? [:]
         DiagLog.log("environment: version=\(info["CFBundleShortVersionString"] ?? "?") build=\(info["CFBundleVersion"] ?? "?") OS=\(UIDevice.current.systemVersion) memory=\(ProcessInfo.processInfo.physicalMemory) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
@@ -68,6 +69,16 @@ enum RuntimeDiagnostics {
     static func beginSession() {
         guard observers.isEmpty else { return }
         snapshot()
+        // Measure main-run-loop delay without queuing work while the app is suspended.
+        var previous = ProcessInfo.processInfo.systemUptime
+        responsivenessTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            let now = ProcessInfo.processInfo.systemUptime
+            let delay = now - previous - 1
+            previous = now
+            if UIApplication.shared.applicationState == .active, delay > 0.25 {
+                DiagLog.log("performance: main run loop delay=\(String(format: "%.3f", delay))s (includes resume/interaction)")
+            }
+        }
         let key="diagnostics.previousSessionPhase"
         if let previous=UserDefaults.standard.string(forKey:key) { DiagLog.log("session: previous phase=\(previous); termination cause unknown") }
         UserDefaults.standard.set("active",forKey:key)
