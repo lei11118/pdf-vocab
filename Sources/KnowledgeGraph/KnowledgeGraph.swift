@@ -150,14 +150,21 @@ struct KnowledgeGraph: Codable, Equatable {
             if immediate { writer.async(execute: work) } else { writer.asyncAfter(deadline: .now() + GraphConfig.saveDelay, execute: work) }
     }
     func add(kind: KnowledgeNode.Kind, at point: CGPoint) {
+        guard loaded else { return }
         checkpoint()
         graph.nodes.append(KnowledgeNode(graphId: graph.id, kind: kind, frame: CGRect(origin: point, size: GraphConfig.nodeSize), zIndex: graph.nodes.count))
         save()
     }
+    func flush() async {
+        save(immediate:true)
+        await withCheckedContinuation { (continuation:CheckedContinuation<Void,Never>) in
+            writer.async { continuation.resume() }
+        }
+    }
     func migrate(words: [VocabStore.WordSummary], vocab: VocabStore) async {
         guard loaded, graph.migrationVersion == 0, !migrating else { return }
         migrating = true; defer { migrating = false }
-        let relevant = words.filter { $0.sourceDocSha == graph.docId }
+        let document = graph.docId
         do {
             // Backup before changing the graph; original vocab/history remain intact.
             let database = db
@@ -165,13 +172,19 @@ struct KnowledgeGraph: Codable, Equatable {
             if !FileManager.default.fileExists(atPath: backup.path) {
                 try await Task.detached { try database.snapshotTo(url: backup) }.value
             }
-            for (index, word) in relevant.enumerated() {
-                let meaning: String
-                if case .found(let entry) = DictionaryService.lookup(word.lemma) { meaning = entry.translation ?? entry.definition ?? "" } else { meaning = "" }
-                let context = vocab.occurrences(forLemma: word.lemma).first(where: { $0.docSha == graph.docId })?.context ?? ""
+            let texts = await Task.detached(priority:.utility) {
+                words.compactMap { word -> String? in
+                    let occurrences = vocab.occurrences(forLemma:word.lemma).filter { $0.docSha == document }
+                    guard word.sourceDocSha == document || !occurrences.isEmpty else { return nil }
+                    let meaning: String
+                    if case .found(let entry) = DictionaryService.lookup(word.lemma) { meaning = entry.translation ?? entry.definition ?? "" } else { meaning = "" }
+                    return "旧生词\n\(word.surface)\n\(meaning)\n\(occurrences.first?.context ?? "")"
+                }
+            }.value
+            for (index, text) in texts.enumerated() {
                 graph.nodes.append(KnowledgeNode(graphId: graph.id, kind: .text,
                     frame: CGRect(x: (index % 4) * 340, y: (index / 4) * 240, width: 300, height: 200),
-                    zIndex: index, text: "旧生词\n\(word.surface)\n\(meaning)\n\(context)", isNew: false))
+                    zIndex: index, text:text, isNew: false))
             }
             graph.migrationVersion = 1; save(immediate: true)
         } catch { self.error = error.localizedDescription }

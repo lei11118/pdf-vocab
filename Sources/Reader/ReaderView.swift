@@ -31,10 +31,7 @@ struct ReaderView: View {
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
     /// v0.11.0(M4-B):悬停预览(迷你释义气泡)
-    @State private var hoverTerm: String?
-    @State private var hoverPoint: CGPoint = .zero
-    @State private var hoverDetail: String?
-    @State private var hoverTask: Task<Void, Never>?
+    @StateObject private var wordInteraction = WordInteractionSession()
     /// v0.11.0(M6):扫描版 OCR 进度
     @State private var ocrRunning = false
     @State private var ocrDone = 0
@@ -229,7 +226,11 @@ struct ReaderView: View {
         chromeContent
             .fullScreenCover(isPresented: $showGraph) {
                 KnowledgeGraphView(model: graphModel, tools: pencilTools, vocab: VocabStore(db: store.db), onSource: { shot in
-                    readerHandle.coordinator?.go(toPage: shot.pageIndex)
+                    if let page = readerHandle.coordinator?.pdfView?.document?.page(at:shot.pageIndex) {
+                        let bounds = page.bounds(for:.cropBox), r = shot.sourceRect
+                        let rect = CGRect(x:bounds.minX+r.minX*bounds.width,y:bounds.minY+r.minY*bounds.height,width:r.width*bounds.width,height:r.height*bounds.height)
+                        readerHandle.coordinator?.jumpToVocab(target:VocabJumpTarget(docSha:doc.sha256,docTitle:doc.title,page:shot.pageIndex,term:"",rectsJSON:VocabStore.rectsToJSON([rect])))
+                    }
                     currentPage = shot.pageIndex
                 })
             }
@@ -465,7 +466,8 @@ struct ReaderView: View {
                 onExitWriting: { markMode = false },
                 onDockDragChanged: { translation in handleDockDrag(translation) },
                 onDockDragEnded: { endDockDrag() },
-                onDockReset: { resetDock() }
+                onDockReset: { resetDock() },
+                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) }
             )
             .background(
                 DockSizeReader { size in
@@ -629,11 +631,11 @@ struct ReaderView: View {
                         )
                     }
                     // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
-                    if let hoverTerm, let hoverDetail {
+                    if let preview = wordInteraction.preview {
                         HoverTipView(
-                            term: hoverTerm,
-                            detail: hoverDetail,
-                            anchor: hoverPoint,
+                            term: preview.term,
+                            detail: preview.detail,
+                            anchor: preview.point,
                             bounds: geo.size
                         )
                     }
@@ -793,33 +795,14 @@ struct ReaderView: View {
                     ocrStore: OCRStore(db: store.db),
                     hoverPreviewEnabled: pencilHoverPreview,
                     hapticsEnabled: pencilHaptics,
-                    onHoverUpdate: { term, key, point in
-                        hoverTerm = term
-                        hoverPoint = point
-                        hoverDetail = nil
-                        hoverTask?.cancel()
-                        hoverTask = Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: ToolArcConfig.hoverDelay)
-                            guard !Task.isCancelled else { return }
-                            let detail = await Task.detached(priority: .utility) { WordInteraction.detail(key) }.value
-                            guard !Task.isCancelled, hoverTerm == term else { return }
-                            hoverDetail = detail ?? "(词库未收录)"
-                        }
-                    },
-                    onHoverEnd: {
-                        hoverTask?.cancel()
-                        hoverTask = nil
-                        hoverTerm = nil
-                        hoverDetail = nil
-                    },
+                    onHoverUpdate: { term, key, point in wordInteraction.hover(term, query: key, at: point) },
+                    onHoverEnd: { wordInteraction.clear() },
                     markMode: markMode,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
                         if arcAnchor != nil { arcAnchor = nil; return }
-                        if !markMode, let hoverTerm, hoverDetail != nil {
-                            WordInteraction.speak(hoverTerm); return
-                        }
+                        if !markMode, wordInteraction.squeeze() { return }
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
                         withAnimation(reduceMotion ? nil : DS.Motion.quickSpring) {
                             if arcAnchor == nil {

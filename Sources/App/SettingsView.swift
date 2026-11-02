@@ -31,7 +31,6 @@ struct SettingsView: View {
     @State private var restoreMessage: String?
     @State private var showStarDictPicker = false
     @State private var dictImporting = false
-    @State private var userDictName: String?
     @State private var dictionarySources: [DictionarySource] = []
     @State private var dictionaryRevision = 0
     @AppStorage("toolArc.leftHanded") private var leftHanded = false
@@ -120,6 +119,16 @@ struct SettingsView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        .contextMenu {
+                            if source.id == "legacy" || source.id.hasSuffix(".sqlite") {
+                                Button("移除这部词典",role:.destructive) {
+                                    do {
+                                        try DictionaryStore.shared.removeImportedDictionary(source.id)
+                                        dictionarySources = DictionaryStore.shared.catalog()
+                                    } catch { restoreMessage = error.localizedDescription }
+                                }
+                            }
+                        }
                     }
                     Toggle("工具盘左手模式", isOn: $leftHanded)
                 } header: {
@@ -169,7 +178,6 @@ struct SettingsView: View {
                 }
             }
             .onAppear {
-                userDictName = DictionaryStore.shared.userDictionaryName()
                 dictionarySources = DictionaryStore.shared.catalog()
             }
         }
@@ -191,19 +199,9 @@ struct SettingsView: View {
                 }
             }.value
             dictImporting = false
-            userDictName = DictionaryStore.shared.userDictionaryName()
                 dictionarySources = DictionaryStore.shared.catalog()
             restoreMessage = result
         }
-    }
-
-    private func removeUserDictionary() {
-        if let url = try? DictionaryStore.userDatabaseURL() {
-            try? FileManager.default.removeItem(at: url)
-        }
-        DictionaryStore.shared.reloadUserDictionary()
-        userDictName = nil
-        restoreMessage = "已移除用户词典。"
     }
 
     // MARK: - 备份 / 恢复(v0.12.0,M7)

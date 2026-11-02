@@ -16,12 +16,23 @@ struct HoverTipView: View {
     }
 
     var body: some View {
+        WordBubbleContent(term:term,detail:detail)
+            .position(x: bubbleX, y: bubbleY)
+            .allowsHitTesting(false)
+    }
+}
+
+struct WordBubbleContent: View {
+    let term: String
+    let detail: String
+    var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(term)
                 .font(.caption.weight(.semibold))
             Text(detail)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(8)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -32,7 +43,6 @@ struct HoverTipView: View {
                 .strokeBorder(Color.primary.opacity(0.08))
         )
         .shadow(radius: 6, y: 2)
-        .position(x: bubbleX, y: bubbleY)
         .allowsHitTesting(false)
     }
 }

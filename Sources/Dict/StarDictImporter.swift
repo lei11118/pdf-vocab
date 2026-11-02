@@ -14,6 +14,7 @@ enum StarDictImporter {
     struct ImportResult {
         let bookName: String
         let entryCount: Int
+        let dictionaryId: String
     }
 
     enum ImportError: LocalizedError {
@@ -182,7 +183,7 @@ enum StarDictImporter {
         // 6) 安装(原子替换)
         try fm.moveItem(at: tmpURL, to: outURL)
         DiagLog.log("stardict: imported 「\(bookName)」 entries=\(written) skipped=\(skipped)")
-        return ImportResult(bookName: bookName, entryCount: written)
+        return ImportResult(bookName: bookName, entryCount: written, dictionaryId: outURL.lastPathComponent)
     }
 
     // MARK: - 释义解析(尽力而为)

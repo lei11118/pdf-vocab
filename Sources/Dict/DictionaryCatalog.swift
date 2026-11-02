@@ -24,6 +24,9 @@ extension DictionaryStore {
 
     func catalog() -> [DictionarySource] {
         var result = [DictionarySource(id: "builtin", name: "ECDICT 通用英汉", detail: "基础词库 · MIT", count: 0)]
+        if Bundle.main.url(forResource:"lexical",withExtension:"sqlite") != nil {
+            result.append(DictionarySource(id:"wordnet",name:"Open English WordNet 英英补充",detail:"含数学、科学等多义项 · CC BY 4.0 / WordNet License",count:0))
+        }
         if let url = Bundle.main.url(forResource: "science", withExtension: "sqlite"),
            let queue = try? DatabaseQueue(path: url.path) {
             let counts = (try? queue.read { db in try Row.fetchAll(db, sql: "SELECT domain,COUNT(*) AS n FROM dict GROUP BY domain") }) ?? []
@@ -49,6 +52,19 @@ extension DictionaryStore {
         if enabled { ids.remove(id) } else { ids.insert(id) }
         UserDefaults.standard.set(ids.sorted(), forKey: "dictionary.disabled.v1")
         NotificationCenter.default.post(name: .dictionarySelectionChanged, object: nil)
+    }
+
+    func removeImportedDictionary(_ id: String) throws {
+        let url: URL
+        if id == "legacy" { url = try Self.userDatabaseURL() }
+        else {
+            guard UUID(uuidString:URL(fileURLWithPath:id).deletingPathExtension().lastPathComponent) != nil,
+                  !id.contains("/"), !id.contains("\\"), id.hasSuffix(".sqlite") else { throw CocoaError(.fileReadInvalidFileName) }
+            url = try Self.dictionaryDirectory().appendingPathComponent(id)
+        }
+        try FileManager.default.removeItem(at:url)
+        reloadUserDictionary()
+        NotificationCenter.default.post(name:.dictionarySelectionChanged,object:nil)
     }
 
     func importedQueues() -> [(String, DatabaseQueue)] {

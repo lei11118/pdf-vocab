@@ -2,6 +2,46 @@ import SwiftUI
 import UIKit
 import PencilKit
 import NaturalLanguage
+import Combine
+
+struct WordPreview {
+    var term: String
+    var detail: String
+    var point: CGPoint
+    var translated: Bool
+}
+
+/// PDF, text-node and screenshot-node geometry adapters feed this same state
+/// machine. In particular an obsolete asynchronous lookup can never speak or
+/// display the previously hovered word after the pointer has moved away.
+@MainActor final class WordInteractionSession: ObservableObject {
+    @Published private(set) var preview: WordPreview?
+    private(set) var isHovering = false
+    private var request: Task<Void, Never>?
+    private var generation = 0
+    func clear() {
+        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false
+    }
+    func hover(_ term: String, query: String? = nil, at point: CGPoint) {
+        resolve(term,query:query ?? term,at:point,hover:true)
+    }
+    func select(_ term: String, at point: CGPoint) { resolve(term,query:term,at:point,hover:false) }
+    private func resolve(_ term: String, query: String, at point: CGPoint, hover: Bool) {
+        clear(); isHovering = hover
+        let token = generation
+        request = Task { @MainActor [weak self] in
+            if hover { try? await Task.sleep(nanoseconds:ToolArcConfig.hoverDelay) }
+            guard !Task.isCancelled else { return }
+            let detail = await Task.detached(priority:.utility) { WordInteraction.detail(query) }.value
+            guard !Task.isCancelled,let self,self.generation == token else { return }
+            self.preview = WordPreview(term:term,detail:detail ?? "词库未收录",point:point,translated:detail != nil)
+        }
+    }
+    @discardableResult func squeeze() -> Bool {
+        guard isHovering,let preview,preview.translated else { return false }
+        WordInteraction.speak(preview.term); return true
+    }
+}
 
 /// Common dictionary/translation/speech behavior for page and graph adapters.
 enum WordInteraction {
@@ -38,7 +78,8 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     private let label = UILabel()
     private let picture = UIImageView()
     private let highlight = CAShapeLayer()
-    private let bubble = UILabel()
+    private let bubble = UIView()
+    private let bubbleHost = UIHostingController(rootView:WordBubbleContent(term:"",detail:""))
     private var words: [GraphWord] = []
     private var supplied: [GraphWord] = []
     private var text = ""
@@ -47,8 +88,8 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     private var selection: ClosedRange<Int>?
     private var start: Int?
     private var hoverIndex: Int?
-    private var hoverTask: Task<Void, Never>?
-    private var translatedTerm: String?
+    private let interactionSession = WordInteractionSession()
+    private var subscription: AnyCancellable?
     var onEdit: (() -> Void)?
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -57,10 +98,17 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         addSubview(picture); addSubview(label)
         highlight.fillColor = UIColor.systemBlue.withAlphaComponent(0.22).cgColor
         layer.addSublayer(highlight)
-        bubble.numberOfLines = 0; bubble.font = .systemFont(ofSize: 13)
-        bubble.backgroundColor = .secondarySystemBackground; bubble.layer.cornerRadius = 8
-        bubble.clipsToBounds = true; bubble.isHidden = true
+        bubble.isHidden = true; bubble.isUserInteractionEnabled = false
+        bubbleHost.view.backgroundColor = .clear; bubble.addSubview(bubbleHost.view)
         addSubview(bubble)
+        subscription = interactionSession.$preview.sink { [weak self] preview in
+            guard let self else { return }
+            guard let preview else { self.bubble.isHidden = true; return }
+            self.bubbleHost.rootView = WordBubbleContent(term:preview.term,detail:preview.detail)
+            self.bubble.frame = CGRect(x:4,y:max(0,preview.point.y-100),width:max(100,self.bounds.width-8),height:min(110,self.bounds.height))
+            self.bubbleHost.view.frame = self.bubble.bounds
+            self.bubble.isHidden = false
+        }
         let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
         let double = UITapGestureRecognizer(target: self, action: #selector(edit(_:))); double.numberOfTapsRequired = 2
         tap.require(toFail: double)
@@ -144,24 +192,13 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     @objc private func hover(_ gesture: UIHoverGestureRecognizer) {
         let index = gesture.state == .ended || gesture.state == .cancelled ? nil : hit(gesture.location(in: self))
         guard index != hoverIndex else { return }
-        hoverIndex = index; hoverTask?.cancel(); translatedTerm = nil; bubble.isHidden = true
+        hoverIndex = index; interactionSession.clear()
         guard let index else { return }
         let term = words[index].text, point = gesture.location(in: self)
-        hoverTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: ToolArcConfig.hoverDelay)
-            guard !Task.isCancelled else { return }
-            self?.translate(term, at: point)
-        }
+        interactionSession.hover(term,at:point)
     }
     private func translate(_ term: String, at point: CGPoint) {
-        Task { @MainActor [weak self] in
-            let detail = await Task.detached { WordInteraction.detail(term) }.value
-            guard let self, let detail else { return }
-            guard self.hoverIndex.map({ self.words[$0].text == term }) ?? (self.selectedText == term) else { return }
-            self.bubble.text = "  \(term)\n  \(String(detail.prefix(350)))"
-            self.bubble.frame = CGRect(x: 4, y: max(0, point.y - 100), width: max(100, self.bounds.width - 8), height: min(110, self.bounds.height))
-            self.bubble.isHidden = false; self.translatedTerm = term
-        }
+        interactionSession.select(term,at:point)
     }
     private var selectedText: String {
         guard let selection else { return "" }
@@ -184,8 +221,8 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     private var menuValue: UIMenu?
     private var editInteraction: UIEditMenuInteraction?
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended, hoverIndex != nil, !bubble.isHidden, let translatedTerm else { return }
-        WordInteraction.speak(translatedTerm)
+        guard squeeze.phase == .ended else { return }
+        interactionSession.squeeze()
     }
 }
 extension WordInteractionView: UIEditMenuInteractionDelegate {
