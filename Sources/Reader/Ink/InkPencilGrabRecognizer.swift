@@ -11,7 +11,7 @@ import UIKit
 /// - 挂在 `PDFView` 上 → 落点是页面视图(它的后代)也能收到,不依赖命中目标;
 /// - `allowedTouchTypes = [.pencil]` → **手指的触摸根本不会进这里**,PDFView 自己的
 ///   滚动 / 捏合 / 选词保持原生行为,一行都不用改;
-/// - 永远停在 `.possible`,从不识别成功 → 不取消任何系统手势,也不影响 PDFKit;
+/// - 停在 `.possible` 接收真实采样；落笔期间暂停其他 PDF 手势，抬笔后恢复。
 /// - `touchesBegan/Moved/Ended` 拿到的是真实 `UITouch`(force / altitudeAngle /
 ///   azimuthAngle / coalesced / predicted 全在),解析式描边需要的输入一个不少。
 final class InkPencilGrabRecognizer: UIGestureRecognizer {

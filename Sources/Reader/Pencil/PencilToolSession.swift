@@ -2,7 +2,7 @@ import SwiftUI
 import PencilKit
 
 /// v0.15.0:手写工具类型(Notability 四件套 + 蜡笔)
-/// v0.29.0:移除**书法**笔(自研笔锋/稳定化的输出一直不稳定,用户要求去掉)。
+/// 毛笔使用独立 brush 类型及压感曲线，旧 calligraphy 存档仍按既有规则解码。
 /// 旧存档里 kind = "calligraphy" 的会在解码时回退成钢笔,不会让整份工具状态失效。
 enum PencilToolKind: String, CaseIterable, Identifiable, Codable {
     case pen, brush, pencil, marker, crayon, lasso, shape, laser, eraser

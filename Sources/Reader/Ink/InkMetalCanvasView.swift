@@ -234,8 +234,11 @@ final class InkMetalCanvasView: MTKView {
 
     func handleEnded(_ touches: Set<UITouch>, event: UIEvent?) {
         guard penDown else { return }
-        if let t = touches.first(where: { $0.type == .pencil }), t.timestamp > lastSampleTime {
-            appendSample(t)
+        if let t = touches.first(where: { $0.type == .pencil }) {
+            for sample in event?.coalescedTouches(for: t) ?? [t] where sample.timestamp > lastSampleTime {
+                appendSample(sample)
+            }
+            if t.timestamp > lastSampleTime { appendSample(t) }
         }
         flushDraft()
         endStroke()
