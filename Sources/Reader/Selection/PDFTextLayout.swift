@@ -128,7 +128,7 @@ final class PDFTextLayout {
             var dictionary: CGPDFDictionaryRef?
             guard CGPDFObjectGetValue(object,.dictionary,&dictionary), let dictionary else { s.state.font = nil; return }
             let key = "\(s.streamID)|\(String(cString:name))"
-            let font = s.fonts[key] ?? Self.font(dictionary)
+            let font = s.fonts[key] ?? PDFTextLayout.font(dictionary)
             s.fonts[key] = font; s.state.font = font
         }
         CGPDFOperatorTableSetCallback(table,"Tc") { scanner,p in PDFTextLayout.owner(p)?.state.charSpace = PDFTextLayout.number(scanner) }
