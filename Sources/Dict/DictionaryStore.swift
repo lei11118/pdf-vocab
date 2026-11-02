@@ -24,9 +24,10 @@ final class DictionaryStore: @unchecked Sendable {
     private var userQueue: DatabaseQueue?
     private var imports: [(String, DatabaseQueue)] = []
     private var scienceQueue: DatabaseQueue?
+    private var wordnetQueue: DatabaseQueue?
     private let lock = NSRecursiveLock()
 
-    var isAvailable: Bool { builtinQueue != nil || scienceQueue != nil || !imports.isEmpty }
+    var isAvailable: Bool { lock.lock(); defer { lock.unlock() }; return builtinQueue != nil || scienceQueue != nil || wordnetQueue != nil || !imports.isEmpty }
     var hasUserDictionary: Bool { userQueue != nil }
 
     private init() {
@@ -41,6 +42,10 @@ final class DictionaryStore: @unchecked Sendable {
         if let url = Bundle.main.url(forResource: "science", withExtension: "sqlite") {
             var config = Configuration(); config.readonly = true
             scienceQueue = try? DatabaseQueue(path: url.path, configuration: config)
+        }
+        if let url = Bundle.main.url(forResource:"lexical",withExtension:"sqlite") {
+            var config = Configuration(); config.readonly = true
+            wordnetQueue = try? DatabaseQueue(path:url.path,configuration:config)
         }
         loadUserDictionary()
     }
@@ -100,6 +105,16 @@ final class DictionaryStore: @unchecked Sendable {
         }
         if isEnabled("builtin"), let entry = queryEntry(in: builtinQueue, key: key) {
             matches.append(("ECDICT 通用", entry))
+        }
+        if isEnabled("wordnet"),let wordnetQueue {
+            let rows = (try? wordnetQueue.read { db in try Row.fetchAll(db,sql:"SELECT DISTINCT m.pos,s.definition FROM membership m JOIN synset s ON s.id=m.synset WHERE m.lemma=? ORDER BY m.pos,s.definition",arguments:[key]) }) ?? []
+            let definitions = rows.map { row -> String in
+                let pos: String = row["pos"], definition: String = row["definition"]
+                return "\(pos). \(definition)"
+            }
+            if !definitions.isEmpty {
+                matches.append(("Open English WordNet",DictEntry(word:key,phonetic:nil,translation:nil,definition:definitions.joined(separator:"\n"),pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)))
+            }
         }
         guard var result = matches.first?.1 else { return nil }
         result.sources = matches.map(\.0)

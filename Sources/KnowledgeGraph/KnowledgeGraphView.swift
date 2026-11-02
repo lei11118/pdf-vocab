@@ -116,7 +116,7 @@ struct KnowledgeGraphView: View {
         model.save()
     }
     private func binding(_ id: String) -> Binding<KnowledgeNode> {
-        Binding(get: { model.graph.nodes.first(where: { $0.id == id })! }, set: { value in
+        Binding(get: { model.graph.nodes.first(where: { $0.id == id }) ?? KnowledgeNode(id:id,graphId:model.graph.id,kind:.text,frame:.zero,isNew:false) }, set: { value in
             if let index = model.graph.nodes.firstIndex(where: { $0.id == id }) { model.graph.nodes[index] = value; model.save() }
         })
     }
@@ -126,7 +126,7 @@ struct KnowledgeGraphView: View {
                 Image(systemName: node.kind == .ink ? "pencil.tip" : node.kind == .text ? "text.alignleft" : "photo")
                 Text(node.isNew ? "新" : node.kind == .text ? "文本" : node.kind == .ink ? "标记" : "截图").font(.caption)
                 Spacer()
-                if let shot = node.screenshot { Button("来源") { model.save(immediate: true); dismiss(); onSource?(shot) }.font(.caption) }
+                if let shot = node.screenshot, onSource != nil { Button("来源") { model.save(immediate: true); dismiss(); onSource?(shot) }.font(.caption) }
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
             }
             .padding(7).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
@@ -171,11 +171,12 @@ struct KnowledgeGraphView: View {
                 WordInteractionLayer(text: node.text, onEdit: { model.checkpoint(); editing = node.id })
             }
         } else if node.kind == .ink {
-            GraphInkView(data: Binding(get: { binding(node.id).wrappedValue.drawingData }, set: { data in
-                var n = binding(node.id).wrappedValue; n.drawingData = data; binding(node.id).wrappedValue = n
-            }), tools: tools, live: selected == node.id && model.graph.zoom >= GraphConfig.snapshotZoom,
-               onBegin: { model.checkpoint() })
-        } else if let shot = node.screenshot, let url = try? GraphAssets.url(model.graph.zoom < GraphConfig.snapshotZoom ? shot.thumbPath : shot.imagePath), let image = UIImage(contentsOfFile: url.path) {
+            if selected == node.id && model.graph.zoom >= GraphConfig.snapshotZoom {
+                GraphInkView(data: Binding(get: { binding(node.id).wrappedValue.drawingData }, set: { data in
+                    var n = binding(node.id).wrappedValue; n.drawingData = data; binding(node.id).wrappedValue = n
+                }), tools: tools, live: true, onBegin: { model.checkpoint() })
+            } else { GraphInkSnapshot(data:node.drawingData) }
+        } else if let shot = node.screenshot, let image = GraphImageCache.image(model.graph.zoom < GraphConfig.snapshotZoom ? shot.thumbPath : shot.imagePath) {
             WordInteractionLayer(image: image, words: shot.words, enabled: shot.ocrStatus == "done")
                 .overlay(alignment: .bottom) {
                     if shot.ocrStatus != "done" { Text(shot.ocrStatus == "pending" ? "文字识别中…" : "未能识别文字，可查看图片").font(.caption).padding(4).background(.regularMaterial) }
@@ -231,12 +232,40 @@ struct KnowledgeGraphView: View {
                 if let a = model.graph.nodes.first(where: { $0.id == edge.from }), let b = model.graph.nodes.first(where: { $0.id == edge.to }) {
                     let path = edgePath(edge.fromAnchor.point(in:a.frame),edge.toAnchor.point(in:b.frame))
                     path.stroke(selected == edge.id ? Color.accentColor : Color.secondary, lineWidth: GraphConfig.edgeWidth)
-                    path.stroke(Color.black.opacity(0.001), lineWidth: GraphConfig.edgeHitWidth).onTapGesture { selected = edge.id }
+                    path.stroke(Color.black.opacity(0.001), lineWidth: GraphConfig.edgeHitWidth)
+                        .contentShape(path.strokedPath(StrokeStyle(lineWidth:GraphConfig.edgeHitWidth)))
+                        .onTapGesture { selected = edge.id }
                 }
             }
             if let connection, let node = model.graph.nodes.first(where: { $0.id == connection.0 }) {
                 edgePath(connection.1.point(in: node.frame), connection.2).stroke(Color.accentColor,lineWidth:GraphConfig.edgeWidth)
             }
+        }
+    }
+}
+
+private enum GraphImageCache {
+    static let cache: NSCache<NSString,UIImage> = { let cache = NSCache<NSString,UIImage>(); cache.totalCostLimit = 48*1024*1024; return cache }()
+    static func image(_ name: String) -> UIImage? {
+        if let image = cache.object(forKey:name as NSString) { return image }
+        guard let url = try? GraphAssets.url(name),let image = UIImage(contentsOfFile:url.path) else { return nil }
+        cache.setObject(image,forKey:name as NSString,cost:Int(image.size.width*image.size.height*4)); return image
+    }
+}
+private struct GraphInkSnapshot: UIViewRepresentable {
+    let data: Data
+    func makeUIView(context:Context) -> SnapshotView { SnapshotView() }
+    func updateUIView(_ view:SnapshotView,context:Context) { view.data = data }
+    final class SnapshotView: UIImageView {
+        var data = Data() { didSet { if oldValue != data { refresh = true; setNeedsLayout() } } }
+        private var refresh = true
+        private var lastSize = CGSize.zero
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard refresh || lastSize != bounds.size else { return }
+            guard bounds.width > 0,bounds.height > 0 else { return }
+            refresh = false; lastSize = bounds.size
+            image = (try? PKDrawing(data:data))?.image(from:bounds,scale:1)
         }
     }
 }

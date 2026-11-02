@@ -387,6 +387,13 @@ final class InteractionPolishTests:XCTestCase {
         let brushReview = PencilToolSession()
         brushReview.kind = .brush
         brushReview.setWidth(4)
+        let graphReview = KnowledgeGraphStore(docId: "review-" + UUID().uuidString, db: db)
+        await graphReview.load()
+        graphReview.graph.migrationVersion = 1
+        let first = KnowledgeNode(graphId:graphReview.graph.id,kind:.text,frame:CGRect(x:0,y:0,width:290,height:200),text:"Derivative\n导数\nThe instantaneous rate of change.")
+        let second = KnowledgeNode(graphId:graphReview.graph.id,kind:.text,frame:CGRect(x:340,y:200,width:290,height:210),text:"Integral\n积分\nConnect ideas by dragging a side anchor.")
+        graphReview.graph.nodes = [first,second]
+        graphReview.graph.connect(from:first.id,anchor:.right,to:second.id,target:.top)
         let cases: [(String, CGSize, AnyView)] = [
             ("palette-marker-expanded", CGSize(width: 360, height: 420), AnyView(PencilPaletteView(session: markerReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("palette-brush-expanded", CGSize(width: 320, height: 420), AnyView(PencilPaletteView(session: brushReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
@@ -398,8 +405,11 @@ final class InteractionPolishTests:XCTestCase {
             ("library-split", CGSize(width: 480, height: 900), AnyView(LibraryView(store: docs))),
             ("vocab-large-type", CGSize(width: 480, height: 1100), AnyView(VocabListView(store: store).dynamicTypeSize(.xxxLarge))),
             ("vocab-compact", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
-            ("graph-ipad", CGSize(width: 834, height: 1194), AnyView(KnowledgeGraphView(docId: record.sha256, db: db, tools: PencilToolSession()))),
-            ("graph-dark-split", CGSize(width: 480, height: 900), AnyView(KnowledgeGraphView(docId: record.sha256, db: db, tools: PencilToolSession()).preferredColorScheme(.dark))),
+            ("arc-reading", CGSize(width:834,height:600),AnyView(PencilArcMenu(session:markerReview,anchor:CGPoint(x:417,y:400),bounds:CGSize(width:834,height:600),onDismiss:{}).background(DS.background1))),
+            ("arc-marking", CGSize(width:480,height:600),AnyView(PencilArcMenu(session:brushReview,anchor:CGPoint(x:240,y:400),bounds:CGSize(width:480,height:600),marking:true,canUndo:true,onDismiss:{}).background(DS.background1))),
+            ("dictionary-combination",CGSize(width:834,height:1194),AnyView(SettingsView(db:db))),
+            ("graph-ipad", CGSize(width: 834, height: 1194), AnyView(KnowledgeGraphView(model: graphReview, tools: PencilToolSession(), vocab: store))),
+            ("graph-dark-split", CGSize(width: 480, height: 900), AnyView(KnowledgeGraphView(model: graphReview, tools: PencilToolSession(), vocab: store).preferredColorScheme(.dark))),
             ("reader-ipad", CGSize(width: 834, height: 1194), AnyView(ReaderView(doc: record, store: docs))),
             ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs))),
             ("palette-ipad", CGSize(width: 834, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),

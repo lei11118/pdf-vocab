@@ -18,6 +18,7 @@ struct PencilPaletteView: View {
     var onDockDragChanged: ((CGSize) -> Void)? = nil
     var onDockDragEnded: (() -> Void)? = nil
     var onDockReset: (() -> Void)? = nil
+    var onArc: (() -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -89,6 +90,7 @@ struct PencilPaletteView: View {
     /// Undo/redo and the style control stay visible while tool kinds scroll.
     private var paletteActions: some View {
         HStack(spacing: 4) {
+            if let onArc { compactIcon("circle.grid.cross",label:"弧形工具盘",action:onArc) }
 
             Button {
                 DiagLog.log("palette: expand -> \(!expanded)")
@@ -112,7 +114,7 @@ struct PencilPaletteView: View {
             divider
 
             if let onExitWriting {
-                compactIcon("text.cursor", label: "回到选词阅读", action: onExitWriting)
+                compactIcon("text.cursor", label: "回到阅读模式", action: onExitWriting)
                 divider
             }
 
