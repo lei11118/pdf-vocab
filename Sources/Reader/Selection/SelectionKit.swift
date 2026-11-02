@@ -209,7 +209,6 @@ enum SelectionGeometry {
         }
         for candidate in max(0, hint - 8)...min(text.length - 1, hint + 8) { inspect(candidate) }
         // Broken text runs can give a character index far from the visible hit.
-        // Only scan the full page on a missed local hit; require the same geometry.
         // A local tolerance hit is not proof of an exact global hit. Index
         // sequences can diverge, so compare all geometry before accepting it.
         if best?.distance != 0 { for candidate in 0..<text.length { inspect(candidate) } }
@@ -275,21 +274,24 @@ enum SelectionGeometry {
     static func initialCharacter(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
         guard let text = page.string else { return nil }
         let ns = text as NSString
-        var best: (selection: PDFSelection, distance: CGFloat)?
-        for index in 0..<ns.length {
-            guard let scalar = Unicode.Scalar(ns.character(at:index)),
-                  !CharacterSet.whitespacesAndNewlines.contains(scalar),
-                  let selection = page.selection(for:NSRange(location:index,length:1)) else { continue }
-            let rect = selection.bounds(for:page)
+        let cached = glyphMaps.first { $0.page === page && $0.text == text && $0.rotation == page.rotation }
+        var best: (range: NSRange, distance: CGFloat)?
+        var index = 0
+        while index < ns.length {
+            let range = ns.rangeOfComposedCharacterSequence(at:index)
+            index = NSMaxRange(range)
+            guard !ns.substring(with:range).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
+            let rect = (range.length == 1 ? cached?.glyphs[range.location] : nil)
+                ?? page.selection(for:range)?.bounds(for:page) ?? .null
             guard isValid(rect) else { continue }
             let dx = max(rect.minX-point.x,0,point.x-rect.maxX)
             let dy = max(rect.minY-point.y,0,point.y-rect.maxY)
-            let limit = min(tolerance,rect.height*0.25)
+            let limit = min(max(0,tolerance),rect.height*0.25)
             guard dx <= limit, dy <= limit else { continue }
             let distance = dx*dx+dy*dy
-            if best == nil || distance < best!.distance { best = (selection,distance) }
+            if best == nil || distance < best!.distance { best = (range,distance) }
         }
-        return best?.selection
+        return best.flatMap { page.selection(for:$0.range) }
     }
 
     /// PDFKit can return a plausible word whose selected range belongs elsewhere.

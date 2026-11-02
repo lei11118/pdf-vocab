@@ -495,6 +495,7 @@ final class ReaderCoordinator: NSObject {
         menu.linkProvider = { [weak self] in self?.selectedLink() }
         menu.onOpenLink = { [weak self] in
             guard let self, let link = self.selectedLink(), let view = self.pdfView as? VocabPDFView else { return }
+            self.jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 2
             self.clearSelection()
             view.openLink(link)
         }

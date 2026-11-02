@@ -1,5 +1,6 @@
 import XCTest
 import PDFKit
+import UIKit
 @testable import PdfVocab
 
 @MainActor
@@ -54,6 +55,24 @@ final class RealPDFSelectionTests: XCTestCase {
         let document = try XCTUnwrap(PDFDocument(url:url))
         let fixture = try XCTUnwrap(bundle.url(forResource:"OpenStax-glyph-hits",withExtension:"json"))
         let hits = try JSONDecoder().decode([Hit].self,from:Data(contentsOf:fixture))
+        var geometry: [[String: Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi), let text = page.string else { continue }
+            let ns = text as NSString
+            let attr = page.attributedString
+            for i in 0..<ns.length {
+                let r = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
+                let font = i < (attr?.length ?? 0) ? attr?.attribute(.font,at:i,effectiveRange:nil) as? UIFont : nil
+                let char = ns.substring(with:NSRange(location:i,length:1))
+                geometry.append(["page":pi,"i":i,"ch":char,"rect":[r.minX,r.minY,r.width,r.height],
+                    "font":font?.fontName ?? "nil","size":font?.pointSize ?? 0,
+                    "advance":font.map { char.size(withAttributes:[.font:$0]).width } ?? 0])
+            }
+        }
+        let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:geometry),uniformTypeIdentifier:"public.json")
+        attachment.name = "OpenStax-PDFKit-glyphs"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         var failures: [String] = [], total = 0
         for hit in hits {
             let page = try XCTUnwrap(document.page(at:hit.page))
