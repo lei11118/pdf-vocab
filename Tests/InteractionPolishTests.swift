@@ -247,7 +247,9 @@ final class InteractionPolishTests:XCTestCase {
             host.view.layoutIfNeeded()
             try await Task.sleep(for: .milliseconds(name.hasPrefix("graph-") ? 2500 : 500))
             var drawn = false
-            let image = UIGraphicsImageRenderer(size: size).image { _ in
+            let format = UIGraphicsImageRendererFormat()
+            format.preferredRange = .standard
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
                 drawn = host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
             }
             XCTAssertTrue(drawn, "\(name): hierarchy was not rendered")
@@ -258,6 +260,7 @@ final class InteractionPolishTests:XCTestCase {
             let spread = Int(samples.max() ?? 0) - Int(samples.min() ?? 0)
             XCTAssertGreaterThan(spread, 20, "\(name): screenshot is blank")
             if name == "palette-marker-expanded" || name == "palette-brush-expanded" {
+                XCTAssertEqual(cg.bitsPerComponent,8,"Overflow checker requires standard 8-bit pixels")
                 let scale = CGFloat(cg.width)/size.width
                 let left = Int(((size.width-280)/2-1)*scale)
                 let right = Int(((size.width+280)/2+1)*scale)
