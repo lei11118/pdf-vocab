@@ -7,8 +7,7 @@ import PDFKit
 final class VocabPDFView: PDFView {
     var handwritingMode = false
 
-    // Text selection owns page taps. Native annotation actions must never run
-    // before the second tap/long press and move the page under the user's finger.
+    // Native annotation taps are routed through the coordinator after long press fails.
     override func perform(_ action: PDFAction) {
         DiagLog.log("link: native action blocked type=\(type(of: action))")
     }
@@ -17,6 +16,35 @@ final class VocabPDFView: PDFView {
         DiagLog.log("link: explicitly opened")
         if let action = annotation.action { super.perform(action) }
         else if let destination = annotation.destination { go(to: destination) }
+    }
+
+    private let linkOutline = CAShapeLayer()
+
+    /// Display-only overlay: never mutates PDF annotations or intercepts touches.
+    func refreshLinkOutlines() {
+        let path = UIBezierPath()
+        if !handwritingMode {
+            for page in visiblePages {
+                for annotation in page.annotations where annotation.type == "Link" || annotation.type == "Widget" {
+                    let rect = convert(annotation.bounds,from:page)
+                    if rect.intersects(bounds), !rect.isEmpty { path.append(UIBezierPath(rect:rect)) }
+                }
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        linkOutline.frame = bounds
+        linkOutline.path = path.cgPath
+        linkOutline.fillColor = UIColor.clear.cgColor
+        linkOutline.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8).cgColor
+        linkOutline.lineWidth = 1
+        if linkOutline.superlayer == nil { layer.addSublayer(linkOutline) }
+        CATransaction.commit()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        refreshLinkOutlines()
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

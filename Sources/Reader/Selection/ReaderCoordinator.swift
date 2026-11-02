@@ -1120,6 +1120,13 @@ final class ReaderCoordinator: NSObject {
 
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
+            if let link = page.annotations.first(where: { $0.type == "Link" && $0.bounds.contains(pagePoint) }),
+               let view = pdfView as? VocabPDFView {
+                jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 2
+                clearSelection()
+                view.openLink(link)
+                return
+            }
             // v0.7.0:命中「永久加亮的词」→ 打开/切换词卡(优先于菜单切换)
             if let hit = permHitRects.first(where: { $0.page === page && $0.rect.contains(pagePoint) }) {
                 DiagLog.log("tap: vocab word 「\(hit.term)」 → card")
@@ -2000,6 +2007,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func refreshHandles() {
+        (pdfView as? VocabPDFView)?.refreshLinkOutlines()
         guard let pdfView, let (page, lineRects) = orderedSelectionRects(),
               let firstLine = lineRects.first, let lastLine = lineRects.last else {
             hideHandles()

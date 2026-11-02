@@ -7,7 +7,7 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
-    func testTextTapBlocksNativeLinkAndExplicitOpenStillWorks() throws {
+    func testLinkedTextLongPressSelectsAndSingleTapNavigates() throws {
         let url = try XCTUnwrap(Bundle(for:RealPDFSelectionTests.self).url(forResource:"OpenStax-selection",withExtension:"pdf"))
         let document = try XCTUnwrap(PDFDocument(url:url))
         let page = try XCTUnwrap(document.page(at:0)), target = try XCTUnwrap(document.page(at:1))
@@ -27,13 +27,19 @@ final class InteractionPolishTests:XCTestCase {
         let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 { texts.append(info.text) } })
         coordinator.pdfView = view
         coordinator.hapticsEnabled = false
-        let tap = CompletedWordTap(point:view.convert(CGPoint(x:183.4946,y:377.4785),from:page))
-        coordinator.perform(NSSelectorFromString("handleTap:"),with:tap)
+        let point = view.convert(CGPoint(x:183.4946,y:377.4785),from:page)
+        let press = BeganWordPress(point:point)
+        coordinator.perform(NSSelectorFromString("handleFingerPress:"),with:press)
         XCTAssertEqual(texts.last,"Functions")
         XCTAssertTrue(view.currentPage === page,"selecting linked text must preserve page")
         coordinator.clearTempHighlight()
-        view.openLink(link)
-        XCTAssertTrue(view.currentPage === target,"explicit link action must remain available")
+        // Use a destination-only annotation too: not every PDF link has an action.
+        page.removeAnnotation(link)
+        let direct = PDFAnnotation(bounds:link.bounds,forType:.link,withProperties:nil)
+        direct.destination = PDFDestination(page:target,at:CGPoint(x:0,y:700))
+        page.addAnnotation(direct)
+        coordinator.perform(NSSelectorFromString("handleTap:"),with:CompletedWordTap(point:point))
+        XCTAssertTrue(view.currentPage === target,"single tap must preserve normal link navigation")
     }
 
     func testSingleTapCanMoveToAdjacentWordAndSelectPunctuation() throws {
@@ -546,4 +552,11 @@ private final class CompletedWordTap: UITapGestureRecognizer {
         set { }
     }
     override func location(in view: UIView?) -> CGPoint { point }
+}
+
+private final class BeganWordPress: UILongPressGestureRecognizer {
+    private let hit: CGPoint
+    init(point:CGPoint) { hit = point; super.init(target:nil,action:nil) }
+    override var state: UIGestureRecognizer.State { get { .began } set { } }
+    override func location(in view:UIView?) -> CGPoint { hit }
 }
