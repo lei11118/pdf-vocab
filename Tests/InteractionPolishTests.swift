@@ -205,7 +205,15 @@ final class InteractionPolishTests:XCTestCase {
             if let savedCompact { UserDefaults.standard.set(savedCompact, forKey: "vocabCompactLayout") }
             else { UserDefaults.standard.removeObject(forKey: "vocabCompactLayout") }
         }
+        let markerReview = PencilToolSession()
+        markerReview.kind = .marker
+        markerReview.setWidth(4)
+        let brushReview = PencilToolSession()
+        brushReview.kind = .brush
+        brushReview.setWidth(4)
         let cases: [(String, CGSize, AnyView)] = [
+            ("palette-marker-expanded", CGSize(width: 360, height: 420), AnyView(PencilPaletteView(session: markerReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
+            ("palette-brush-expanded", CGSize(width: 320, height: 420), AnyView(PencilPaletteView(session: brushReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),
             ("workspace-folder-editor", CGSize(width: 480, height: 900), AnyView(WorkspaceFolderEditor(folder: reviewFolder, onSave: { _, _ in }))),
             ("vocab-ipad", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),

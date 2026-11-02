@@ -1,0 +1,49 @@
+import XCTest
+import PDFKit
+@testable import PdfVocab
+
+@MainActor
+final class RealPDFSelectionTests: XCTestCase {
+    func testOriginalOpenStaxWordHits() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let cases: [(Int, String, CGPoint)] = [
+            (0, "Functions", CGPoint(x: 123.5795, y: 762.7960)),
+            (0, "Functions", CGPoint(x: 167.4803, y: 409.7785)),
+            (0, "Functions", CGPoint(x: 195.9708, y: 393.6285)),
+            (0, "Trigonometric", CGPoint(x: 131.4312, y: 377.4785)),
+            (0, "Functions", CGPoint(x: 183.4946, y: 377.4785)),
+            (0, "Functions", CGPoint(x: 156.9352, y: 361.3285)),
+            (0, "Functions", CGPoint(x: 245.6082, y: 345.1785)),
+            (0, "magnitude", CGPoint(x: 146.9284, y: 281.0690)),
+            (0, "magnitude", CGPoint(x: 250.4516, y: 281.0690)),
+            (0, "magnitude", CGPoint(x: 119.8101, y: 269.6690)),
+            (0, "magnitude", CGPoint(x: 120.7306, y: 258.2690)),
+            (0, "magnitude", CGPoint(x: 343.6717, y: 258.2690)),
+            (0, "magnitude", CGPoint(x: 488.5164, y: 246.8690)),
+            (1, "functions", CGPoint(x: 459.7125, y: 655.3395)),
+            (1, "functions", CGPoint(x: 365.2445, y: 627.7895)),
+            (1, "functions", CGPoint(x: 147.8987, y: 590.0300)),
+            (1, "motion", CGPoint(x: 184.6852, y: 578.6300)),
+            (1, "motion", CGPoint(x: 429.8185, y: 578.6300)),
+            (1, "electrical", CGPoint(x: 89.3660, y: 578.6300)),
+            (1, "functions", CGPoint(x: 203.8964, y: 567.2300)),
+            (1, "functions", CGPoint(x: 445.0150, y: 567.2300)),
+            (1, "functions", CGPoint(x: 222.7602, y: 555.8300)),
+            (1, "functions", CGPoint(x: 171.0259, y: 517.8300))
+        ]
+        for (index, expected, point) in cases {
+            let page = try XCTUnwrap(document.page(at: index))
+            let picked = SelectionGeometry.initialWord(on: page, at: point)
+            let actual = picked.map { SelectionGeometry.lookupText(for: $0) } ?? "<nil>"
+            let hint = page.characterIndex(at: point)
+            print("REALPDF page=\(index) word=\(expected) actual=\(actual) count=\(page.numberOfCharacters) string=\((page.string as NSString?)?.length ?? 0) hint=\(hint)")
+            if actual != expected, hint != NSNotFound {
+                for i in max(0,hint-12)..<min(page.numberOfCharacters,hint+13) {
+                    print("GLYPH \(i) native=\(page.characterBounds(at:i)) selection=\(page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null) text=\(page.selection(for:NSRange(location:i,length:1))?.string ?? "nil")")
+                }
+            }
+            XCTAssertEqual(actual, expected, "page \(index) at \(point)")
+        }
+    }
+}

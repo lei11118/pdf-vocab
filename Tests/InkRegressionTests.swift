@@ -7,6 +7,16 @@ import MetalKit
 
 @MainActor
 final class InkRegressionTests: XCTestCase {
+    func testPositionalSmoothingReducesAlternatingSampleNoise() {
+        let points = (0..<40).map { InkPoint(x: Double($0)*2, y: $0 % 2 == 0 ? -0.8 : 0.8, width: 5) }
+        let smooth = InkBrush.smoothed(points)
+        XCTAssertEqual(smooth.first, points.first)
+        XCTAssertEqual(smooth.last?.x, points.last?.x)
+        XCTAssertEqual(smooth.last!.y, points.last!.y, accuracy: 1e-9)
+        let interior = smooth.filter { $0.x > 10 && $0.x < 68 }
+        XCTAssertLessThan(interior.map { abs($0.y) }.max() ?? 1, 0.15)
+    }
+
     func testVisualWordDoesNotMergeOrdinarySpace() {
         let text = "A magnitude 9 earthquake" as NSString
         let rects = (0..<text.length).map { CGRect(x: Double($0) * 5, y: 0, width: 4, height: 12) }

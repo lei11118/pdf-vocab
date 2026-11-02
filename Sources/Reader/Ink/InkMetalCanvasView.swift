@@ -296,13 +296,8 @@ final class InkMetalCanvasView: MTKView {
             return
         }
         let normalizedForce = InkBrush.normalizedPressure(force:Double(touch.force),maximum:Double(touch.maximumPossibleForce))
-        var rawWidth = InkBrush.width(kind: inkKind, base: Double(baseWidth * viewScale),
+        let rawWidth = InkBrush.width(kind: inkKind, base: Double(baseWidth * viewScale),
                                       force: normalizedForce, altitude: Double(touch.altitudeAngle))
-        if inkKind == .pen {
-            let dt=max(0.001,touch.timestamp-lastTimestamp)
-            let speed=Double(dist/max(0.001,viewScale))/dt
-            rawWidth *= max(0.72,1-min(0.28,speed/3000))
-        }
         let width = draft.points.last.map { previous in
             let dt = max(0.001, touch.timestamp - previous.time)
             let alpha = 1 - exp(-dt / 0.018)
@@ -326,6 +321,7 @@ final class InkMetalCanvasView: MTKView {
         let stroke = draft
         DiagLog.log("ink.commit: kind=\(stroke.kind.rawValue) samples=\(stroke.points.count) duration=\((stroke.points.last?.time ?? 0) - (stroke.points.first?.time ?? 0))")
         draft.points.removeAll()
+        DiagLog.log("ink.commit.range: width=\(stroke.points.map(\.width).min() ?? 0)...\(stroke.points.map(\.width).max() ?? 0) force=\(stroke.points.map(\.force).min() ?? 0)...\(stroke.points.map(\.force).max() ?? 0)")
         onStrokeCommitted?(stroke)
     }
 

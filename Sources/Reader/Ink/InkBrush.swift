@@ -20,6 +20,17 @@ enum InkBrush {
     }
     static func smoothed(_ points: [InkPoint]) -> [InkPoint] {
         guard points.count > 3 else { return points }
+        // Interpolation alone passes every sample's positional noise through.
+        // Smooth the control polygon first; retain both endpoints and metadata.
+        var filtered = points
+        for _ in 0..<2 {
+            let source = filtered
+            for i in 1..<(source.count-1) {
+                filtered[i].x = (source[i-1].x + 2*source[i].x + source[i+1].x)/4
+                filtered[i].y = (source[i-1].y + 2*source[i].y + source[i+1].y)/4
+            }
+        }
+        let points = filtered
         var out: [InkPoint] = [points[0]]
         for i in 0..<(points.count-1) {
             let a=points[max(0,i-1)],b=points[i],c=points[i+1],d=points[min(points.count-1,i+2)]
