@@ -144,7 +144,11 @@ struct VocabListView: View {
             .sheet(item: $detailWord) { word in
                 VocabularyDetailView(store: store, word: word, onJump: onJump)
             }
-            .fullScreenCover(isPresented:$showGraph) { VocabGraphView(store:store,words:words,onJump:onJump) }
+            .fullScreenCover(isPresented:$showGraph) {
+                if let scopeDocSha {
+                    KnowledgeGraphView(docId: scopeDocSha, db: store.db, tools: PencilToolSession())
+                } else if let docStore { KnowledgeGraphLibrary(store: docStore) }
+            }
             .onDisappear { finishCardDrag(commit:false) }
             .sheet(isPresented: $showExport) {
                 AnkiExportSheet(store: store, words: words, docStore: docStore)

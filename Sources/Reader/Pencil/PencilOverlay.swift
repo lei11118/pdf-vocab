@@ -11,7 +11,7 @@ enum InkFlowAxis {
 /// Pencil 标记层(v0.9.0,M4;v0.14.0 Paper Modern 手写体验重构):
 /// - `PencilOverlayProvider` 经 `PDFView.pageOverlayViewProvider` 为**每一页**叠加一个画布容器;
 /// - 画布为 `PKCanvasView`(`drawingPolicy = .pencilOnly`),只接受 Pencil;
-/// - **选词模式**:容器 `hitTest` 一律返回 nil → 触摸全部穿透给 PDFView,选区逻辑原样;
+/// - **阅读模式**:容器 `hitTest` 一律返回 nil → 触摸全部穿透给 PDFView,选区逻辑原样;
 /// - **标记模式**:容器一律接管命中(返回画布);手指滚动/缩放/长按由祖先手势与 drawingPolicy 保证;
 /// - v0.14.0:工具由外部 `PencilToolSession` 驱动(自绘浮动工具带,不再使用系统 PKToolPicker);
 /// - 手写数据按 (docSha, page) 存 SQLite(`pencil_ink`),**不改动原 PDF**;停笔 0.8s 防抖落盘。
@@ -692,7 +692,7 @@ final class InkOverlayView: UIView, PKCanvasViewDelegate {
     // MARK: - 触摸过滤(模式)
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // 选词模式:整体穿透(手指与 Pencil 都交给 PDFView 的选区管线)
+        // 阅读模式:整体穿透(手指与 Pencil 都交给 PDFView 的选区管线)
         guard marking else { return nil }
         // v0.13.3(关键修复):标记模式**一律由本层接管**(返回画布),不再依赖 event 里能否
         // 看到 Pencil——命中判定的时机不可靠(首次 hitTest 时 allTouches 可能缺失/不含笔),
