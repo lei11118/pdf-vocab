@@ -3,6 +3,7 @@ import SwiftUI
 struct PencilArcMenu: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("toolArc.leftHanded") private var leftHanded = false
+    @AppStorage("developer.arcGeometry") private var debugGeometry = false
     @ObservedObject var session: PencilToolSession
     let anchor: CGPoint
     let bounds: CGSize
@@ -33,6 +34,19 @@ struct PencilArcMenu: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.001).ignoresSafeArea()
+            ForEach(tools.indices,id:\.self) { index in
+                track(index,count:tools.count,upper:false).stroke(DS.background3.opacity(alpha(index)*0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
+            }
+            if debugGeometry {
+                Path { path in
+                    let a = geometry.point(angle:geometry.mid-ToolArcConfig.sweep/2,radius:ToolArcConfig.radius)
+                    let b = geometry.point(angle:geometry.mid+ToolArcConfig.sweep/2,radius:ToolArcConfig.radius)
+                    path.move(to:a);path.addLine(to:b)
+                    path.move(to:geometry.point(angle:geometry.mid,radius:0));path.addLine(to:a)
+                    path.move(to:geometry.point(angle:geometry.mid,radius:0));path.addLine(to:b)
+                }.stroke(Color.red.opacity(0.65),style:StrokeStyle(lineWidth:1,dash:[4,4])).allowsHitTesting(false)
+                Circle().stroke(Color.red,lineWidth:2).frame(width:10,height:10).position(x:anchor.x+geometry.translation.width,y:anchor.y+geometry.translation.height).allowsHitTesting(false)
+            }
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                 icon(tool.systemImage, label: tool.label, active: session.kind == tool) {
                     session.select(kind: tool); onSelect(); onDismiss()
@@ -65,6 +79,16 @@ struct PencilArcMenu: View {
                 .overlay(Circle().stroke(active ? DS.accent : DS.foreground3.opacity(0.15), lineWidth: active ? 2 : 1))
                 .shadow(color: .black.opacity(0.12), radius: 5, y: 3)
         }.accessibilityLabel(label)
+    }
+    private func track(_ index:Int,count:Int,upper:Bool) -> Path {
+        let radius = ToolArcConfig.radius+(upper ? ToolArcConfig.gap : 0)
+        let angle = geometry.mid+(CGFloat(index)-CGFloat(count-1)/2)*geometry.pitch/radius
+        var path = Path()
+        for i in 0...8 {
+            let p = geometry.point(angle:angle+(CGFloat(i)/8-0.5)*geometry.pitch/radius,radius:radius)
+            if i == 0 { path.move(to:p) } else { path.addLine(to:p) }
+        }
+        return path
     }
     private func enabled(_ index: Int) -> Bool { !marking || index > 1 || (index == 0 ? canUndo : canRedo) }
     private func activateUpper(_ index: Int) {

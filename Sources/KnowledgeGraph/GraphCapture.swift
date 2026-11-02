@@ -58,7 +58,9 @@ enum GraphCapture {
             guard char.intersects(selected), let word = SelectionGeometry.initialWord(on:page,at:CGPoint(x:char.midX,y:char.midY),tolerance:0) else { continue }
             let key = SelectionGeometry.identity(for:word)
             guard seen.insert(key).inserted else { continue }
-            for n in 0..<word.numberOfTextRanges(on:page) { visited.insert(integersIn:Range(word.range(at:n,on:page)) ?? 0..<0) }
+            for n in 0..<word.numberOfTextRanges(on:page) {
+                if let range = Range(word.range(at:n,on:page)) { visited.insert(integersIn:range) }
+            }
             let box = SelectionGeometry.placedBounds(of:word,on:page).intersection(selected)
             guard box.width > 0,box.height > 0 else { continue }
             let displayBox = view.convert(box,from:page)

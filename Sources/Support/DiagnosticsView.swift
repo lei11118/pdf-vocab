@@ -7,11 +7,13 @@ struct DiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var text: String = ""
     @AppStorage("diagnostics.verbose") private var verbose = false
+    @AppStorage("developer.arcGeometry") private var arcGeometry = false
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("开发者：详细输入诊断", isOn: $verbose).padding(.horizontal)
+                Toggle("开发者：显示工具盘几何辅助线",isOn:$arcGeometry).padding(.horizontal)
                 Button("记录环境快照 / 问题时间标记") {
                     RuntimeDiagnostics.snapshot()
                     DiagLog.log("developer: reproduction marker")

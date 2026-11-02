@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// v0.11.0(M4-B):Pencil 悬停迷你释义气泡(阅读模式,悬停约 0.5s 出现;纯展示,不拦截触摸)。
+/// Pencil 悬停释义：页面、图谱文本及截图共用气泡内容；不拦截触摸。
 struct HoverTipView: View {
     let term: String
     let detail: String

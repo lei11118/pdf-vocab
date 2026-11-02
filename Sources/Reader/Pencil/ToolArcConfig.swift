@@ -52,6 +52,10 @@ struct ToolArcGeometry {
         let p = rawPosition(index, count: count, upper: upper), t = translation
         return CGPoint(x: p.x + t.width, y: p.y + t.height)
     }
+    func point(angle:CGFloat,radius:CGFloat) -> CGPoint {
+        let t = translation
+        return CGPoint(x:center.x+sin(angle)*radius*(leftHanded ? -1 : 1)+t.width,y:center.y-cos(angle)*radius+t.height)
+    }
     func polar(_ p: CGPoint) -> (r: CGFloat, angle: CGFloat) {
         let t = translation
         let dx = (p.x - center.x - t.width) * (leftHanded ? -1 : 1), dy = p.y - center.y - t.height
