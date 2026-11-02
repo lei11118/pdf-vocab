@@ -70,6 +70,16 @@ final class GlyphSelectionTests: XCTestCase {
                     "advance":font.map { char.size(withAttributes:[.font:$0]).width } ?? 0])
             }
         }
+        var placement: [[String:Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi) else { continue }
+            for glyph in PDFTextLayout.glyphs(on:page) {
+                let r = glyph.rect
+                placement.append(["page":pi,"ch":glyph.text,"rect":[r.minX,r.minY,r.width,r.height]])
+            }
+        }
+        let placementAttachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:placement),uniformTypeIdentifier:"public.json")
+        placementAttachment.name = "PDF-content-stream-placement"; placementAttachment.lifetime = .keepAlways; add(placementAttachment)
         var native: [[String:Any]] = []
         for pi in 0..<document.pageCount {
             guard let page = document.page(at:pi) else { continue }

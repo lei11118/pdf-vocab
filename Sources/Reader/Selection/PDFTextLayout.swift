@@ -208,7 +208,7 @@ final class PDFTextLayout {
         var font = Font(), descriptor: CGPDFDictionaryRef?
         var first: CGPDFInteger = 0
         CGPDFDictionaryGetInteger(dict,"FirstChar",&first)
-        if let widths = array(dict,"Widths") {
+        if let widths = array(dict,"Widths"), (0...65_535).contains(first) {
             for i in 0..<min(CGPDFArrayGetCount(widths),65_536) { font.widths[first+i] = real(widths,i) }
         }
         if let encoding = name(dict,"Encoding") {
@@ -231,7 +231,7 @@ final class PDFTextLayout {
                         } else {
                             guard i+1 < CGPDFArrayGetCount(widths) else { break }
                             let end = integer(widths,i), width = real(widths,i+1); i += 2
-                            if start <= end, end-start < 65_536 { for code in start...end { font.widths[code] = width } }
+                            if start >= 0, start <= end, end < 65_536 { for code in start...end { font.widths[code] = width } }
                         }
                     }
                 }
