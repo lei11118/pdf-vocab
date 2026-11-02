@@ -235,10 +235,8 @@ enum SelectionGeometry {
         func joins(_ left: Int, _ right: Int, _ space: Bool) -> Bool {
             let hyphen = ns.character(at:left) == 45 ? left : (ns.character(at:right) == 45 ? right : -1)
             if hyphen > 0, (48...57).contains(Int(ns.character(at:hyphen-1))) { return false }
-            let a = bounds(left), b = bounds(right)
-            guard isValid(a), isValid(b) else { return false }
-            let h = min(a.height,b.height), gap = b.minX-a.maxX
-            return abs(a.midY-b.midY)<h*0.35 && gap >= -h*0.4 && gap < h*0.09
+            guard let a = glyphs[left], let b = glyphs[right] else { return false }
+            return joinsNominalGlyphs(a,b,leftAdvance:bounds(left).width,rightAdvance:bounds(right).width)
         }
         guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
                                        tolerance: tolerance, bounds: bounds),
@@ -257,6 +255,17 @@ enum SelectionGeometry {
             let rect = $0.bounds(for: page)
             return isValid(rect) && rect.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         }
+    }
+
+    /// A TJ gap expands both bordering advances. Expansion on only one side
+    /// belongs to the other boundary of that glyph; do not split its own word.
+    static func joinsNominalGlyphs(_ left: CGRect, _ right: CGRect,
+                                   leftAdvance: CGFloat, rightAdvance: CGFloat) -> Bool {
+        guard isValid(left), isValid(right) else { return false }
+        let h = min(left.height,right.height)
+        let rawGap = right.minX-left.maxX
+        let sharedSpacing = min(max(0,left.width-leftAdvance),max(0,right.width-rightAdvance))
+        return abs(left.midY-right.midY)<h*0.35 && rawGap >= -h*0.4 && rawGap+sharedSpacing < h*0.09
     }
 
     static func joinsWord(_ left:CGRect,_ right:CGRect,acrossSpace:Bool)->Bool {
