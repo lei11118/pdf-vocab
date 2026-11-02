@@ -70,6 +70,17 @@ final class GlyphSelectionTests: XCTestCase {
                     "advance":font.map { char.size(withAttributes:[.font:$0]).width } ?? 0])
             }
         }
+        var native: [[String:Any]] = []
+        for pi in 0..<document.pageCount {
+            guard let page = document.page(at:pi) else { continue }
+            for i in 0..<page.numberOfCharacters {
+                let r = page.characterBounds(at:i)
+                guard SelectionGeometry.isValid(r) else { continue }
+                native.append(["page":pi,"i":i,"rect":[r.minX,r.minY,r.width,r.height]])
+            }
+        }
+        let nativeAttachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:native),uniformTypeIdentifier:"public.json")
+        nativeAttachment.name = "PDFKit-native-glyph-bounds"; nativeAttachment.lifetime = .keepAlways; add(nativeAttachment)
         let attachment = XCTAttachment(data:try JSONSerialization.data(withJSONObject:geometry),uniformTypeIdentifier:"public.json")
         attachment.name = "OpenStax-PDFKit-glyphs"
         attachment.lifetime = .keepAlways
