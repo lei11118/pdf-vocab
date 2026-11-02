@@ -4,7 +4,7 @@ import PDFKit
 /// Character advances from the PDF's own fonts and text operators. No OCR,
 /// dictionary, page number or document-specific word rules are involved.
 final class PDFTextLayout {
-    struct Glyph { let text: String; let rect: CGRect }
+    struct Glyph { let text: String; let rect: CGRect; let baseline: CGPoint }
     private struct Font {
         var unicode: [Int: String] = [:]
         var lengths: [Int] = [1]
@@ -183,7 +183,7 @@ final class PDFTextLayout {
             // PDFKit distributes that spacing over neighbouring ranges.
             let rect = CGRect(x:0,y:state.rise+state.size*font.descent,width:advance,height:state.size)
                 .applying(state.text.concatenating(state.ctm)).standardized
-            if state.textPositionKnown, glyphs.count < 100_000, rect.width > 0, rect.height > 0 { glyphs.append(Glyph(text:text,rect:rect)) }
+            if state.textPositionKnown, glyphs.count < 100_000, rect.width > 0, rect.height > 0 { glyphs.append(Glyph(text:text,rect:rect,baseline:CGPoint(x:0,y:state.rise).applying(state.text.concatenating(state.ctm)))) }
             self.advance(advance+(code == 32 && length == 1 ? state.wordSpace*state.horizontal : 0))
         }
     }

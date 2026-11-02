@@ -340,8 +340,12 @@ enum SelectionGeometry {
             guard range.location != NSNotFound,NSMaxRange(range) <= text.length else { return selection.bounds(for:page) }
             for i in range.location..<NSMaxRange(range) {
                 if let scalar = Unicode.Scalar(text.character(at:i)), CharacterSet.whitespacesAndNewlines.contains(scalar) { continue }
-                guard let rect = map.placed[i] else { return selection.bounds(for:page) }
-                result = result.union(rect)
+                guard let rect = map.placed[i], let vertical = map.glyphs[i] else { return selection.bounds(for:page) }
+                // PDFKit supplies the visual line's ascent/descent (including
+                // accents and math). Use the content stream's unexpanded x
+                // advances, while keeping that established display alignment.
+                // Word joining uses the separate per-font placed height above.
+                result = result.union(CGRect(x:rect.minX,y:vertical.minY,width:rect.width,height:vertical.height))
             }
         }
         return isValid(result) ? result : selection.bounds(for:page)
