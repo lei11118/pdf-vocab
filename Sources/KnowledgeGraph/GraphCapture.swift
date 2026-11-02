@@ -17,35 +17,52 @@ enum GraphCapture {
         guard selected.width > 2, selected.height > 2 else { throw CocoaError(.fileReadCorruptFile) }
         let index = document.index(for: page)
         let scale: CGFloat = max(2, min(4, view.scaleFactor))
-        let fullSize = CGSize(width: pageBounds.width*scale,height:pageBounds.height*scale)
-        let crop = CGRect(x:(selected.minX-pageBounds.minX)*scale,y:(pageBounds.maxY-selected.maxY)*scale,width:selected.width*scale,height:selected.height*scale)
+        let displayPage = view.convert(pageBounds,from:page)
+        let displayCrop = view.convert(selected,from:page)
+        let pixelsPerViewPoint = scale / max(0.01, view.scaleFactor)
+        let fullSize = CGSize(width:displayPage.width*pixelsPerViewPoint,height:displayPage.height*pixelsPerViewPoint)
+        let crop = CGRect(x:(displayCrop.minX-displayPage.minX)*pixelsPerViewPoint,y:(displayCrop.minY-displayPage.minY)*pixelsPerViewPoint,width:displayCrop.width*pixelsPerViewPoint,height:displayCrop.height*pixelsPerViewPoint)
+        func pixel(_ point: CGPoint) -> CGPoint {
+            let p = view.convert(point,from:page)
+            return CGPoint(x:(p.x-displayPage.minX)*pixelsPerViewPoint,y:(p.y-displayPage.minY)*pixelsPerViewPoint)
+        }
+        let origin = pixel(CGPoint(x:pageBounds.minX,y:pageBounds.maxY))
+        let axisX = pixel(CGPoint(x:pageBounds.minX+1,y:pageBounds.maxY))
+        let axisY = pixel(CGPoint(x:pageBounds.minX,y:pageBounds.maxY-1))
+        let inkTransform = CGAffineTransform(a:axisX.x-origin.x,b:axisX.y-origin.y,c:axisY.x-origin.x,d:axisY.y-origin.y,tx:origin.x,ty:origin.y)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
         let base = page.thumbnail(of: fullSize, for: .cropBox)
         let image = UIGraphicsImageRenderer(size: crop.size, format: format).image { context in
             UIColor.white.setFill(); context.fill(CGRect(origin:.zero,size:crop.size))
             context.cgContext.translateBy(x:-crop.minX,y:-crop.minY)
             base.draw(in:CGRect(origin:.zero,size:fullSize))
+            context.cgContext.saveGState()
+            context.cgContext.concatenate(inkTransform)
             if let record = ink.drawing(docSha:docId,page:index) {
                 if let drawing = InkPage.decode(record.data) {
-                    InkPDFRendering.draw(drawing,in:context.cgContext,pageSize:pageBounds.size,scale:scale)
+                    InkPDFRendering.draw(drawing,in:context.cgContext,pageSize:pageBounds.size,scale:1)
                 } else if var drawing = try? PKDrawing(data:record.data) {
                     drawing.transform(using:CGAffineTransform(scaleX:1/max(1,record.scale),y:1/max(1,record.scale)))
-                    drawing.image(from:CGRect(origin:.zero,size:pageBounds.size),scale:scale).draw(in:CGRect(origin:.zero,size:fullSize))
+                    drawing.image(from:CGRect(origin:.zero,size:pageBounds.size),scale:scale).draw(in:CGRect(origin:.zero,size:pageBounds.size))
                 }
             }
+            context.cgContext.restoreGState()
         }
-        var words: [GraphWord] = [], seen = Set<String>()
+        var words: [GraphWord] = [], seen = Set<String>(), visited = IndexSet()
         // Go through the same exact glyph adapter as page selection, including
         // repaired PDF advances and internal artificial word spaces.
         let text = (page.string ?? "") as NSString
         for i in 0..<text.length {
-            let char = page.characterBounds(at:i)
+            if visited.contains(i) { continue }
+            let char = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
             guard char.intersects(selected), let word = SelectionGeometry.initialWord(on:page,at:CGPoint(x:char.midX,y:char.midY),tolerance:0) else { continue }
             let key = SelectionGeometry.identity(for:word)
             guard seen.insert(key).inserted else { continue }
+            for n in 0..<word.numberOfTextRanges(on:page) { visited.insert(integersIn:Range(word.range(at:n,on:page)) ?? 0..<0) }
             let box = SelectionGeometry.placedBounds(of:word,on:page).intersection(selected)
             guard box.width > 0,box.height > 0 else { continue }
-            words.append(GraphWord(text:SelectionGeometry.lookupText(for:word),rect:CGRect(x:(box.minX-selected.minX)/selected.width,y:(selected.maxY-box.maxY)/selected.height,width:box.width/selected.width,height:box.height/selected.height)))
+            let displayBox = view.convert(box,from:page)
+            words.append(GraphWord(text:SelectionGeometry.lookupText(for:word),rect:CGRect(x:(displayBox.minX-displayCrop.minX)/displayCrop.width,y:(displayBox.minY-displayCrop.minY)/displayCrop.height,width:displayBox.width/displayCrop.width,height:displayBox.height/displayCrop.height)))
         }
         return Result(image:image,normalized:CGRect(x:(selected.minX-pageBounds.minX)/pageBounds.width,y:(selected.minY-pageBounds.minY)/pageBounds.height,width:selected.width/pageBounds.width,height:selected.height/pageBounds.height),words:words,page:index)
     }

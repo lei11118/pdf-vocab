@@ -128,6 +128,7 @@ enum StarDictImporter {
         progress("构建词典数据库(0/\(entries.count))…")
         let outURL = try DictionaryStore.dictionaryDirectory().appendingPathComponent(UUID().uuidString + ".sqlite")
         let tmpURL = outURL.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".import")
+        defer { try? fm.removeItem(at: tmpURL) }
         try? fm.removeItem(at: tmpURL)
         let queue = try DatabaseQueue(path: tmpURL.path)
         try queue.write { db in

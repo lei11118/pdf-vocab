@@ -13,6 +13,7 @@ enum BackupService {
         let tmp = fm.temporaryDirectory
             .appendingPathComponent("yuewen-backup-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
         try db.snapshotTo(url: tmp.appendingPathComponent("readword.sqlite"))
         let manifest: [String: Any] = [
             "app": "跃文",
@@ -28,6 +29,12 @@ enum BackupService {
         let archive = try Archive(url: zipURL, accessMode: .create)
         try archive.addEntry(with: "readword.sqlite", relativeTo: tmp)
         try archive.addEntry(with: "manifest.json", relativeTo: tmp)
+        if let assets = try? GraphAssets.directory() {
+            for url in (try? fm.contentsOfDirectory(at: assets, includingPropertiesForKeys: [.isRegularFileKey])) ?? []
+                where ["png", "jpg"].contains(url.pathExtension) {
+                try archive.addEntry(with: "KnowledgeGraphAssets/" + url.lastPathComponent, fileURL: url)
+            }
+        }
         DiagLog.log("backup: exported \(zipURL.lastPathComponent)")
         return zipURL
     }
@@ -51,6 +58,14 @@ enum BackupService {
         let magic = handle.readData(ofLength: 16)
         guard magic.starts(with: Data("SQLite format 3".utf8)) else {
             throw BackupError.notSQLite
+        }
+        // Asset names are UUIDs; stage and validate paths before copying. Older
+        // database-only backups remain readable and current assets are retained.
+        for entry in archive where entry.type == .file && entry.path.hasPrefix("KnowledgeGraphAssets/") {
+            let name = String(entry.path.dropFirst("KnowledgeGraphAssets/".count))
+            guard ["png", "jpg"].contains(URL(fileURLWithPath:name).pathExtension) else { continue }
+            let target = try GraphAssets.url(name)
+            if !fm.fileExists(atPath:target.path) { _ = try archive.extract(entry,to:target) }
         }
         return dest
     }

@@ -15,6 +15,7 @@ struct KnowledgeGraphView: View {
     @State private var moveOrigin: CGRect?
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
+    @State private var moveMode = false
 
     init(docId: String, db: AppDatabase, tools: PencilToolSession, onSource: ((GraphScreenshot) -> Void)? = nil) {
         _model = StateObject(wrappedValue: KnowledgeGraphStore(docId: docId, db: db))
@@ -63,6 +64,7 @@ struct KnowledgeGraphView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("完成") { model.save(immediate: true); dismiss() } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动", systemImage: moveMode ? "text.cursor" : "hand.draw") }
                     Button { add(.text) } label: { Label("文本框", systemImage: "text.badge.plus") }
                     Button { add(.ink) } label: { Label("标记框", systemImage: "pencil.tip.crop.circle.badge.plus") }
                     Button { model.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
@@ -143,6 +145,16 @@ struct KnowledgeGraphView: View {
         .overlay { if selected == node.id { handles(node) } }
         .onTapGesture { selected = node.id }
         .onHover { inside in if inside { selected = node.id } }
+        .overlay {
+            if moveMode {
+                Color.clear.contentShape(Rectangle()).gesture(DragGesture().onChanged { value in
+                    selected = node.id
+                    if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame }
+                    var n = node; n.frame.origin = CGPoint(x:moveOrigin!.minX+value.translation.width/model.graph.zoom,y:moveOrigin!.minY+value.translation.height/model.graph.zoom)
+                    binding(node.id).wrappedValue = n
+                }.onEnded { _ in moveOrigin = nil; model.save() })
+            }
+        }
         .contextMenu {
             Button("置于顶层") { model.checkpoint(); var n = node; n.zIndex = (model.graph.nodes.map(\.zIndex).max() ?? 0)+1; binding(node.id).wrappedValue = n }
             Button("置于底层") { model.checkpoint(); var n = node; n.zIndex = (model.graph.nodes.map(\.zIndex).min() ?? 0)-1; binding(node.id).wrappedValue = n }
