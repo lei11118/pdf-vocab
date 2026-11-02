@@ -83,6 +83,8 @@ final class InteractionPolishTests:XCTestCase {
                 }
                 let document = try XCTUnwrap(PDFDocument(data:data)), page = try XCTUnwrap(document.page(at:0))
                 let text = try XCTUnwrap(page.string) as NSString
+                let decoded = PDFTextLayout.glyphs(on:page).map { $0.text }.joined().filter { !$0.isWhitespace }
+                XCTAssertEqual(decoded,words.joined(),"Content stream decoding: \(name) \(size)")
                 for word in words {
                     let range = text.range(of:word)
                     XCTAssertNotEqual(range.location,NSNotFound)
@@ -95,6 +97,38 @@ final class InteractionPolishTests:XCTestCase {
                 }
             }
         }
+    }
+
+    func testFormTextInheritsResourcesAndAppliesMatrices() throws {
+        let content = "q 2 0 0 2 5 7 cm /Form Do Q"
+        let form = "BT /Body 12 Tf 1 0 0 1 10 40 Tm (Alpha beta) Tj ET"
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << /Font << /Body 6 0 R >> /XObject << /Form 5 0 R >> >> /Contents 4 0 R >>",
+            "<< /Length \(content.utf8.count) >>\nstream\n\(content)\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Matrix [1 0 0 1 20 30] /Length \(form.utf8.count) >>\nstream\n\(form)\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+        ]
+        var data = Data("%PDF-1.4\n".utf8), offsets = [0]
+        for (i, object) in objects.enumerated() {
+            offsets.append(data.count)
+            data.append(Data("\(i+1) 0 obj\n\(object)\nendobj\n".utf8))
+        }
+        let start = data.count
+        var trailer = "xref\n0 \(objects.count+1)\n0000000000 65535 f \n"
+        for offset in offsets.dropFirst() { trailer += String(format:"%010d 00000 n \n",offset) }
+        trailer += "trailer\n<< /Size \(objects.count+1) /Root 1 0 R >>\nstartxref\n\(start)\n%%EOF"
+        data.append(Data(trailer.utf8))
+        let document = try XCTUnwrap(PDFDocument(data:data)), page = try XCTUnwrap(document.page(at:0))
+        let glyphs = PDFTextLayout.glyphs(on:page)
+        XCTAssertEqual(glyphs.map { $0.text }.joined(),"Alpha beta")
+        let first = try XCTUnwrap(glyphs.first)
+        XCTAssertEqual(first.rect.minX,65,accuracy:0.01)
+        XCTAssertEqual(first.rect.minY,141.72,accuracy:0.01)
+        XCTAssertEqual(first.rect.height,24,accuracy:0.01)
+        let selection = SelectionGeometry.initialWord(on:page,at:CGPoint(x:first.rect.midX,y:first.rect.midY))
+        XCTAssertEqual(selection.map { SelectionGeometry.lookupText(for:$0) },"Alpha")
     }
 
     func testLinkBlueOutlinesDoNotModifyPDF() async throws {

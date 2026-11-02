@@ -48,6 +48,28 @@ final class GlyphSelectionTests: XCTestCase {
         }
     }
 
+    func testEveryVisibleCharacterHasAnAlignedSelection() throws {
+        struct Hit: Decodable { let page: Int; let text: String; let point: [Double] }
+        let bundle = Bundle(for:Self.self)
+        let document = try XCTUnwrap(PDFDocument(url:try XCTUnwrap(bundle.url(forResource:"OpenStax-selection",withExtension:"pdf"))))
+        let data = try Data(contentsOf:XCTUnwrap(bundle.url(forResource:"OpenStax-character-hits",withExtension:"json")))
+        let hits = try JSONDecoder().decode([Hit].self,from:data)
+        var failures: [String] = []
+        for hit in hits {
+            let page = try XCTUnwrap(document.page(at:hit.page)), point = CGPoint(x:hit.point[0],y:hit.point[1])
+            let selection = SelectionGeometry.initialWord(on:page,at:point,tolerance:1)
+                ?? SelectionGeometry.initialCharacter(on:page,at:point,tolerance:1)
+            let actual = selection?.string?.precomposedStringWithCompatibilityMapping ?? "<nil>"
+            let aligned = selection.map { SelectionGeometry.placedBounds(of:$0,on:page).insetBy(dx:-1,dy:-1).contains(point) } ?? false
+            if !actual.contains(hit.text.precomposedStringWithCompatibilityMapping) || !aligned {
+                failures.append("page=\(hit.page) char=\(hit.text) point=\(point) actual=\(actual) aligned=\(aligned)")
+            }
+        }
+        print("ALL_CHARACTERS total=\(hits.count) failures=\(failures.count)")
+        for value in failures.prefix(50) { print("CHARACTER_MISS \(value)") }
+        XCTAssertTrue(failures.isEmpty,"\(failures.count)/\(hits.count) character failures: \(failures.prefix(8))")
+    }
+
     func testEveryOriginalTextGlyphIsSelectable() throws {
         struct Hit: Decodable { let page: Int; let text: String; let points: [[Double]] }
         let bundle = Bundle(for: Self.self)
