@@ -7,6 +7,14 @@ import MetalKit
 
 @MainActor
 final class InkRegressionTests: XCTestCase {
+    func testTrailingWordSpaceDoesNotRemoveLastLetter() {
+        let d = CGRect(x: 0,y: 0,width: 4.75,height: 10.5)
+        let e = CGRect(x: 4.75,y: 0,width: 5.7,height: 10.5)
+        let o = CGRect(x: 10.45,y: 0,width: 6.25,height: 10.5)
+        XCTAssertTrue(SelectionGeometry.joinsNominalGlyphs(d,e,leftAdvance:4.75,rightAdvance:4.2))
+        XCTAssertFalse(SelectionGeometry.joinsNominalGlyphs(e,o,leftAdvance:4.2,rightAdvance:4.75))
+    }
+
     func testPositionalSmoothingReducesAlternatingSampleNoise() {
         let points = (0..<40).map { InkPoint(x: Double($0)*2, y: $0 % 2 == 0 ? -0.8 : 0.8, width: 5) }
         let smooth = InkBrush.smoothed(points)
