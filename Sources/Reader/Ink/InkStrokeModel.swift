@@ -25,7 +25,7 @@ struct InkPoint: Codable, Equatable {
 }
 
 struct InkStroke: Codable, Equatable {
-    enum Kind: String, Codable { case pen, pencil, marker, crayon, custom }
+    enum Kind: String, Codable { case pen, brush, pencil, marker, crayon, custom }
     var kind: Kind
     /// sRGB 0...1
     var r: Double, g: Double, b: Double, a: Double

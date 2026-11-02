@@ -579,7 +579,7 @@ final class ReaderCoordinator: NSObject {
     private var wetToolIsRegular: Bool {
         guard let kind = toolSession?.kind else { return false }
         switch kind {
-        case .pen, .pencil, .marker, .crayon: return true
+        case .pen, .brush, .pencil, .marker, .crayon: return true
         case .lasso, .shape, .laser, .eraser: return false
         }
     }
@@ -1513,6 +1513,7 @@ final class ReaderCoordinator: NSObject {
         metalHost?.isDrawingEnabled = on
         let changed = markMode != on
         markMode = on
+        (pdfView as? VocabPDFView)?.handwritingMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
         // 手势层级,一次性设置会被顶掉;SwiftUI 每次 updateUIView 都走这里,天然成为重臂时机。
         pencilPressRef?.isEnabled = !on

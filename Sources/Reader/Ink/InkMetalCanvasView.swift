@@ -221,6 +221,9 @@ final class InkMetalCanvasView: MTKView {
         guard isDrawingEnabled, penDown, let touch = touches.first(where: { $0.type == .pencil }) else { return }
         // 合并采样:优先 coalesced(真实历史点),否则用当前点
         let samples = event?.coalescedTouches(for: touch) ?? [touch]
+        if UserDefaults.standard.bool(forKey: "diagnostics.verbose") {
+            DiagLog.log("ink.samples: coalesced=\(samples.count) predicted=\(event?.predictedTouches(for: touch)?.count ?? 0)")
+        }
         for t in samples where t.timestamp > lastSampleTime {
             appendSample(t)
         }
@@ -297,7 +300,11 @@ final class InkMetalCanvasView: MTKView {
             let speed=Double(dist/max(0.001,viewScale))/dt
             rawWidth *= max(0.72,1-min(0.28,speed/3000))
         }
-        let width = draft.points.last.map { $0.width * 0.12 + rawWidth * 0.88 } ?? rawWidth*0.45
+        let width = draft.points.last.map { previous in
+            let dt = max(0.001, touch.timestamp - previous.time)
+            let alpha = 1 - exp(-dt / 0.018)
+            return previous.width + (rawWidth - previous.width) * alpha
+        } ?? rawWidth
 
         lastTimestamp = touch.timestamp
         draft.points.append(InkPoint(x: Double(viewPoint.x), y: Double(viewPoint.y),
@@ -313,12 +320,8 @@ final class InkMetalCanvasView: MTKView {
         guard !draft.points.isEmpty else { return }
         // A tap is a dot, represented by two coincident control points.
         if draft.points.count == 1 { draft.points.append(draft.points[0]) }
-        var stroke = draft
-        if inkKind == .pen, stroke.points.count > 4 {
-            for offset in 0..<min(4,stroke.points.count) {
-                stroke.points[stroke.points.count-1-offset].width *= 0.25+0.75*Double(offset)/4
-            }
-        }
+        let stroke = draft
+        DiagLog.log("ink.commit: kind=\(stroke.kind.rawValue) samples=\(stroke.points.count) duration=\((stroke.points.last?.time ?? 0) - (stroke.points.first?.time ?? 0))")
         draft.points.removeAll()
         onStrokeCommitted?(stroke)
     }
@@ -346,7 +349,7 @@ final class InkMetalCanvasView: MTKView {
         if penDown, draft.points.count >= 1 {
             // 实时段:预览点只在这里参与,不进 draft
             var live = draft
-            for t in predicted {
+            for t in predicted where t.timestamp > lastSampleTime && t.timestamp - lastSampleTime <= 0.016 {
                 let raw = t.location(in: self)
                 let p = activeProjector?(raw) ?? raw
                 let allowed = clipRects

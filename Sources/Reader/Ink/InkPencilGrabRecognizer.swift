@@ -31,6 +31,31 @@ final class InkPencilGrabRecognizer: UIGestureRecognizer {
         allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
     }
 
+    private var suspended: [UIGestureRecognizer] = []
+    private var releaseWork: DispatchWorkItem?
+    private func isolateInput() {
+        releaseWork?.cancel()
+        guard suspended.isEmpty, let view else { return }
+        func visit(_ v: UIView) {
+            for g in v.gestureRecognizers ?? [] where g !== self && g.isEnabled {
+                suspended.append(g)
+                g.isEnabled = false
+            }
+            v.subviews.forEach(visit)
+        }
+        visit(view)
+        DiagLog.log("ink.input: isolated gestures=\(suspended.count)")
+    }
+    private func releaseInput() {
+        releaseWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.suspended.forEach { $0.isEnabled = true }
+            self.suspended.removeAll()
+        }
+        releaseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
     private var active: Bool { isActive?() ?? true }
 
     // Remaining .possible alone does not stop PDFKit's recognizers from
@@ -41,6 +66,7 @@ final class InkPencilGrabRecognizer: UIGestureRecognizer {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard active else { return }
         guard let touch = touches.first(where: { $0.type == .pencil }) else { return }
+        isolateInput()
         onBegan?(touch, event)
     }
 
@@ -52,15 +78,23 @@ final class InkPencilGrabRecognizer: UIGestureRecognizer {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         guard active else { return }
         onEnded?(touches, event)
+        releaseInput()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         onCancelled?()
+        releaseInput()
     }
 
     override func reset() {
         super.reset()
         onCancelled?()
+        releaseInput()
+    }
+
+    deinit {
+        releaseWork?.cancel()
+        suspended.forEach { $0.isEnabled = true }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

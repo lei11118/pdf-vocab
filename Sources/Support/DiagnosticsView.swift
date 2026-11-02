@@ -10,6 +10,15 @@ struct DiagnosticsView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
+                Toggle("开发者：详细输入诊断", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: "diagnostics.verbose") },
+                    set: { UserDefaults.standard.set($0, forKey: "diagnostics.verbose") }
+                )).padding(.horizontal)
+                Button("记录环境快照 / 问题时间标记") {
+                    RuntimeDiagnostics.snapshot()
+                    DiagLog.log("developer: reproduction marker")
+                    text = DiagLog.readAll()
+                }
                 statusHeader
                 Divider()
                 ScrollView {

@@ -236,7 +236,7 @@ enum SelectionGeometry {
         let height=min(left.height,right.height)
         let gap=right.minX-left.maxX
         return abs(left.midY-right.midY)<height*0.35 && gap>=(-height*0.4)
-            && gap<height*(acrossSpace ? 0.18:0.45)
+            && gap<min(height*(acrossSpace ? 0.06:0.18), min(left.width,right.width)*0.55)
     }
 
     static func visualWordRange(text:NSString,at index:Int,bounds:(Int)->CGRect)->NSRange? {

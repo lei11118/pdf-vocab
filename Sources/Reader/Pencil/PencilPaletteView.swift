@@ -208,7 +208,7 @@ struct PencilPaletteView: View {
                 shapePanel
             case .laser:
                 laserPanel
-            case .pen, .pencil, .marker, .crayon:
+            case .pen, .brush, .pencil, .marker, .crayon:
                 inkPanel
             }
 
@@ -269,7 +269,7 @@ struct PencilPaletteView: View {
 
     private var headerHint: String {
         switch session.kind {
-        case .pen, .pencil: return "颜色 · 笔宽"
+        case .pen, .brush, .pencil: return "颜色 · 笔宽"
         case .marker: return "半透明 · 五档宽度"
         case .crayon: return "蜡质纹理 · 五档宽度"
         case .eraser: return session.eraserWhole ? "整笔擦除" : "局部擦除"

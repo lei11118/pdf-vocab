@@ -5,7 +5,7 @@ import UIKit
 /// 用户可在「文件」App → 我的 iPad → 跃文 → diagnostics.log 中查看并反馈。
 /// 超过 256KB 自动保留后半段。开销极小,正式版保留。
 enum DiagLog {
-    private static let maxBytes = 256 * 1024
+    private static let maxBytes = 2 * 1024 * 1024
     private static let queue = DispatchQueue(label: "diaglog.write")
 
     /// 日志文件(「文件」App / 分享面板 / 诊断页共用)
@@ -16,8 +16,10 @@ enum DiagLog {
 
     /// 读取全部日志
     static func readAll() -> String {
-        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+        queue.sync {
+            guard let url = fileURL, let data = try? Data(contentsOf: url) else { return "" }
+            return String(decoding: data, as: UTF8.self)
+        }
     }
 
     /// 清空日志
@@ -39,7 +41,10 @@ enum DiagLog {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
                let size = attrs[.size] as? Int, size > maxBytes,
                let data = try? Data(contentsOf: url) {
-                try? data.suffix(maxBytes / 2).write(to: url)
+                let tail = data.suffix(maxBytes / 2)
+                if let newline = tail.firstIndex(of: 10) {
+                    try? Data(tail.suffix(from: tail.index(after: newline))).write(to: url)
+                }
             }
 
             if let handle = try? FileHandle(forWritingTo: url) {
@@ -56,8 +61,13 @@ enum DiagLog {
 /// Local lifecycle breadcrumbs help distinguish an idle termination from input failures.
 enum RuntimeDiagnostics {
     private static var observers: [NSObjectProtocol]=[]
+    static func snapshot() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        DiagLog.log("environment: version=\(info["CFBundleShortVersionString"] ?? "?") build=\(info["CFBundleVersion"] ?? "?") OS=\(UIDevice.current.systemVersion) memory=\(ProcessInfo.processInfo.physicalMemory) thermal=\(ProcessInfo.processInfo.thermalState.rawValue) lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+    }
     static func beginSession() {
         guard observers.isEmpty else { return }
+        snapshot()
         let key="diagnostics.previousSessionPhase"
         if let previous=UserDefaults.standard.string(forKey:key) { DiagLog.log("session: previous phase=\(previous); termination cause unknown") }
         UserDefaults.standard.set("active",forKey:key)

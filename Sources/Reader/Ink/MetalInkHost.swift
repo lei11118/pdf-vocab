@@ -115,7 +115,7 @@ final class MetalInkHost: UIView {
         grab.isActive = { [weak self] in
             guard let self else { return false }
             return self.drawingEnabled && self.canvas.isReady &&
-                [.pen, .pencil, .marker, .crayon, .eraser, .lasso, .shape, .laser].contains(self.activeTool)
+                [.pen, .brush, .pencil, .marker, .crayon, .eraser, .lasso, .shape, .laser].contains(self.activeTool)
         }
         grab.onBegan = { [weak self] touch, _ in
             guard let self else { return }

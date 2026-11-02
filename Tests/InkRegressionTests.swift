@@ -7,6 +7,22 @@ import MetalKit
 
 @MainActor
 final class InkRegressionTests: XCTestCase {
+    func testVisualWordDoesNotMergeOrdinarySpace() {
+        let text = "A magnitude 9 earthquake" as NSString
+        let rects = (0..<text.length).map { CGRect(x: Double($0) * 5, y: 0, width: 4, height: 12) }
+        let range = SelectionGeometry.visualWordRange(text: text, at: 4, bounds: { rects[$0] })
+        XCTAssertEqual(range.map { text.substring(with: $0) }, "magnitude")
+    }
+
+    func testBrushAndPenHaveDifferentPressureResponse() {
+        let penLow = InkBrush.width(kind: .pen, base: 4, force: 0, altitude: .pi/2)
+        let penHigh = InkBrush.width(kind: .pen, base: 4, force: 1, altitude: .pi/2)
+        let brushLow = InkBrush.width(kind: .brush, base: 4, force: 0, altitude: .pi/2)
+        let brushHigh = InkBrush.width(kind: .brush, base: 4, force: 1, altitude: .pi/2)
+        XCTAssertGreaterThan(brushHigh / brushLow, penHigh / penLow)
+        XCTAssertEqual(PencilToolKind(rawValue: "brush")?.label, "毛笔")
+    }
+
     func testBrushPoliciesKeepMarkerConstantAndTransparent() {
         XCTAssertEqual(InkBrush.width(kind: .marker, base: 24, force: 0, altitude: .pi/2), 24)
         XCTAssertEqual(InkBrush.width(kind: .marker, base: 24, force: 1, altitude: .pi/6), 24)

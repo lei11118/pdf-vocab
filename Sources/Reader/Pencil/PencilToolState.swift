@@ -119,6 +119,7 @@ enum PencilMetrics {
     static func width(kind: PencilToolKind, index: Int) -> CGFloat {
         let i = min(max(index, 0), 4)
         switch kind {
+        case .brush: return [2.4, 4.0, 6.4, 9.6, 14.0][i]
         case .pen, .shape: return [1.2, 2.0, 3.2, 4.8, 7.0][i]
         case .pencil:      return [1.0, 1.6, 2.4, 3.6, 5.2][i]
         case .marker:      return [10, 16, 24, 34, 46][i]

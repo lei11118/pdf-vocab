@@ -5,6 +5,8 @@ enum InkBrush {
     static func width(kind: InkStroke.Kind, base: Double, force: Double, altitude: Double) -> Double {
         let f = min(1, max(0, force))
         switch kind {
+        case .brush: return base * (0.08 + 1.92 * pow(f, 1.4))
+        case .pen: return base * (0.75 + 0.5 * f)
         case .marker: return base
         case .pencil: return base * (0.4 + 0.6 * f) * (1 + 0.65 * (1 - sin(altitude)))
         case .crayon: return base * (0.75 + 0.25 * f)

@@ -5,13 +5,14 @@ import PencilKit
 /// v0.29.0:移除**书法**笔(自研笔锋/稳定化的输出一直不稳定,用户要求去掉)。
 /// 旧存档里 kind = "calligraphy" 的会在解码时回退成钢笔,不会让整份工具状态失效。
 enum PencilToolKind: String, CaseIterable, Identifiable, Codable {
-    case pen, pencil, marker, crayon, lasso, shape, laser, eraser
+    case pen, brush, pencil, marker, crayon, lasso, shape, laser, eraser
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .pen: return "钢笔"
+        case .brush: return "毛笔"
         case .pencil: return "铅笔"
         case .marker: return "荧光笔"
         case .crayon: return "蜡笔"
@@ -25,6 +26,7 @@ enum PencilToolKind: String, CaseIterable, Identifiable, Codable {
     var systemImage: String {
         switch self {
         case .pen: return "pencil.tip"
+        case .brush: return "paintbrush.pointed"
         case .pencil: return "pencil"
         case .marker: return "highlighter"
         case .crayon: return "scribble"
@@ -201,7 +203,7 @@ final class PencilToolSession: ObservableObject {
     /// v0.17.0:`scale` = 画布超采样倍数 —— 工具宽度按画布坐标放大,视觉宽度不变。
     func makeTool(scale: CGFloat = 1) -> PKTool {
         switch kind {
-        case .pen:
+        case .pen, .brush:
             return PKInkingTool(.pen, color: currentUIColor, width: width * scale)
         case .pencil:
             return PKInkingTool(.pencil, color: currentUIColor, width: width * scale)
