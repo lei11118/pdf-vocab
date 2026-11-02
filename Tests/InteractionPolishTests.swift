@@ -7,6 +7,51 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testTextTapBlocksNativeLinkAndExplicitOpenStillWorks() throws {
+        let url = try XCTUnwrap(Bundle(for:RealPDFSelectionTests.self).url(forResource:"OpenStax-selection",withExtension:"pdf"))
+        let document = try XCTUnwrap(PDFDocument(url:url))
+        let page = try XCTUnwrap(document.page(at:0)), target = try XCTUnwrap(document.page(at:1))
+        let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
+        view.displayMode = .singlePage
+        view.document = document
+        view.scaleFactor = 1.5
+        view.layoutDocumentView()
+        let link = PDFAnnotation(bounds:CGRect(x:160,y:370,width:50,height:18),forType:.link,withProperties:nil)
+        let action = PDFActionGoTo(destination:PDFDestination(page:target,at:CGPoint(x:0,y:700)))
+        link.action = action
+        page.addAnnotation(link)
+        view.go(to:page)
+        view.perform(action)
+        XCTAssertTrue(view.currentPage === page,"native annotation action must not navigate")
+        var texts: [String] = []
+        let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 { texts.append(info.text) } })
+        coordinator.pdfView = view
+        coordinator.hapticsEnabled = false
+        let tap = CompletedWordTap(point:view.convert(CGPoint(x:183.4946,y:377.4785),from:page))
+        coordinator.perform(NSSelectorFromString("handleTap:"),with:tap)
+        XCTAssertEqual(texts.last,"Functions")
+        XCTAssertTrue(view.currentPage === page,"selecting linked text must preserve page")
+        coordinator.clearTempHighlight()
+        view.openLink(link)
+        XCTAssertTrue(view.currentPage === target,"explicit link action must remain available")
+    }
+
+    func testNativeSingleTapSuppressionPreservesScrollAndPinch() {
+        let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
+        let content = UIView(frame:view.bounds)
+        view.addSubview(content)
+        let nativeLink = UITapGestureRecognizer()
+        let pan = UIPanGestureRecognizer(), pinch = UIPinchGestureRecognizer()
+        content.addGestureRecognizer(nativeLink)
+        content.addGestureRecognizer(pan)
+        content.addGestureRecognizer(pinch)
+        let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ _ in })
+        coordinator.suppressNativeSelection(in:view)
+        XCTAssertFalse(nativeLink.isEnabled)
+        XCTAssertTrue(pan.isEnabled)
+        XCTAssertTrue(pinch.isEnabled)
+    }
+
     func testWordPickingStartsWithOneWordAndRejectsWhitespace() throws {
         XCTAssertTrue(SelectionGeometry.isSingleWordText("don't"))
         XCTAssertTrue(SelectionGeometry.isSingleWordText("well-known"))

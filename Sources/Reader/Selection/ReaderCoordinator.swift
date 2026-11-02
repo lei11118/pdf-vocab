@@ -492,6 +492,12 @@ final class ReaderCoordinator: NSObject {
         menu.textProvider = { [weak self] in
             self?.selectionText ?? ""
         }
+        menu.linkProvider = { [weak self] in self?.selectedLink() }
+        menu.onOpenLink = { [weak self] in
+            guard let self, let link = self.selectedLink(), let view = self.pdfView as? VocabPDFView else { return }
+            self.clearSelection()
+            view.openLink(link)
+        }
         menu.install(on: view)
         menu.targetRectProvider = { [weak self] _ in
             self?.menuEnvelopeRect()
@@ -674,7 +680,7 @@ final class ReaderCoordinator: NSObject {
         clearWetInk()
     }
 
-    /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放与链接单击。
+    /// 停用 PDFKit 内置的选择手势(长按 / 双击)。保留滚动、缩放；链接改为选词菜单中明确打开。
     func suppressNativeSelection(in view: UIView?) {
         guard let view else { return }
         var disabled = 0
@@ -688,7 +694,10 @@ final class ReaderCoordinator: NSObject {
                 let isMultiTap = (gr as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
                 // v0.6.6:回退"按类名压制私有手势"(v0.6.5 的做法在文字层 PDF 上误伤 PDFKit 文本链路,
                 // 导致"不能选词");泄漏改由 selectionDidChange 的即时清除兜底。
-                if (isLongPress || isMultiTap), gr.isEnabled {
+                let isLinkTap = (gr as? UITapGestureRecognizer).map {
+                    $0.numberOfTapsRequired == 1 && $0.numberOfTouchesRequired == 1
+                } ?? false
+                if (isLongPress || isMultiTap || isLinkTap), gr.isEnabled {
                     gr.isEnabled = false
                     disabled += 1
                 }
@@ -1125,6 +1134,7 @@ final class ReaderCoordinator: NSObject {
                 return
             }
         }
+        if selectText(at: point, source: "tap") { return }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
         guard !rects.isEmpty || menu.isPresented else { return }
         DiagLog.log("tap: clear all (menu+selection together)")
@@ -1136,29 +1146,44 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, gesture.state == .ended else { return }
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
-        if let hit = pageHit(viewPoint) {
-            DiagLog.log(String(format: "doubleTap.hit: page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f",
-                currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y, hit.point.x, hit.point.y, pdfView.scaleFactor))
-        }
-        if let hit = pageHit(viewPoint),
-           let word = SelectionGeometry.initialWord(on: hit.page, at: hit.point,
-               tolerance: min(8, 6 / max(pdfView.scaleFactor, 0.1))),
-           SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
-            DiagLog.log("doubleTap: word=「\(SelectionGeometry.logSnippet(word.string ?? ""))」")
-            applySelection(word, src: "doubleTap")
+        _ = selectText(at: viewPoint, source: "doubleTap")
+    }
+
+    @discardableResult
+    private func selectText(at viewPoint: CGPoint, source: String) -> Bool {
+        guard let pdfView, let hit = pageHit(viewPoint) else { return false }
+        let tolerance = min(8, 6 / max(pdfView.scaleFactor, 0.1))
+        let link = hit.page.annotations.contains { $0.type == "Link" && $0.bounds.contains(hit.point) }
+        let roundTrip = pdfView.convert(hit.point, from: hit.page)
+        DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
+            source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
+            hit.point.x, hit.point.y, pdfView.scaleFactor, hypot(roundTrip.x-viewPoint.x,roundTrip.y-viewPoint.y), link ? 1 : 0))
+        if let selection = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
+            ?? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance) {
+            DiagLog.log("selection.result: source=\(source) text=「\(SelectionGeometry.logSnippet(selection.string ?? ""))」")
+            applySelection(selection, src: source)
             refreshHandles()
             presentMenu()
             if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
-            return
+            return true
         }
-        // v0.11.0(M6):扫描版双击选词(OCR 词框)
-        if let hit = pageHit(viewPoint), let idx = ocrWordIndex(at: hit.point, on: hit.page) {
-            DiagLog.log("doubleTap: ocr word #\(idx)")
-            applyOCRSelection(page: hit.page, range: idx...idx, src: "doubleTap")
+        if let idx = ocrWordIndex(at: hit.point, on: hit.page) {
+            applyOCRSelection(page: hit.page, range: idx...idx, src: source)
             refreshHandles()
             presentMenu()
-            if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
+            return true
         }
+        DiagLog.log("selection.miss: source=\(source) page=\(currentPageIndexFor(page: hit.page))")
+        return false
+    }
+
+    private func selectedLink() -> PDFAnnotation? {
+        for item in rects {
+            if let link = item.page.annotations.first(where: {
+                $0.type == "Link" && $0.bounds.intersects(item.rect)
+            }) { return link }
+        }
+        return nil
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。

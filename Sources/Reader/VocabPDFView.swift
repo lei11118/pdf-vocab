@@ -6,6 +6,19 @@ import PDFKit
 /// 造成卡死甚至被系统杀死(社区已知问题)。其余菜单项(复制等)保留。
 final class VocabPDFView: PDFView {
     var handwritingMode = false
+
+    // Text selection owns page taps. Native annotation actions must never run
+    // before the second tap/long press and move the page under the user's finger.
+    override func perform(_ action: PDFAction) {
+        DiagLog.log("link: native action blocked type=\(type(of: action))")
+    }
+
+    func openLink(_ annotation: PDFAnnotation) {
+        DiagLog.log("link: explicitly opened")
+        if let action = annotation.action { super.perform(action) }
+        else if let destination = annotation.destination { go(to: destination) }
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // Resolve enlarged handle targets before PDFKit's page tree can cover them.
         let handles=subviews.compactMap { $0 as? SelectionHandleView }.filter {

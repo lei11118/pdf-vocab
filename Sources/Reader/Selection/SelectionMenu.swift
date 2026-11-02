@@ -19,6 +19,9 @@ final class SelectionMenuController: NSObject {
     /// 当前选词的收录状态(收录与否 + 现有高亮色),菜单构建时取一次
     var vocabStateProvider: (() -> (collected: Bool, colorName: String?))?
 
+    var linkProvider: (() -> PDFAnnotation?)?
+    var onOpenLink: (() -> Void)?
+
     private(set) var isPresented = false
     private var interaction: UIEditMenuInteraction?
 
@@ -210,6 +213,12 @@ extension SelectionMenuController: UIEditMenuInteractionDelegate {
             children: [collect, highlightMenu, removeHighlight]
         )
 
-        return UIMenu(children: [copy, lookup, translate, vocabMenu, webSearch, share])
+        var actions: [UIMenuElement] = [copy, lookup, translate, vocabMenu, webSearch, share]
+        if linkProvider?() != nil {
+            actions.insert(UIAction(title: "打开链接", image: UIImage(systemName: "link")) { [weak self] _ in
+                self?.onOpenLink?()
+            }, at: 0)
+        }
+        return UIMenu(children: actions)
     }
 }

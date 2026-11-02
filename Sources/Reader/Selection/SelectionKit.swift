@@ -161,6 +161,20 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 // MARK: - 几何与合法性(全部集中于此,避免散落)
 
 enum SelectionGeometry {
+    private final class GlyphMap {
+        weak var page: PDFPage?
+        let text: String
+        let rotation: Int
+        let glyphs: [Int: CGRect]
+        let nominal: [String: CGFloat]
+        init(page: PDFPage, text: String, glyphs: [Int: CGRect], nominal: [String: CGFloat]) {
+            self.page = page; self.text = text; rotation = page.rotation
+            self.glyphs = glyphs; self.nominal = nominal
+        }
+    }
+    // Bounded, weak page ownership; do not retain closed documents.
+    private static var glyphMaps: [GlyphMap] = []
+
 
     /// Include text ranges and geometry: repeated words on a page are distinct selections.
     static func identity(for selection: PDFSelection) -> String {
@@ -194,7 +208,9 @@ enum SelectionGeometry {
         for candidate in max(0, hint - 8)...min(text.length - 1, hint + 8) { inspect(candidate) }
         // Broken text runs can give a character index far from the visible hit.
         // Only scan the full page on a missed local hit; require the same geometry.
-        if best == nil { for candidate in 0..<text.length { inspect(candidate) } }
+        // A local tolerance hit is not proof of an exact global hit. Index
+        // sequences can diverge, so compare all geometry before accepting it.
+        if best?.distance != 0 { for candidate in 0..<text.length { inspect(candidate) } }
         return best?.index
     }
 
@@ -213,6 +229,9 @@ enum SelectionGeometry {
         // PDFKit distributes TJ word spacing into adjacent selection rectangles.
         // Recover nominal advances from matching glyphs rather than treating those
         // expanded rectangles as the visible glyph outline.
+        if let cached = glyphMaps.first(where: { $0.page === page && $0.text == text && $0.rotation == page.rotation }) {
+            glyphs = cached.glyphs; nominal = cached.nominal
+        } else {
         for i in 0..<ns.length {
             let rect = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
             glyphs[i] = rect
@@ -220,6 +239,10 @@ enum SelectionGeometry {
                 let key = metricKey(i,rect)
                 nominal[key] = min(nominal[key] ?? rect.width,rect.width)
             }
+        }
+        glyphMaps.removeAll { $0.page == nil || $0.page === page }
+        if glyphMaps.count >= 8 { glyphMaps.removeFirst() }
+        glyphMaps.append(GlyphMap(page:page,text:text,glyphs:glyphs,nominal:nominal))
         }
         let attributed = page.attributedString
         func bounds(_ index: Int) -> CGRect {
@@ -245,6 +268,26 @@ enum SelectionGeometry {
               isSingleWordText(lookupText(for: word)),
               containsTouch(word, on: page, point: point, tolerance: tolerance) else { return nil }
         return word
+    }
+
+    static func initialCharacter(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
+        guard let text = page.string else { return nil }
+        let ns = text as NSString
+        var best: (selection: PDFSelection, distance: CGFloat)?
+        for index in 0..<ns.length {
+            guard let scalar = Unicode.Scalar(ns.character(at:index)),
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar),
+                  let selection = page.selection(for:NSRange(location:index,length:1)) else { continue }
+            let rect = selection.bounds(for:page)
+            guard isValid(rect) else { continue }
+            let dx = max(rect.minX-point.x,0,point.x-rect.maxX)
+            let dy = max(rect.minY-point.y,0,point.y-rect.maxY)
+            let limit = min(tolerance,rect.height*0.25)
+            guard dx <= limit, dy <= limit else { continue }
+            let distance = dx*dx+dy*dy
+            if best == nil || distance < best!.distance { best = (selection,distance) }
+        }
+        return best?.selection
     }
 
     /// PDFKit can return a plausible word whose selected range belongs elsewhere.

@@ -46,4 +46,29 @@ final class RealPDFSelectionTests: XCTestCase {
             XCTAssertEqual(actual, expected, "page \(index) at \(point)")
         }
     }
+
+    func testEveryOriginalTextGlyphIsSelectable() throws {
+        struct Hit: Decodable { let page: Int; let text: String; let points: [[Double]] }
+        let bundle = Bundle(for: Self.self)
+        let url = try XCTUnwrap(bundle.url(forResource:"OpenStax-selection",withExtension:"pdf"))
+        let document = try XCTUnwrap(PDFDocument(url:url))
+        let fixture = try XCTUnwrap(bundle.url(forResource:"OpenStax-glyph-hits",withExtension:"json"))
+        let hits = try JSONDecoder().decode([Hit].self,from:Data(contentsOf:fixture))
+        var failures: [String] = [], total = 0
+        for hit in hits {
+            let page = try XCTUnwrap(document.page(at:hit.page))
+            for (offset, coordinates) in hit.points.enumerated() {
+                total += 1
+                let point = CGPoint(x:coordinates[0],y:coordinates[1])
+                let selection = SelectionGeometry.initialWord(on:page,at:point,tolerance:1)
+                let actual = selection.map { SelectionGeometry.lookupText(for:$0) } ?? "<nil>"
+                if actual != hit.text {
+                    failures.append("page=\(hit.page) word=\(hit.text) glyph=\(offset) at=\(point) actual=\(actual)")
+                }
+            }
+        }
+        print("ALL_GLYPHS total=\(total) failures=\(failures.count)")
+        for failure in failures.prefix(100) { print("GLYPH_MISS \(failure)") }
+        XCTAssertTrue(failures.isEmpty,"\(failures.count)/\(total) glyph failures: \(failures.prefix(12))")
+    }
 }
