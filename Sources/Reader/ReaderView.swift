@@ -603,87 +603,81 @@ struct ReaderView: View {
     }
 
     private func reader(for url: URL) -> some View {
-        pdfArea
-            .transaction { $0.animation = nil }
-            .overlay {
-                // v0.12.0(M7):夜间模式(降低纸张亮度;不改动页面内容)
-                if nightMode {
-                    Color.black.opacity(0.52)
-                        .allowsHitTesting(false)
+        pdfArea.transaction { $0.animation = nil }
+            .overlay { if nightMode { Color.black.opacity(0.52).allowsHitTesting(false) } }
+            .animation(.easeInOut(duration:0.2),value:nightMode)
+            .overlay { wordOverlay }
+            .animation(reduceMotion ? nil : .easeOut(duration:0.18),value:cardContent)
+            .overlay { arcOverlay }
+            .animation(reduceMotion ? nil : DS.Motion.spring,value:arcAnchor)
+            .overlay { captureOverlay }
+            .overlay(alignment:.bottom) { captureToast }
+    }
+    private var wordOverlay: some View {
+    GeometryReader { geo in
+        if let content = cardContent {
+            FloatingCardWindow(
+                content: content,
+                bounds: geo.size,
+                onClose: { cardContent = nil },
+                onSelectWord: { word in
+                    cardContent = .word(word)
+                    autoSpeak(word)
+                },
+                vocab: cardVocab,
+                onTranslate: { text in
+                    translateText = text
+                    showTranslate = true
                 }
-            }
-            .animation(.easeInOut(duration: 0.2), value: nightMode)
-            .overlay {
-                GeometryReader { geo in
-                    if let content = cardContent {
-                        FloatingCardWindow(
-                            content: content,
-                            bounds: geo.size,
-                            onClose: { cardContent = nil },
-                            onSelectWord: { word in
-                                cardContent = .word(word)
-                                autoSpeak(word)
-                            },
-                            vocab: cardVocab,
-                            onTranslate: { text in
-                                translateText = text
-                                showTranslate = true
-                            }
-                        )
+            )
+        }
+        // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
+        if let preview = wordInteraction.preview {
+            HoverTipView(
+                term: preview.term,
+                detail: preview.detail,
+                anchor: preview.point,
+                bounds: geo.size
+            )
+        }
+    }
+    }
+    private var arcOverlay: some View {
+    GeometryReader { geo in
+        if let arcAnchor {
+            PencilArcMenu(
+                session: pencilTools,
+                anchor: arcAnchor,
+                bounds: geo.size,
+                marking: markMode,
+                canUndo: inkUndoRevision >= 0 && (readerHandle.coordinator?.canUndoInk ?? false),
+                canRedo: readerHandle.coordinator?.canRedoInk ?? false,
+                onUndo: { readerHandle.coordinator?.undoInk(); inkUndoRevision += 1 },
+                onRedo: { readerHandle.coordinator?.redoInk(); inkUndoRevision += 1 },
+                onScreenshot: { capturing = true },
+                onMode: { markMode.toggle() },
+                onSelect: { markMode = true },
+                onDismiss: { self.arcAnchor = nil }
+            )
+        }
+    }
+    }
+    @ViewBuilder private var captureOverlay: some View {
+        if capturing { GraphCaptureOverlay(onCancel:{ capturing = false },onConfirm:capture) }
+    }
+    @ViewBuilder private var captureToast: some View {
+        if let captureMessage {
+            HStack {
+                if let captureThumbnail { Image(uiImage:captureThumbnail).resizable().scaledToFit().frame(width:48,height:36).accessibilityHidden(true) }
+                Text(captureMessage)
+                if let id = lastCaptureId {
+                    Button("撤销") {
+                        graphModel.checkpoint(); graphModel.graph.delete(id); graphModel.save(immediate:true)
+                        self.captureMessage = nil; lastCaptureId = nil; captureThumbnail = nil
                     }
-                    // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
-                    if let preview = wordInteraction.preview {
-                        HoverTipView(
-                            term: preview.term,
-                            detail: preview.detail,
-                            anchor: preview.point,
-                            bounds: geo.size
-                        )
-                    }
                 }
-            }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: cardContent)
-            .overlay {
-                // v0.15.0:挤压 → 围绕笔尖的弧形工具盘(撤销 / 钢笔 / 铅笔 / 荧光笔 / 橡皮)
-                GeometryReader { geo in
-                    if let arcAnchor {
-                        PencilArcMenu(
-                            session: pencilTools,
-                            anchor: arcAnchor,
-                            bounds: geo.size,
-                            marking: markMode,
-                            canUndo: inkUndoRevision >= 0 && (readerHandle.coordinator?.canUndoInk ?? false),
-                            canRedo: readerHandle.coordinator?.canRedoInk ?? false,
-                            onUndo: { readerHandle.coordinator?.undoInk(); inkUndoRevision += 1 },
-                            onRedo: { readerHandle.coordinator?.redoInk(); inkUndoRevision += 1 },
-                            onScreenshot: { capturing = true },
-                            onMode: { markMode.toggle() },
-                            onSelect: { markMode = true },
-                            onDismiss: { self.arcAnchor = nil }
-                        )
-                    }
-                }
-            }
-            .animation(reduceMotion ? nil : DS.Motion.spring, value: arcAnchor)
-            .overlay {
-                if capturing {
-                    GraphCaptureOverlay(onCancel: { capturing = false }, onConfirm: { rect in capture(rect) })
-                }
-            }
-            .overlay(alignment: .bottom) {
-                if let captureMessage {
-                    HStack {
-                        if let captureThumbnail { Image(uiImage:captureThumbnail).resizable().scaledToFit().frame(width:48,height:36).accessibilityHidden(true) }
-                        Text(captureMessage)
-                        if let id = lastCaptureId {
-                            Button("撤销") {
-                                graphModel.checkpoint(); graphModel.graph.delete(id); graphModel.save(immediate: true)
-                                self.captureMessage = nil; lastCaptureId = nil; captureThumbnail = nil
-                            }
-                        }
-                    }.padding().background(.regularMaterial,in:RoundedRectangle(cornerRadius:12)).padding(.bottom,100)
-                }
-            }
+            }.padding().background(.regularMaterial,in:RoundedRectangle(cornerRadius:12)).padding(.bottom,100)
+        }
     }
 
     private func capture(_ rect: CGRect) {
