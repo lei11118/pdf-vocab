@@ -45,7 +45,9 @@ jobs:
           key: ecdict-sqlite-1.0.28
 
       - name: Build bundled dictionary (ECDICT slim)
-        run: python3 scripts/build_dict.py
+        run: |
+          python3 scripts/build_dict.py
+          python3 scripts/build_science.py
 
       - name: Generate Xcode project
         run: xcodegen generate

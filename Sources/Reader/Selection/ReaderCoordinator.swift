@@ -465,7 +465,7 @@ final class ReaderCoordinator: NSObject {
         applyToolSession(force: true)
 
         // v0.14.0:自绘浮动工具带取代系统 PKToolPicker —— Pencil 系统手势回到自定义映射:
-        // 挤压 = 切换标记/选词模式;轻点两下 = 橡皮 ⇄ 上一支笔(Notability 式手写体验)。
+        // 挤压 = 切换标记/阅读模式;轻点两下 = 橡皮 ⇄ 上一支笔(Notability 式手写体验)。
         let pencilInteraction = UIPencilInteraction()
         pencilInteraction.delegate = self
         view.addInteraction(pencilInteraction)
@@ -497,7 +497,7 @@ final class ReaderCoordinator: NSObject {
             self?.menuEnvelopeRect()
         }
 
-        // v0.11.0(M4-B):悬停预览(Pencil 悬停;仅在选词模式 + 开关开启时生效,见 handleHover)
+        // v0.11.0(M4-B):悬停预览(Pencil 悬停;仅在阅读模式 + 开关开启时生效,见 handleHover)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
         view.addGestureRecognizer(hover)
 
@@ -1520,7 +1520,7 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("vocab: highlights removed 「\(key)」")
     }
 
-    /// v0.9.0(M4):标记 / 选词模式切换——标记模式下 Pencil 交给画布(Pencil 专属选区手势让位),
+    /// v0.9.0(M4):标记 / 阅读模式切换——标记模式下 Pencil 交给画布(Pencil 专属选区手势让位),
     /// 手指的滚动/缩放/长按选词两种模式都保留;切到标记模式时清掉当前选区。
     func setMarkMode(_ on: Bool) {
         // v0.28.0:PDFView 会在加载/翻页/重排时重建内部层级,湿墨层每次都要重新置顶;
@@ -1534,7 +1534,7 @@ final class ReaderCoordinator: NSObject {
             if rulerOverlay.superview == nil { pdfView.addSubview(rulerOverlay) }
             pdfView.bringSubviewToFront(rulerOverlay)
         }
-        // v0.40.1:单画布只在书写模式接管触摸;选词模式整层穿透,
+        // v0.40.1:单画布只在书写模式接管触摸;阅读模式整层穿透,
         // 否则会挡住长按选词、拖柄拖动与 Pencil 悬停查词。
         inkSurface?.setDrawingEnabled(on)
         metalHost?.isDrawingEnabled = on
@@ -1797,6 +1797,8 @@ final class ReaderCoordinator: NSObject {
             setScale(percent / 100, on: pdfView, tag: "\(Int(percent))%")
         }
 
+    var canUndoInk: Bool { metalHost?.canUndo ?? inkSurface?.canUndo ?? false }
+    var canRedoInk: Bool { metalHost?.canRedo ?? inkSurface?.canRedo ?? false }
     func undoInk() {
         // v0.47.0:自研 Metal 引擎有自己的撤销栈(它不经过 PencilKit 的 undoManager)
         if let host = metalHost { host.undo(); return }
@@ -2564,7 +2566,7 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
     /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(0.7s 内 20 次)。
     /// v0.19.0:改为只响应 `.began`(每次挤压一次),再用 0.25s 去重;回调里不做重活。
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .began else { return }
+        guard squeeze.phase == .ended else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastSqueezeAt > 0.25 else { return }
         lastSqueezeAt = now
@@ -2573,10 +2575,7 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
             DiagLog.log("pencil: squeeze ignored (off)")
             return
         }
-        if !markMode {
-            setMarkMode(true)
-        }
-        if action == "eraser", let session = toolSession {
+        if action == "eraser", markMode, let session = toolSession {
             session.toggleEraser()
             applyToolSession()
             PencilHaptics.selectionCompleted(at: lastTouchViewPoint)
@@ -2586,10 +2585,10 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
         // v0.23.0:优先用 Pencil Pro 悬停位置(3 秒内),把工具盘开在笔尖处;否则退回最近触摸点
         let hoverFresh = CFAbsoluteTimeGetCurrent() - lastHoverAt < 3.0 && lastHoverViewPoint != .zero
         let point: CGPoint
-        if hoverFresh {
+        if let location = squeeze.hoverPose?.location {
+            point = location
+        } else if hoverFresh {
             point = lastHoverViewPoint
-        } else if lastTouchViewPoint != .zero {
-            point = lastTouchViewPoint
         } else {
             point = CGPoint(x: pdfView?.bounds.midX ?? 0, y: pdfView?.bounds.midY ?? 0)
         }

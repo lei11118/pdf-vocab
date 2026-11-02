@@ -13,6 +13,7 @@ struct DictEntry: Equatable {
     var tags: [String]
     var bnc: Int
     var frq: Int
+    var sources: [String] = []
 }
 
 /// 词典访问(v0.13.0):内置精简 ECDICT + **用户导入的 StarDict 词典**(userdict.sqlite,查词时优先命中)。
@@ -21,8 +22,11 @@ final class DictionaryStore: @unchecked Sendable {
 
     private var builtinQueue: DatabaseQueue?
     private var userQueue: DatabaseQueue?
+    private var imports: [(String, DatabaseQueue)] = []
+    private var scienceQueue: DatabaseQueue?
+    private let lock = NSRecursiveLock()
 
-    var isAvailable: Bool { builtinQueue != nil || userQueue != nil }
+    var isAvailable: Bool { builtinQueue != nil || scienceQueue != nil || !imports.isEmpty }
     var hasUserDictionary: Bool { userQueue != nil }
 
     private init() {
@@ -33,6 +37,10 @@ final class DictionaryStore: @unchecked Sendable {
             DiagLog.log("dict: 内置词库已加载 \(url.lastPathComponent)")
         } else {
             DiagLog.log("dict: 内置词库缺失(此构建未包含)")
+        }
+        if let url = Bundle.main.url(forResource: "science", withExtension: "sqlite") {
+            var config = Configuration(); config.readonly = true
+            scienceQueue = try? DatabaseQueue(path: url.path, configuration: config)
         }
         loadUserDictionary()
     }
@@ -46,6 +54,7 @@ final class DictionaryStore: @unchecked Sendable {
     }
 
     private func loadUserDictionary() {
+        imports = importedQueues()
         userQueue = nil
         guard let url = try? Self.userDatabaseURL(),
               FileManager.default.fileExists(atPath: url.path) else { return }
@@ -57,6 +66,7 @@ final class DictionaryStore: @unchecked Sendable {
 
     /// 导入 / 移除后刷新。
     func reloadUserDictionary() {
+        lock.lock(); defer { lock.unlock() }
         loadUserDictionary()
     }
 
@@ -70,9 +80,39 @@ final class DictionaryStore: @unchecked Sendable {
     // MARK: - 查询(用户词典优先)
 
     func entry(for word: String) -> DictEntry? {
+        lock.lock(); defer { lock.unlock() }
         let key = word.lowercased()
-        if let userQueue, let entry = queryEntry(in: userQueue, key: key) { return entry }
-        return queryEntry(in: builtinQueue, key: key)
+        var matches: [(String, DictEntry)] = []
+        for (id, queue) in imports where isEnabled(id) {
+            if let entry = queryEntry(in: queue, key: key) {
+                let name = (try? queue.read { db in try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key='bookname'") }) ?? id
+                matches.append((name, entry))
+            }
+        }
+        if let scienceQueue {
+            let rows = (try? scienceQueue.read { db in try Row.fetchAll(db, sql: "SELECT * FROM dict WHERE word=? ORDER BY domain", arguments: [key]) }) ?? []
+            for row in rows {
+                let domain: String = row["domain"]
+                if isEnabled("science.\(domain)") {
+                    matches.append(("ECDICT · \(ScienceDomains.names[domain] ?? domain)", Self.entry(from: row)))
+                }
+            }
+        }
+        if isEnabled("builtin"), let entry = queryEntry(in: builtinQueue, key: key) {
+            matches.append(("ECDICT 通用", entry))
+        }
+        guard var result = matches.first?.1 else { return nil }
+        result.sources = matches.map(\.0)
+        func combined(_ field: (DictEntry) -> String?) -> String? {
+            let sections = matches.compactMap { name, entry -> String? in
+                guard let value = field(entry), !value.isEmpty else { return nil }
+                return "【\(name)】\n\(value)"
+            }
+            return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
+        }
+        result.translation = combined { $0.translation }
+        result.definition = combined { $0.definition }
+        return result
     }
 
     private func queryEntry(in queue: DatabaseQueue?, key: String) -> DictEntry? {
@@ -93,8 +133,10 @@ final class DictionaryStore: @unchecked Sendable {
     /// 词形 → 词头(用户词典优先;用户词典通常无词形表,自动跳内置)。
     func headword(forForm form: String) -> String? {
         let key = form.lowercased()
-        for queue in [userQueue, builtinQueue] {
-            guard let queue else { continue }
+        lock.lock(); defer { lock.unlock() }
+        var queues = imports.filter { isEnabled($0.0) }.map(\.1)
+        if isEnabled("builtin"), let builtinQueue { queues.append(builtinQueue) }
+        for queue in queues {
             let head = (try? queue.read { db in
                 try String.fetchOne(db, sql: "SELECT word FROM form WHERE form = ?", arguments: [key])
             }) ?? nil

@@ -126,8 +126,8 @@ enum StarDictImporter {
 
         // 5) 逐条读取释义并入库(每 2000 条一个事务)
         progress("构建词典数据库(0/\(entries.count))…")
-        let outURL = try DictionaryStore.userDatabaseURL()
-        let tmpURL = outURL.deletingLastPathComponent().appendingPathComponent("userdict.import.sqlite")
+        let outURL = try DictionaryStore.dictionaryDirectory().appendingPathComponent(UUID().uuidString + ".sqlite")
+        let tmpURL = outURL.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".import")
         try? fm.removeItem(at: tmpURL)
         let queue = try DatabaseQueue(path: tmpURL.path)
         try queue.write { db in
@@ -144,9 +144,9 @@ enum StarDictImporter {
         var written = 0
         var skipped = 0
         var batch: [(String, String?, String)] = []
-        func flush(_ items: [(String, String?, String)]) {
+        func flush(_ items: [(String, String?, String)]) throws {
             guard !items.isEmpty else { return }
-            try? queue.write { db in
+            try queue.write { db in
                 for item in items {
                     try db.execute(
                         sql: "INSERT OR IGNORE INTO dict (word, phonetic, translation) VALUES (?, ?, ?)",
@@ -170,15 +170,15 @@ enum StarDictImporter {
             batch.append((word, phonetic, text))
             written += 1
             if batch.count >= 2_000 {
-                flush(batch)
+                try flush(batch)
                 batch.removeAll(keepingCapacity: true)
             }
         }
-        flush(batch)
+        try flush(batch)
+        guard written > 0 else { throw ImportError.emptyDictionary }
         try queue.close()
 
         // 6) 安装(原子替换)
-        try? fm.removeItem(at: outURL)
         try fm.moveItem(at: tmpURL, to: outURL)
         DiagLog.log("stardict: imported 「\(bookName)」 entries=\(written) skipped=\(skipped)")
         return ImportResult(bookName: bookName, entryCount: written)

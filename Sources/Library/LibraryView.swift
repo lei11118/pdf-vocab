@@ -96,11 +96,7 @@ struct LibraryView: View {
                 }, docStore: store, onClose: close)
             }
             .fullScreenCover(isPresented:$showGraph) {
-                let vocab=VocabStore(db:store.db)
-                VocabGraphView(store:vocab,words:vocab.listWords(),onJump:{ target in
-                    showGraph=false
-                    DispatchQueue.main.asyncAfter(deadline:.now()+0.4) { readerJump=target }
-                })
+                KnowledgeGraphLibrary(store: store)
             }
             .overlay {
                 if let importingLabel {
@@ -189,11 +185,11 @@ struct LibraryView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: DS.Space.l) {
                     deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
-                    deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                    deskAction(title: "知识图谱", detail: "截图、笔记与手动连线", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
                 }
                 VStack(spacing: DS.Space.l) {
                     deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
-                    deskAction(title: "知识图谱", detail: "探索词与词的联系", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                    deskAction(title: "知识图谱", detail: "截图、笔记与手动连线", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
                 }
             }
         }

@@ -1,0 +1,15 @@
+{
+  "source": "https://github.com/skywind3000/ECDICT/releases/tag/1.0.28",
+  "license": "MIT",
+  "transformation": "Explicit subject labels from full ECDICT; categories overlap.",
+  "counts": {
+    "math": 8961,
+    "physics": 25170,
+    "chemistry": 73983,
+    "medicine": 151095,
+    "biology": 8366,
+    "computing": 71311,
+    "engineering": 33204,
+    "earth": 4604
+  }
+}

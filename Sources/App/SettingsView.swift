@@ -32,6 +32,9 @@ struct SettingsView: View {
     @State private var showStarDictPicker = false
     @State private var dictImporting = false
     @State private var userDictName: String?
+    @State private var dictionarySources: [DictionarySource] = []
+    @State private var dictionaryRevision = 0
+    @AppStorage("toolArc.leftHanded") private var leftHanded = false
 
     var body: some View {
         NavigationStack {
@@ -76,7 +79,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Pencil")
                 } footer: {
-                    Text("悬停预览:选词模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。「贴边自动滚动」:写字靠近屏幕上下边缘时自动滚页,写满一页可继续往下写。")
+                    Text("悬停预览:阅读模式下把 Apple Pencil 悬停在单词上方,稍候显示迷你释义。触觉反馈:选词完成与加入生词本时给出轻触反馈(仅 Apple Pencil Pro / 妙控键盘触控板有效,手指与旧款 Pencil 无触觉)。「贴边自动滚动」:写字靠近屏幕上下边缘时自动滚页,写满一页可继续往下写。")
                 }
                 Section {
                     Button {
@@ -103,18 +106,26 @@ struct SettingsView: View {
                         Label(dictImporting ? "正在导入词典…" : "导入 StarDict 词典", systemImage: "character.book.closed")
                     }
                     .disabled(dictImporting)
-                    if userDictName != nil {
-                        Button(role: .destructive) {
-                            removeUserDictionary()
-                        } label: {
-                            Label("移除用户词典", systemImage: "trash")
+                    ForEach(dictionarySources) { source in
+                        Toggle(isOn: Binding(get: {
+                            _ = dictionaryRevision
+                            return DictionaryStore.shared.isEnabled(source.id)
+                        }, set: { enabled in
+                            DictionaryStore.shared.setEnabled(source.id, enabled)
+                            dictionaryRevision += 1
+                        })) {
+                            VStack(alignment: .leading) {
+                                Text(source.name)
+                                Text(source.detail + (source.count > 0 ? " · \(source.count) 条" : ""))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
-                        .disabled(dictImporting)
                     }
+                    Toggle("工具盘左手模式", isOn: $leftHanded)
                 } header: {
                     Text("词典")
                 } footer: {
-                    Text(userDictName.map { "当前用户词典:\($0)(查词时优先命中)。" } ?? "支持 StarDict 三件套(.ifo/.idx/.dict 或 .dict.dz,可多选一起选),或打包成 .zip 直接选;导入后离线可用,查词优先命中用户词典。")
+                    Text("可组合启用多部词典，释义按来源分别显示。学科术语包是 ECDICT 标注子库。支持继续导入多部 StarDict，每次独立保存，不替换已有词典。")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -159,6 +170,7 @@ struct SettingsView: View {
             }
             .onAppear {
                 userDictName = DictionaryStore.shared.userDictionaryName()
+                dictionarySources = DictionaryStore.shared.catalog()
             }
         }
     }
@@ -180,6 +192,7 @@ struct SettingsView: View {
             }.value
             dictImporting = false
             userDictName = DictionaryStore.shared.userDictionaryName()
+                dictionarySources = DictionaryStore.shared.catalog()
             restoreMessage = result
         }
     }

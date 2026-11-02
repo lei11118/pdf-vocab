@@ -236,6 +236,8 @@ final class DocumentInkSurface: UIView {
 
     func setRulerActive(_ active: Bool) { canvas.isRulerActive = active }
 
+    var canUndo: Bool { canvas.undoManager?.canUndo == true }
+    var canRedo: Bool { canvas.undoManager?.canRedo == true }
     func undo() { if canvas.undoManager?.canUndo == true { canvas.undoManager?.undo() } }
     func redo() { if canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() } }
 

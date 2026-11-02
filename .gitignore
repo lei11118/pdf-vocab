@@ -9,6 +9,8 @@ xcuserdata/
 
 # —— 生成的大文件(CI 里重新生成)——
 Resources/ecdict.sqlite
+Resources/science.sqlite
+Resources/science.building
 Resources/ecdict.sqlite.gz
 
 # —— macOS ——

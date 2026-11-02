@@ -23,7 +23,7 @@ struct ReaderView: View {
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
-    /// v0.9.0(M4):标记 / 选词模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
+    /// v0.9.0(M4):标记 / 阅读模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
     /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
     /// 用户反馈"用过的工具回到主界面再进来就被重置了"。设置里可关掉"恢复上次书写状态"。
     @State private var markMode = false
@@ -55,6 +55,12 @@ struct ReaderView: View {
     @StateObject private var pencilTools = PencilToolSession()
     /// v0.15.0:挤压弧形工具盘锚点(nil = 收起)
     @State private var arcAnchor: CGPoint?
+    @State private var showGraph = false
+    @State private var capturing = false
+    @State private var inkUndoRevision = 0
+    @State private var captureMessage: String?
+    @State private var lastCaptureId: String?
+    @StateObject private var graphModel: KnowledgeGraphStore
     /// v0.23.0:页面缩略图 / 双页显示 / 清空本页手写
     @State private var showThumbnails = false
     @State private var confirmClearInk = false
@@ -75,6 +81,7 @@ struct ReaderView: View {
         self.doc = doc
         self.store = store
         self.jumpTarget = jumpTarget
+        _graphModel = StateObject(wrappedValue: KnowledgeGraphStore(docId: doc.sha256, db: store.db))
         _currentPage = State(initialValue: jumpTarget?.page ?? doc.lastPage)
         _suppressSave = State(initialValue: jumpTarget != nil)
         // v0.24.0:按书恢复上次的书写状态(可在设置里关闭)
@@ -99,6 +106,7 @@ struct ReaderView: View {
             }
             .onChange(of: dockBounds) { _, size in
                 // v0.24.0:容器尺寸变化(旋转/分屏)时按归一化比例重新落位
+                arcAnchor = nil
                 guard size.width > 1, dockDragOrigin == nil else { return }
                 dockOffset = ToolDockPosition.clamp(
                     ToolDockPosition.load(docSha: doc.sha256, bounds: size),
@@ -215,6 +223,12 @@ struct ReaderView: View {
 
     private var primarySheetContent: some View {
         chromeContent
+            .fullScreenCover(isPresented: $showGraph) {
+                KnowledgeGraphView(model: graphModel, tools: pencilTools, vocab: VocabStore(db: store.db), onSource: { shot in
+                    readerHandle.coordinator?.go(toPage: shot.pageIndex)
+                    currentPage = shot.pageIndex
+                })
+            }
             .sheet(isPresented: $showSettings) {
                 SettingsView(db: store.db)
             }
@@ -467,12 +481,12 @@ struct ReaderView: View {
         } else if !focusMode {
             HStack(spacing: 3) {
                 readingModeSegment(
-                    title: "选词",
+                    title: "阅读模式",
                     systemImage: "text.cursor",
                     active: true
                 ) {}
                 readingModeSegment(
-                    title: "手写",
+                    title: "标记模式",
                     systemImage: "pencil.tip",
                     active: false
                 ) {
@@ -493,6 +507,10 @@ struct ReaderView: View {
             DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline = true }
             Rectangle().fill(DS.foreground3.opacity(0.2)).frame(width: 24, height: 1)
             DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab = true }
+            DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", accessibility: "知识图谱") { showGraph = true }
+            DSIconButton(systemImage: "circle.grid.cross", accessibility: "弧形工具盘") {
+                arcAnchor = CGPoint(x: dockBounds.width / 2, y: dockBounds.height / 2)
+            }
             DSIconButton(systemImage: "chart.bar.doc.horizontal", accessibility: "词频分析") { showAnalyze = true }
         }
         .padding(4)
@@ -626,12 +644,77 @@ struct ReaderView: View {
                             session: pencilTools,
                             anchor: arcAnchor,
                             bounds: geo.size,
+                            marking: markMode,
+                            canUndo: inkUndoRevision >= 0 && (readerHandle.coordinator?.canUndoInk ?? false),
+                            canRedo: readerHandle.coordinator?.canRedoInk ?? false,
+                            onUndo: { readerHandle.coordinator?.undoInk(); inkUndoRevision += 1 },
+                            onRedo: { readerHandle.coordinator?.redoInk(); inkUndoRevision += 1 },
+                            onScreenshot: { capturing = true },
+                            onMode: { markMode.toggle() },
+                            onSelect: { markMode = true },
                             onDismiss: { self.arcAnchor = nil }
                         )
                     }
                 }
             }
             .animation(reduceMotion ? nil : DS.Motion.spring, value: arcAnchor)
+            .overlay {
+                if capturing {
+                    GraphCaptureOverlay(onCancel: { capturing = false }, onConfirm: { rect in capture(rect) })
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let captureMessage {
+                    HStack {
+                        Text(captureMessage)
+                        if let id = lastCaptureId {
+                            Button("撤销") {
+                                graphModel.checkpoint(); graphModel.graph.delete(id); graphModel.save(immediate: true)
+                                self.captureMessage = nil; lastCaptureId = nil
+                            }
+                        }
+                    }.padding().background(.regularMaterial,in:RoundedRectangle(cornerRadius:12)).padding(.bottom,100)
+                }
+            }
+    }
+
+    private func capture(_ rect: CGRect) {
+        capturing = false
+        guard let view = readerHandle.coordinator?.pdfView else { return }
+        do {
+            let result = try GraphCapture.render(view: view, rect: rect, docId: doc.sha256, ink: PencilInkStore(db: store.db))
+            Task { @MainActor in
+                await graphModel.load()
+                guard graphModel.loaded else { captureMessage = graphModel.error; return }
+                let id = UUID().uuidString, imageName = UUID().uuidString + ".png", thumbName = UUID().uuidString + ".jpg"
+                do {
+                    let image = result.image
+                    try await Task.detached(priority: .utility) {
+                        guard let data = image.pngData() else { throw CocoaError(.fileWriteUnknown) }
+                        try data.write(to: GraphAssets.url(imageName), options: .atomic)
+                        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+                        let size = CGSize(width:300,height:300*image.size.height/image.size.width)
+                        let thumb = UIGraphicsImageRenderer(size:size,format:format).image { _ in image.draw(in:CGRect(origin:.zero,size:size)) }
+                        try thumb.jpegData(compressionQuality:0.8)?.write(to:GraphAssets.url(thumbName),options:.atomic)
+                    }.value
+                    let bottom = graphModel.graph.nodes.map { $0.frame.maxY }.max() ?? -40
+                    let shot = GraphScreenshot(imagePath:imageName,thumbPath:thumbName,sourceDocId:doc.sha256,pageIndex:result.page,sourceRect:result.normalized,words:result.words,ocrStatus:result.words.isEmpty ? "pending" : "done")
+                    graphModel.checkpoint()
+                    graphModel.graph.nodes.append(KnowledgeNode(id:id,graphId:graphModel.graph.id,kind:.screenshot,frame:CGRect(x:0,y:bottom+40,width:300,height:300*image.size.height/image.size.width+32),zIndex:graphModel.graph.nodes.count,screenshot:shot))
+                    graphModel.save(immediate:true); captureMessage = "已加入知识图谱"; lastCaptureId = id
+                    if result.words.isEmpty {
+                        let words = (try? await Task.detached(priority:.utility) { try GraphCapture.recognize(image) }.value) ?? []
+                        if let index = graphModel.graph.nodes.firstIndex(where: { $0.id == id }) {
+                            graphModel.graph.nodes[index].screenshot?.words = words
+                            graphModel.graph.nodes[index].screenshot?.ocrStatus = words.isEmpty ? "failed" : "done"
+                            graphModel.save(immediate:true)
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds:4_000_000_000)
+                    if lastCaptureId == id { captureMessage = nil; lastCaptureId = nil }
+                } catch { captureMessage = error.localizedDescription }
+            }
+        } catch { captureMessage = error.localizedDescription }
     }
 
     /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
@@ -712,20 +795,9 @@ struct ReaderView: View {
                         hoverDetail = nil
                         hoverTask?.cancel()
                         hoverTask = Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            try? await Task.sleep(nanoseconds: ToolArcConfig.hoverDelay)
                             guard !Task.isCancelled else { return }
-                            let detail = await Task.detached(priority: .utility) { () -> String? in
-                                guard case .found(let entry) = DictionaryService.lookup(key) else { return nil }
-                                var parts: [String] = []
-                                if let phonetic = entry.phonetic, !phonetic.isEmpty {
-                                    parts.append("/\(phonetic)/")
-                                }
-                                if let translation = entry.translation, !translation.isEmpty,
-                                   let first = translation.split(separator: "\n").first {
-                                    parts.append(String(first))
-                                }
-                                return parts.isEmpty ? nil : parts.joined(separator: "\n")
-                            }.value
+                            let detail = await Task.detached(priority: .utility) { WordInteraction.detail(key) }.value
                             guard !Task.isCancelled, hoverTerm == term else { return }
                             hoverDetail = detail ?? "(词库未收录)"
                         }
@@ -739,6 +811,10 @@ struct ReaderView: View {
                     markMode: markMode,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
+                        if arcAnchor != nil { arcAnchor = nil; return }
+                        if !markMode, let hoverTerm, hoverDetail != nil {
+                            WordInteraction.speak(hoverTerm); return
+                        }
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
                         withAnimation(reduceMotion ? nil : DS.Motion.quickSpring) {
                             if arcAnchor == nil {
