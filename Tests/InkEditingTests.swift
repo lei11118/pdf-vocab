@@ -161,7 +161,12 @@ final class InkEditingTests: XCTestCase {
         XCTAssertEqual(InkBrush.normalizedPressure(force:.nan,maximum:4),0.5)
         let light=InkBrush.width(kind:.pen,base:3,force:0.05,altitude:.pi/2)
         let heavy=InkBrush.width(kind:.pen,base:3,force:0.9,altitude:.pi/2)
-        XCTAssertGreaterThan(heavy/light,3)
+        // Steel pen varies modestly; the brush carries the broad pressure range.
+        XCTAssertGreaterThan(heavy/light,1.4)
+        XCTAssertLessThan(heavy/light,2)
+        let brushLight=InkBrush.width(kind:.brush,base:3,force:0.05,altitude:.pi/2)
+        let brushHeavy=InkBrush.width(kind:.brush,base:3,force:0.9,altitude:.pi/2)
+        XCTAssertGreaterThan(brushHeavy/brushLight,3)
         let points=(0..<8).map { InkPoint(x:Double($0)*10,y:sin(Double($0)),width:2) }
         let smooth=InkBrush.smoothed(points)
         XCTAssertEqual(smooth.first?.x,points.first?.x)
