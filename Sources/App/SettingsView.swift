@@ -98,44 +98,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("⚠️ 所有数据只保存在本机——删除 App 会全部丢失。请定期「导出全部数据」并通过「文件」App 保存到别处;重装或换机后可在同一入口恢复(会覆盖当前数据)。")
                 }
-                Section {
-                    Button {
-                        showStarDictPicker = true
-                    } label: {
-                        Label(dictImporting ? "正在导入词典…" : "导入 StarDict 词典", systemImage: "character.book.closed")
-                    }
-                    .disabled(dictImporting)
-                    ForEach(dictionarySources) { source in
-                        Toggle(isOn: Binding(get: {
-                            _ = dictionaryRevision
-                            return DictionaryStore.shared.isEnabled(source.id)
-                        }, set: { enabled in
-                            DictionaryStore.shared.setEnabled(source.id, enabled)
-                            dictionaryRevision += 1
-                        })) {
-                            VStack(alignment: .leading) {
-                                Text(source.name)
-                                Text(source.detail + (source.count > 0 ? " · \(source.count) 条" : ""))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .contextMenu {
-                            if source.id == "legacy" || source.id.hasSuffix(".sqlite") {
-                                Button("移除这部词典",role:.destructive) {
-                                    do {
-                                        try DictionaryStore.shared.removeImportedDictionary(source.id)
-                                        dictionarySources = DictionaryStore.shared.catalog()
-                                    } catch { restoreMessage = error.localizedDescription }
-                                }
-                            }
-                        }
-                    }
-                    Toggle("工具盘左手模式", isOn: $leftHanded)
-                } header: {
-                    Text("词典")
-                } footer: {
-                    Text("可组合启用多部词典，释义按来源分别显示。学科术语包是 ECDICT 标注子库。支持继续导入多部 StarDict，每次独立保存，不替换已有词典。")
-                }
+                dictionarySection
             }
             .scrollContentBackground(.hidden)
             .background(DS.background1.ignoresSafeArea())
@@ -181,6 +144,47 @@ struct SettingsView: View {
                 dictionarySources = DictionaryStore.shared.catalog()
             }
         }
+    }
+
+    private var dictionarySection: some View {
+    Section {
+        Button {
+            showStarDictPicker = true
+        } label: {
+            Label(dictImporting ? "正在导入词典…" : "导入 StarDict 词典", systemImage: "character.book.closed")
+        }
+        .disabled(dictImporting)
+        ForEach(dictionarySources) { source in
+            Toggle(isOn: Binding(get: {
+                _ = dictionaryRevision
+                return DictionaryStore.shared.isEnabled(source.id)
+            }, set: { enabled in
+                DictionaryStore.shared.setEnabled(source.id, enabled)
+                dictionaryRevision += 1
+            })) {
+                VStack(alignment: .leading) {
+                    Text(source.name)
+                    Text(source.detail + (source.count > 0 ? " · \(source.count) 条" : ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .contextMenu {
+                if source.id == "legacy" || source.id.hasSuffix(".sqlite") {
+                    Button("移除这部词典",role:.destructive) {
+                        do {
+                            try DictionaryStore.shared.removeImportedDictionary(source.id)
+                            dictionarySources = DictionaryStore.shared.catalog()
+                        } catch { restoreMessage = error.localizedDescription }
+                    }
+                }
+            }
+        }
+        Toggle("工具盘左手模式", isOn: $leftHanded)
+    } header: {
+        Text("词典")
+    } footer: {
+        Text("可组合启用多部词典，释义按来源分别显示。学科术语包是 ECDICT 标注子库。支持继续导入多部 StarDict，每次独立保存，不替换已有词典。")
+    }
     }
 
     // MARK: - StarDict 词典导入(v0.13.0)
