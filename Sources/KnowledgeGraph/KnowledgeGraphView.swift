@@ -87,6 +87,7 @@ struct KnowledgeGraphView: View {
                 await model.migrate(words: vocab.listWords(), vocab: vocab)
                 for index in model.graph.nodes.indices { model.graph.nodes[index].isNew = false }
                 model.save()
+                await resumePendingTextRecognition()
             }
             .onChange(of: phase) { _, phase in if phase != .active { model.save(immediate: true) } }
             .onDisappear { model.save(immediate: true) }
@@ -98,6 +99,24 @@ struct KnowledgeGraphView: View {
     private func screenRect(_ rect: CGRect) -> CGRect {
         CGRect(x: rect.minX * model.graph.zoom + model.graph.offset.x, y: rect.minY * model.graph.zoom + model.graph.offset.y,
                width: rect.width * model.graph.zoom, height: rect.height * model.graph.zoom)
+    }
+    private func resumePendingTextRecognition() async {
+        let pending = model.graph.nodes.compactMap { node -> (String,String)? in
+            guard let shot = node.screenshot,shot.ocrStatus == "pending" else { return nil }
+            return (node.id,shot.imagePath)
+        }
+        for (id,path) in pending {
+            guard !Task.isCancelled else { return }
+            let words = await Task.detached(priority:.utility) { () -> [GraphWord] in
+                guard let url = try? GraphAssets.url(path),let image = UIImage(contentsOfFile:url.path) else { return [] }
+                return (try? GraphCapture.recognize(image)) ?? []
+            }.value
+            if let index = model.graph.nodes.firstIndex(where: { $0.id == id }),model.graph.nodes[index].screenshot?.ocrStatus == "pending" {
+                model.graph.nodes[index].screenshot?.words = words
+                model.graph.nodes[index].screenshot?.ocrStatus = words.isEmpty ? "failed" : "done"
+                model.save()
+            }
+        }
     }
     private func canvas(_ point: CGPoint) -> CGPoint {
         CGPoint(x: (point.x-model.graph.offset.x)/model.graph.zoom, y: (point.y-model.graph.offset.y)/model.graph.zoom)
