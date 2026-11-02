@@ -13,21 +13,22 @@ final class PDFTextLayout {
         var encoding: String.Encoding = .windowsCP1252
         var fallback: UIFont?
         var supported = true
+        var descent: CGFloat = -0.22
         var unit: CGFloat = 0.001
-        func decode(_ bytes: [UInt8]) -> [(Int, String)] {
-            var result: [(Int,String)] = [], i = 0
+        func decode(_ bytes: [UInt8]) -> [(Int, String, Int)] {
+            var result: [(Int,String,Int)] = [], i = 0
             while i < bytes.count {
                 var found: (Int,String,Int)?
                 for length in lengths where i+length <= bytes.count {
                     let code = bytes[i..<i+length].reduce(0) { ($0 << 8) | Int($1) }
                     if let text = unicode[code] { found = (code,text,length); break }
                 }
-                if let (code,text,length) = found { result.append((code,text)); i += length }
+                if let (code,text,length) = found { result.append((code,text,length)); i += length }
                 else {
                     let length = min(lengths.last ?? 1,bytes.count-i)
                     let code = bytes[i..<i+length].reduce(0) { ($0 << 8) | Int($1) }
                     let text = length == 1 ? String(data:Data(bytes[i..<i+length]),encoding:encoding) : nil
-                    result.append((code,text ?? "\u{FFFD}")); i += length
+                    result.append((code,text ?? "\u{FFFD}",length)); i += length
                 }
             }
             return result
@@ -50,6 +51,7 @@ final class PDFTextLayout {
         var horizontal: CGFloat = 1
         var leading: CGFloat = 0
         var rise: CGFloat = 0
+        var textPositionKnown = true
     }
     private var state = State()
     private var stack: [State] = []
@@ -105,10 +107,10 @@ final class PDFTextLayout {
             guard let s = PDFTextLayout.owner(p) else { return }; s.state.ctm = PDFTextLayout.matrix(scanner).concatenating(s.state.ctm)
         }
         CGPDFOperatorTableSetCallback(table,"BT") { _,p in
-            guard let s = PDFTextLayout.owner(p) else { return }; s.state.text = .identity; s.state.line = .identity
+            guard let s = PDFTextLayout.owner(p) else { return }; s.state.text = .identity; s.state.line = .identity; s.state.textPositionKnown = true
         }
         CGPDFOperatorTableSetCallback(table,"Tm") { scanner,p in
-            guard let s = PDFTextLayout.owner(p) else { return }; s.state.text = PDFTextLayout.matrix(scanner); s.state.line = s.state.text
+            guard let s = PDFTextLayout.owner(p) else { return }; s.state.text = PDFTextLayout.matrix(scanner); s.state.line = s.state.text; s.state.textPositionKnown = true
         }
         CGPDFOperatorTableSetCallback(table,"Td") { scanner,p in
             guard let s = PDFTextLayout.owner(p) else { return }; let y = PDFTextLayout.number(scanner), x = PDFTextLayout.number(scanner); s.move(x,y)
@@ -163,7 +165,7 @@ final class PDFTextLayout {
         CGPDFScannerScan(scanner)
     }
     private func move(_ x: CGFloat, _ y: CGFloat) {
-        state.line = state.line.translatedBy(x:x,y:y); state.text = state.line
+        state.line = state.line.translatedBy(x:x,y:y); state.text = state.line; state.textPositionKnown = true
     }
     private func advance(_ x: CGFloat) { state.text = state.text.translatedBy(x:x,y:0) }
     private func showString(_ scanner: CGPDFScannerRef) {
@@ -171,18 +173,18 @@ final class PDFTextLayout {
         if CGPDFScannerPopString(scanner,&string), let string { show(string) }
     }
     private func show(_ string: CGPDFStringRef) {
-        guard let font = state.font, let bytes = CGPDFStringGetBytePtr(string) else { return }
+        guard let font = state.font, let bytes = CGPDFStringGetBytePtr(string) else { state.textPositionKnown = false; return }
         let count = CGPDFStringGetLength(string)
         guard count <= 100_000 else { return }
-        for (code,text) in font.decode(Array(UnsafeBufferPointer(start:bytes,count:count))) {
-            guard let width = font.width(code,text:text) else { state.font = nil; return }
-            let advance = width*state.size*state.horizontal
-            // Keep glyph advances separate from Tc/Tw/TJ spacing. That spacing
-            // is precisely what PDFKit distributes over neighbouring ranges.
-            let rect = CGRect(x:0,y:state.rise-state.size*0.22,width:advance,height:state.size)
-                .applying(state.text).applying(state.ctm).standardized
-            if glyphs.count < 100_000, rect.width > 0, rect.height > 0 { glyphs.append(Glyph(text:text,rect:rect)) }
-            self.advance(advance+(state.charSpace+(code == 32 ? state.wordSpace : 0))*state.horizontal)
+        for (code,text,length) in font.decode(Array(UnsafeBufferPointer(start:bytes,count:count))) {
+            guard let width = font.width(code,text:text) else { state.font = nil; state.textPositionKnown = false; return }
+            let advance = (width*state.size+state.charSpace)*state.horizontal
+            // Tc is tracking within a word. Keep Tw/TJ word spacing separate;
+            // PDFKit distributes that spacing over neighbouring ranges.
+            let rect = CGRect(x:0,y:state.rise+state.size*font.descent,width:advance,height:state.size)
+                .applying(state.text.concatenating(state.ctm)).standardized
+            if state.textPositionKnown, glyphs.count < 100_000, rect.width > 0, rect.height > 0 { glyphs.append(Glyph(text:text,rect:rect)) }
+            self.advance(advance+(code == 32 && length == 1 ? state.wordSpace*state.horizontal : 0))
         }
     }
     private func form(_ scanner: CGPDFScannerRef) {
@@ -236,6 +238,7 @@ final class PDFTextLayout {
         if let descendants = array(dict,"DescendantFonts") {
             var child: CGPDFDictionaryRef?
             if CGPDFArrayGetDictionary(descendants,0,&child), let child {
+                CGPDFDictionaryGetDictionary(child,"FontDescriptor",&descriptor)
                 var value: CGPDFReal = 1000
                 CGPDFDictionaryGetNumber(child,"DW",&value); font.defaultWidth = CGFloat(value)
                 if let widths = array(child,"W") {
@@ -255,8 +258,14 @@ final class PDFTextLayout {
                 }
             }
         }
-        CGPDFDictionaryGetDictionary(dict,"FontDescriptor",&descriptor)
+        var ownDescriptor: CGPDFDictionaryRef?
+        if CGPDFDictionaryGetDictionary(dict,"FontDescriptor",&ownDescriptor) { descriptor = ownDescriptor }
+        var hasDescent = false
         if let descriptor {
+            var descent: CGPDFReal = 0
+            if CGPDFDictionaryGetNumber(descriptor,"Descent",&descent), descent <= 0, descent >= -1500 {
+                font.descent = CGFloat(descent)/1000; hasDescent = true
+            }
             var missing: CGPDFReal = 0
             if CGPDFDictionaryGetNumber(descriptor,"MissingWidth",&missing) { font.defaultWidth = CGFloat(missing) }
         }
@@ -265,20 +274,22 @@ final class PDFTextLayout {
         if CGPDFDictionaryGetStream(dict,"ToUnicode",&stream), let stream {
             var format = CGPDFDataFormat.raw
             if let data = CGPDFStreamCopyData(stream,&format) as Data?, data.count < 4_000_000,
-               let text = String(data:data,encoding:.ascii) { readCMap(text,into:&font) }
+               let text = String(data:data,encoding:.isoLatin1) { readCMap(text,into:&font) }
         }
         // Standard, non-embedded fonts may omit Widths. Use their declared font,
         // never PDFKit's substituted attributed-string font.
         if let base = name(dict,"BaseFont") {
             font.fallback = UIFont(name:base,size:1000)
+            if !hasDescent, let fallback = font.fallback { font.descent = fallback.descender/1000 }
             if base.contains("+"), font.unicode.isEmpty, name(dict,"Encoding") == nil { font.supported = false }
         }
         return font
     }
     private static func readCMap(_ text: String, into font: inout Font) {
         let regex = try? NSRegularExpression(pattern:#"<[0-9a-fA-F]+>|\[|\]|[^\s<>\[\]]+"#)
-        let ns = text as NSString
-        let tokens = regex?.matches(in:text,range:NSRange(location:0,length:ns.length)).map { ns.substring(with:$0.range) } ?? []
+        let clean = text.replacingOccurrences(of:#"%[^\r\n]*"#,with:"",options:.regularExpression)
+        let ns = clean as NSString
+        let tokens = regex?.matches(in:clean,range:NSRange(location:0,length:ns.length)).map { ns.substring(with:$0.range) } ?? []
         func hex(_ token: String) -> Int? {
             guard token.hasPrefix("<"),token.count <= 10 else { return nil }
             return Int(token.dropFirst().dropLast(),radix:16)

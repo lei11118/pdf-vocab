@@ -266,7 +266,7 @@ enum SelectionGeometry {
             }
             if let match = matches.min(by: { distanceSquared(CGPoint(x:$0.midX,y:$0.midY),CGPoint(x:raw.midX,y:raw.midY))
                 < distanceSquared(CGPoint(x:$1.midX,y:$1.midY),CGPoint(x:raw.midX,y:raw.midY)) }) {
-                placed[i] = CGRect(x:match.minX,y:raw.minY,width:match.width,height:raw.height)
+                placed[i] = match
             }
         }
         DiagLog.log("selection.layout: glyphs=\(ns.length) placed=\(placed.count)")

@@ -125,7 +125,7 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertEqual(glyphs.map { $0.text }.joined(),"Alpha beta")
         let first = try XCTUnwrap(glyphs.first)
         XCTAssertEqual(first.rect.minX,65,accuracy:0.01)
-        XCTAssertEqual(first.rect.minY,141.72,accuracy:0.01)
+        XCTAssertEqual(first.rect.minY,142.032,accuracy:0.01)
         XCTAssertEqual(first.rect.height,24,accuracy:0.01)
         let selection = SelectionGeometry.initialWord(on:page,at:CGPoint(x:first.rect.midX,y:first.rect.midY))
         XCTAssertEqual(selection.map { SelectionGeometry.lookupText(for:$0) },"Alpha")
