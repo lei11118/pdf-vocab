@@ -132,7 +132,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         if gesture.state == .began, let index = hit(gesture.location(in: self)) { selection = index...index; redraw() }
         if gesture.state == .ended { showMenu(at: gesture.location(in: self)) }
     }
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer is UIPanGestureRecognizer else { return true }
         return hit(gestureRecognizer.location(in: self)) != nil
     }

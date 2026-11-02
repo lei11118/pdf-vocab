@@ -106,6 +106,8 @@ struct KnowledgeGraph: Codable, Equatable {
     private let db: AppDatabase
     private let writer = DispatchQueue(label: "knowledgegraph.persistence", qos: .utility)
     private var pending: DispatchWorkItem?
+    private var loading: Task<Data?, Error>?
+    private var migrating = false
     init(docId: String, db: AppDatabase) {
         self.db = db
         graph = KnowledgeGraph(id: docId, docId: docId)
@@ -114,15 +116,17 @@ struct KnowledgeGraph: Codable, Equatable {
         guard !loaded else { return }
         do {
             let database = db, id = graph.id
-            let data = try await Task.detached(priority: .utility) {
+            if loading == nil { loading = Task.detached(priority: .utility) {
                 try database.dbQueue.write { db -> Data? in
                     try db.execute(sql: "CREATE TABLE IF NOT EXISTS knowledge_graph(id TEXT PRIMARY KEY, payload BLOB NOT NULL)")
                     return try Data.fetchOne(db, sql: "SELECT payload FROM knowledge_graph WHERE id=?", arguments: [id])
                 }
-            }.value
+            } }
+            let data = try await loading!.value
+            guard !loaded else { return }
             if let data { graph = try JSONDecoder().decode(KnowledgeGraph.self, from: data) }
             loaded = true
-        } catch { self.error = error.localizedDescription }
+        } catch { loading = nil; self.error = error.localizedDescription }
     }
     func checkpoint() {
         guard loaded else { return }
@@ -133,17 +137,17 @@ struct KnowledgeGraph: Codable, Equatable {
     func save(immediate: Bool = false) {
         guard loaded else { return }
         graph.updatedAt = Date()
-        do {
-            let data = try JSONEncoder().encode(graph), id = graph.id, database = db
+            let snapshot = graph, id = graph.id, database = db
             pending?.cancel()
             let work = DispatchWorkItem {
-                do { try database.dbQueue.write { db in
+                do {
+                    let data = try JSONEncoder().encode(snapshot)
+                    try database.dbQueue.write { db in
                     try db.execute(sql: "INSERT OR REPLACE INTO knowledge_graph VALUES(?,?)", arguments: [id, data])
                 } } catch { Task { @MainActor [weak self] in self?.error = error.localizedDescription } }
             }
             pending = work
             if immediate { writer.async(execute: work) } else { writer.asyncAfter(deadline: .now() + GraphConfig.saveDelay, execute: work) }
-        } catch { self.error = error.localizedDescription }
     }
     func add(kind: KnowledgeNode.Kind, at point: CGPoint) {
         checkpoint()
@@ -151,7 +155,8 @@ struct KnowledgeGraph: Codable, Equatable {
         save()
     }
     func migrate(words: [VocabStore.WordSummary], vocab: VocabStore) async {
-        guard loaded, graph.migrationVersion == 0 else { return }
+        guard loaded, graph.migrationVersion == 0, !migrating else { return }
+        migrating = true; defer { migrating = false }
         let relevant = words.filter { $0.sourceDocSha == graph.docId }
         do {
             // Backup before changing the graph; original vocab/history remain intact.

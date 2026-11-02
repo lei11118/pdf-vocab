@@ -18,6 +18,7 @@ struct PencilArcMenu: View {
     @State private var leftExtent: CGFloat = 0
     @State private var rightExtent: CGFloat = 0
     @State private var reset: Task<Void, Never>?
+    @State private var appeared = false
     private var tools: [PencilToolKind] { session.visibleKinds }
     private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded) }
     private var upper: [(String, String)] {
@@ -35,23 +36,25 @@ struct PencilArcMenu: View {
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                 icon(tool.systemImage, label: tool.label, active: session.kind == tool) {
                     session.select(kind: tool); onSelect(); onDismiss()
-                }.opacity(alpha(index)).position(geometry.position(index, count: tools.count, upper: false))
+                }.opacity(appeared ? alpha(index) : 0).position(geometry.position(index, count: tools.count, upper: false))
             }
             ForEach(upper.indices, id: \.self) { index in
                 icon(upper[index].0, label: upper[index].1, active: false) { activateUpper(index) }
-                    .opacity(enabled(index) ? 1 : 0.3).position(geometry.position(index, count: upper.count, upper: true))
+                    .opacity(appeared ? (enabled(index) ? 1 : 0.3) : 0).position(geometry.position(index, count: upper.count, upper: true))
+                    .animation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82).delay(0.04),value:appeared)
             }
             ArcInput(onHover: hover, onTap: { point, pencil in
                 if let index = geometry.index(at: point, count: upper.count, upper: true) { activateUpper(index) }
                 else if let index = geometry.index(at: point, count: tools.count, upper: false), !pencil || alpha(index) >= 0.85 {
                     session.select(kind: tools[index]); onSelect(); onDismiss()
                 } else { onDismiss() }
-            }).accessibilityHidden(true)
+            }, onSqueeze: onDismiss).accessibilityHidden(true)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: leftExtent)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: rightExtent)
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
         .onChange(of: bounds) { _, _ in onDismiss() }
+        .onAppear { withAnimation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82)) { appeared = true } }
         .onDisappear { reset?.cancel() }
     }
     private func icon(_ name: String, label: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -94,18 +97,24 @@ struct PencilArcMenu: View {
 private struct ArcInput: UIViewRepresentable {
     let onHover: (CGPoint?) -> Void
     let onTap: (CGPoint, Bool) -> Void
+    let onSqueeze: () -> Void
     func makeUIView(context: Context) -> ArcInputView { ArcInputView() }
-    func updateUIView(_ view: ArcInputView, context: Context) { view.onHover = onHover; view.onTap = onTap }
+    func updateUIView(_ view: ArcInputView, context: Context) { view.onHover = onHover; view.onTap = onTap; view.onSqueeze = onSqueeze }
 }
-private final class ArcInputView: UIView {
+private final class ArcInputView: UIView, UIPencilInteractionDelegate {
     var onHover: ((CGPoint?) -> Void)?
     var onTap: ((CGPoint, Bool) -> Void)?
+    var onSqueeze: (() -> Void)?
     override init(frame: CGRect) {
         super.init(frame: frame)
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
+        let pencil = UIPencilInteraction(); pencil.delegate = self; addInteraction(pencil)
         backgroundColor = .clear
     }
     required init?(coder: NSCoder) { fatalError() }
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        if squeeze.phase == .ended { onSqueeze?() }
+    }
     @objc private func hover(_ gesture: UIHoverGestureRecognizer) {
         onHover?(gesture.state == .ended || gesture.state == .cancelled ? nil : gesture.location(in: self))
     }

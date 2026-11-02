@@ -98,6 +98,10 @@ struct ReaderView: View {
     // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
     private var lifecycleContent: some View {
         pencilSyncContent
+            .onChange(of: arcAnchor != nil || capturing || showGraph) { _, blocked in
+                readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
+                if blocked { readerHandle.coordinator?.clearHover() }
+            }
             .onChange(of: markMode) { _, on in
                 // v0.24.0:按书记住「选词 / 书写」状态,退出再进来不再被重置
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
@@ -212,7 +216,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showOutline || showSearch || showAnalyze
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -811,6 +815,7 @@ struct ReaderView: View {
                     markMode: markMode,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
+                        guard !showGraph, !capturing else { return }
                         if arcAnchor != nil { arcAnchor = nil; return }
                         if !markMode, let hoverTerm, hoverDetail != nil {
                             WordInteraction.speak(hoverTerm); return
