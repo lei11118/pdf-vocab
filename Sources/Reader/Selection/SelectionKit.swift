@@ -206,15 +206,43 @@ enum SelectionGeometry {
         // Some PDFs expose a characterBounds index sequence that differs from
         // their string/range sequence (line breaks and text runs in particular).
         var glyphs: [Int: CGRect] = [:]
+        var nominal: [String: CGFloat] = [:]
+        func metricKey(_ index: Int, _ rect: CGRect) -> String {
+            "\(ns.character(at:index))|\(Int((rect.height*10).rounded()))"
+        }
+        // PDFKit distributes TJ word spacing into adjacent selection rectangles.
+        // Recover nominal advances from matching glyphs rather than treating those
+        // expanded rectangles as the visible glyph outline.
+        for i in 0..<ns.length {
+            let rect = page.selection(for:NSRange(location:i,length:1))?.bounds(for:page) ?? .null
+            glyphs[i] = rect
+            if isValid(rect) {
+                let key = metricKey(i,rect)
+                nominal[key] = min(nominal[key] ?? rect.width,rect.width)
+            }
+        }
+        let attributed = page.attributedString
         func bounds(_ index: Int) -> CGRect {
-            if let cached = glyphs[index] { return cached }
-            let rect = page.selection(for: NSRange(location: index, length: 1))?.bounds(for: page) ?? .null
-            glyphs[index] = rect
-            return rect
+            guard let rect = glyphs[index], isValid(rect) else { return .null }
+            var width = nominal[metricKey(index,rect)] ?? rect.width
+            if let attributed, index < attributed.length,
+               let font = attributed.attribute(.font,at:index,effectiveRange:nil) as? UIFont {
+                let advance = ns.substring(with:NSRange(location:index,length:1)).size(withAttributes:[.font:font]).width
+                if advance > 0, advance < rect.height*2 { width = min(width,advance) }
+            }
+            return CGRect(x:rect.midX-width/2,y:rect.minY,width:width,height:rect.height)
+        }
+        func joins(_ left: Int, _ right: Int, _ space: Bool) -> Bool {
+            let hyphen = ns.character(at:left) == 45 ? left : (ns.character(at:right) == 45 ? right : -1)
+            if hyphen > 0, (48...57).contains(Int(ns.character(at:hyphen-1))) { return false }
+            let a = bounds(left), b = bounds(right)
+            guard isValid(a), isValid(b) else { return false }
+            let h = min(a.height,b.height), gap = b.minX-a.maxX
+            return abs(a.midY-b.midY)<h*0.35 && gap >= -h*0.4 && gap < h*0.09
         }
         guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
                                        tolerance: tolerance, bounds: bounds),
-              let range = visualWordRange(text: ns, at: index, bounds: bounds),
+              let range = visualWordRange(text: ns, at: index, bounds: bounds, join: joins),
               let word = page.selection(for: range), isSane(word, maxPages: 1, maxChars: 100),
               isSingleWordText(lookupText(for: word)),
               containsTouch(word, on: page, point: point, tolerance: tolerance) else { return nil }
@@ -239,7 +267,8 @@ enum SelectionGeometry {
             && gap<min(height*(acrossSpace ? 0.06:0.18), min(left.width,right.width)*0.55)
     }
 
-    static func visualWordRange(text:NSString,at index:Int,bounds:(Int)->CGRect)->NSRange? {
+    static func visualWordRange(text:NSString,at index:Int,bounds:(Int)->CGRect,
+                                join: ((Int,Int,Bool)->Bool)? = nil)->NSRange? {
         func letter(_ i:Int)->Bool {
             i>=0 && i<text.length && (WordPicker.isWordChar(text.character(at:i)) || text.character(at:i)==45)
         }
@@ -254,13 +283,13 @@ enum SelectionGeometry {
         while first>0 && index-first<100 {
             var previous=first-1
             while space(previous) { previous-=1 }
-            guard letter(previous),joinsWord(bounds(previous),bounds(first),acrossSpace:previous<first-1) else { break }
+            guard letter(previous),(join?(previous,first,previous<first-1) ?? joinsWord(bounds(previous),bounds(first),acrossSpace:previous<first-1)) else { break }
             first=previous
         }
         while last+1<text.length && last-index<100 {
             var next=last+1
             while space(next) { next+=1 }
-            guard letter(next),joinsWord(bounds(last),bounds(next),acrossSpace:next>last+1) else { break }
+            guard letter(next),(join?(last,next,next>last+1) ?? joinsWord(bounds(last),bounds(next),acrossSpace:next>last+1)) else { break }
             last=next
         }
         return NSRange(location:first,length:last-first+1)
@@ -296,7 +325,7 @@ enum SelectionGeometry {
                 if range.length>0 { previousBounds=page.selection(for: NSRange(location: NSMaxRange(range)-1, length: 1))?.bounds(for: page) }
             }
         }
-        return pieces.isEmpty ? (selection.string ?? "") : pieces.joined(separator:" ")
+        return (pieces.isEmpty ? (selection.string ?? "") : pieces.joined(separator:" ")).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     static func isSingleWordText(_ value:String)->Bool {
         let text=value.trimmingCharacters(in:.whitespacesAndNewlines).trimmingCharacters(in:.punctuationCharacters)

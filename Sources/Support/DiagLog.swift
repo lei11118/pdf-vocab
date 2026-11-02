@@ -71,7 +71,7 @@ enum RuntimeDiagnostics {
         snapshot()
         // Measure main-run-loop delay without queuing work while the app is suspended.
         var previous = ProcessInfo.processInfo.systemUptime
-        responsivenessTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        responsivenessTimer = Timer(timeInterval: 1, repeats: true) { _ in
             let now = ProcessInfo.processInfo.systemUptime
             let delay = now - previous - 1
             previous = now
@@ -79,6 +79,7 @@ enum RuntimeDiagnostics {
                 DiagLog.log("performance: main run loop delay=\(String(format: "%.3f", delay))s (includes resume/interaction)")
             }
         }
+        if let responsivenessTimer { RunLoop.main.add(responsivenessTimer, forMode: .common) }
         let key="diagnostics.previousSessionPhase"
         if let previous=UserDefaults.standard.string(forKey:key) { DiagLog.log("session: previous phase=\(previous); termination cause unknown") }
         UserDefaults.standard.set("active",forKey:key)

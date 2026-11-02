@@ -195,7 +195,7 @@ struct PencilPaletteView: View {
 
     // MARK: - 展开层
 
-    private var stylePanel: some View {
+    var stylePanel: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             header
 
@@ -299,11 +299,10 @@ struct PencilPaletteView: View {
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: DS.Space.s) {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
                 sizeDots
-                Spacer(minLength: 0)
                 strokePreview
-                    .frame(width: 92)
+                    .frame(maxWidth: .infinity)
             }
         }
     }
@@ -484,9 +483,9 @@ struct PencilPaletteView: View {
         Canvas { context, size in
             var path = Path()
             let midY = size.height / 2
-            path.move(to: CGPoint(x: 3, y: midY + 3))
+            path.move(to: CGPoint(x: 6, y: midY + 3))
             path.addCurve(
-                to: CGPoint(x: size.width - 3, y: midY - 3),
+                to: CGPoint(x: size.width - 6, y: midY - 3),
                 control1: CGPoint(x: size.width * 0.30, y: midY - 11),
                 control2: CGPoint(x: size.width * 0.68, y: midY + 10)
             )
@@ -498,6 +497,7 @@ struct PencilPaletteView: View {
             )
         }
         .frame(height: 30)
+        .clipped()
         .accessibilityHidden(true)
     }
 
