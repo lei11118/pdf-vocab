@@ -292,6 +292,13 @@ enum SelectionGeometry {
             guard let a = glyphs[left], let b = glyphs[right] else { return false }
             return joinsNominalGlyphs(a,b,leftAdvance:bounds(left).width,rightAdvance:bounds(right).width)
         }
+        // An exact punctuation/symbol hit must not be stolen by a nearby word's
+        // tolerance. The caller can select the complete Unicode character.
+        if let character = initialCharacter(on:page,at:point,tolerance:0),
+           let value = character.string as NSString?, value.length > 0 {
+            let ch = value.character(at:0)
+            if !WordPicker.isWordChar(ch), !WordPicker.isCJK(ch), ch != 45 { return nil }
+        }
         guard let index = wordCharacter(text: ns, near: page.characterIndex(at: point), at: point,
                                        tolerance: tolerance, bounds: bounds),
               let range = visualWordRange(text: ns, at: index, bounds: bounds, join: joins),

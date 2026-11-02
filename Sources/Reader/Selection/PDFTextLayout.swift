@@ -12,6 +12,7 @@ final class PDFTextLayout {
         var defaultWidth: CGFloat?
         var encoding: String.Encoding = .windowsCP1252
         var fallback: UIFont?
+        var supported = true
         var unit: CGFloat = 0.001
         func decode(_ bytes: [UInt8]) -> [(Int, String)] {
             var result: [(Int,String)] = [], i = 0
@@ -32,6 +33,7 @@ final class PDFTextLayout {
             return result
         }
         func width(_ code: Int, text: String) -> CGFloat? {
+            guard supported else { return nil }
             if let value = widths[code] ?? defaultWidth { return value*unit }
             if let fallback { return (text as NSString).size(withAttributes:[.font:fallback]).width/1000 }
             return nil
@@ -51,13 +53,24 @@ final class PDFTextLayout {
     }
     private var state = State()
     private var stack: [State] = []
-    private var fonts: [UInt:Font] = [:]
+    private var fonts: [String:Font] = [:]
+    private var streamID = 0
+    private var scanSerial = 0
+    private var resources: CGPDFDictionaryRef?
     private var glyphs: [Glyph] = []
     private var depth = 0
 
     static func glyphs(on page: PDFPage) -> [Glyph] {
         guard let ref = page.pageRef else { return [] }
         let layout = PDFTextLayout()
+        var dictionary = ref.dictionary
+        for _ in 0..<32 {
+            guard let current = dictionary else { break }
+            var resources: CGPDFDictionaryRef?
+            if CGPDFDictionaryGetDictionary(current,"Resources",&resources), let resources { layout.resources = resources; break }
+            var parent: CGPDFDictionaryRef?
+            CGPDFDictionaryGetDictionary(current,"Parent",&parent); dictionary = parent
+        }
         let stream = CGPDFContentStreamCreateWithPage(ref)
         defer { CGPDFContentStreamRelease(stream) }
         layout.scan(stream)
@@ -79,7 +92,9 @@ final class PDFTextLayout {
     private func scan(_ stream: CGPDFContentStreamRef) {
         guard depth < 16, let table = CGPDFOperatorTableCreate() else { return }
         depth += 1
-        defer { depth -= 1; CGPDFOperatorTableRelease(table) }
+        let parentID = streamID
+        scanSerial += 1; streamID = scanSerial
+        defer { streamID = parentID; depth -= 1; CGPDFOperatorTableRelease(table) }
         CGPDFOperatorTableSetCallback(table,"q") { _,p in
             guard let s = PDFTextLayout.owner(p) else { return }; s.stack.append(s.state)
         }
@@ -112,7 +127,7 @@ final class PDFTextLayout {
                   let object = CGPDFContentStreamGetResource(CGPDFScannerGetContentStream(scanner),"Font",name) else { s.state.font = nil; return }
             var dictionary: CGPDFDictionaryRef?
             guard CGPDFObjectGetValue(object,.dictionary,&dictionary), let dictionary else { s.state.font = nil; return }
-            let key = UInt(bitPattern:dictionary)
+            let key = "\(s.streamID)|\(String(cString:name))"
             let font = s.fonts[key] ?? Self.font(dictionary)
             s.fonts[key] = font; s.state.font = font
         }
@@ -177,15 +192,17 @@ final class PDFTextLayout {
               let object = CGPDFContentStreamGetResource(parent,"XObject",name),
               CGPDFObjectGetValue(object,.stream,&form), let form,
               let dictionary = CGPDFStreamGetDictionary(form), Self.name(dictionary,"Subtype") == "Form" else { return }
-        let saved = state, savedStack = stack
-        defer { state = saved; stack = savedStack }
+        let saved = state, savedStack = stack, savedResources = resources
+        defer { state = saved; stack = savedStack; resources = savedResources }
         if let values = Self.array(dictionary,"Matrix"), CGPDFArrayGetCount(values) == 6 {
             let v = (0..<6).map { Self.real(values,$0) }
             state.ctm = CGAffineTransform(a:v[0],b:v[1],c:v[2],d:v[3],tx:v[4],ty:v[5]).concatenating(state.ctm)
         }
-        var resources: CGPDFDictionaryRef?
-        CGPDFDictionaryGetDictionary(dictionary,"Resources",&resources)
-        let child = CGPDFContentStreamCreateWithStream(form,resources,parent)
+        var formResources: CGPDFDictionaryRef?
+        CGPDFDictionaryGetDictionary(dictionary,"Resources",&formResources)
+        guard let effectiveResources = formResources ?? resources else { return }
+        resources = effectiveResources
+        let child = CGPDFContentStreamCreateWithStream(form,effectiveResources,parent)
         defer { CGPDFContentStreamRelease(child) }
         scan(child)
     }
@@ -214,6 +231,7 @@ final class PDFTextLayout {
         if let encoding = name(dict,"Encoding") {
             if encoding == "MacRomanEncoding" { font.encoding = .macOSRoman }
             if encoding.hasPrefix("Identity-") { font.lengths = [2] }
+            if encoding == "Identity-V" { font.supported = false }
         }
         if let descendants = array(dict,"DescendantFonts") {
             var child: CGPDFDictionaryRef?
@@ -251,7 +269,10 @@ final class PDFTextLayout {
         }
         // Standard, non-embedded fonts may omit Widths. Use their declared font,
         // never PDFKit's substituted attributed-string font.
-        if let base = name(dict,"BaseFont") { font.fallback = UIFont(name:base,size:1000) }
+        if let base = name(dict,"BaseFont") {
+            font.fallback = UIFont(name:base,size:1000)
+            if base.contains("+"), font.unicode.isEmpty, name(dict,"Encoding") == nil { font.supported = false }
+        }
         return font
     }
     private static func readCMap(_ text: String, into font: inout Font) {
