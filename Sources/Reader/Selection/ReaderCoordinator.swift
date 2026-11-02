@@ -492,13 +492,6 @@ final class ReaderCoordinator: NSObject {
         menu.textProvider = { [weak self] in
             self?.selectionText ?? ""
         }
-        menu.linkProvider = { [weak self] in self?.selectedLink() }
-        menu.onOpenLink = { [weak self] in
-            guard let self, let link = self.selectedLink(), let view = self.pdfView as? VocabPDFView else { return }
-            self.jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 2
-            self.clearSelection()
-            view.openLink(link)
-        }
         menu.install(on: view)
         menu.targetRectProvider = { [weak self] _ in
             self?.menuEnvelopeRect()
@@ -1128,7 +1121,7 @@ final class ReaderCoordinator: NSObject {
 
         if let page = pdfView.page(for: point, nearest: false) {
             let pagePoint = pdfView.convert(point, to: page)
-            if let link = page.annotations.first(where: { $0.type == "Link" && $0.bounds.contains(pagePoint) }),
+            if let link = page.annotations.first(where: { VocabPDFView.hasTapAction($0) && $0.type != "Widget" && $0.bounds.contains(pagePoint) }),
                let view = pdfView as? VocabPDFView {
                 jumpGuardUntil = CFAbsoluteTimeGetCurrent() + 2
                 clearSelection()
@@ -1171,7 +1164,7 @@ final class ReaderCoordinator: NSObject {
     private func selectText(at viewPoint: CGPoint, source: String) -> Bool {
         guard let pdfView, let hit = pageHit(viewPoint) else { return false }
         let tolerance = min(8, 6 / max(pdfView.scaleFactor, 0.1))
-        let link = hit.page.annotations.contains { $0.type == "Link" && $0.bounds.contains(hit.point) }
+        let link = hit.page.annotations.contains { VocabPDFView.hasTapAction($0) && $0.bounds.contains(hit.point) }
         let roundTrip = pdfView.convert(hit.point, from: hit.page)
         DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
             source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
@@ -1193,15 +1186,6 @@ final class ReaderCoordinator: NSObject {
         }
         DiagLog.log("selection.miss: source=\(source) page=\(currentPageIndexFor(page: hit.page))")
         return false
-    }
-
-    private func selectedLink() -> PDFAnnotation? {
-        for item in rects {
-            if let link = item.page.annotations.first(where: {
-                $0.type == "Link" && $0.bounds.intersects(item.rect)
-            }) { return link }
-        }
-        return nil
     }
 
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
@@ -2526,6 +2510,8 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         if gestureRecognizer.view is SelectionHandleView || otherGestureRecognizer.view is SelectionHandleView { return false }
+        // A press selecting linked text and a tap activating it are mutually exclusive.
+        if gestureRecognizer is UITapGestureRecognizer || otherGestureRecognizer is UITapGestureRecognizer { return false }
         return true
     }
 }

@@ -13,6 +13,10 @@ final class VocabPDFView: PDFView {
         else if let destination = annotation.destination { go(to: destination) }
     }
 
+    static func hasTapAction(_ annotation: PDFAnnotation) -> Bool {
+        annotation.type == "Link" || annotation.action != nil || annotation.destination != nil
+    }
+
     private let linkOutline = CAShapeLayer()
 
     /// Display-only overlay: never mutates PDF annotations or intercepts touches.
@@ -20,7 +24,7 @@ final class VocabPDFView: PDFView {
         let path = UIBezierPath()
         if !handwritingMode {
             for page in visiblePages {
-                for annotation in page.annotations where annotation.type == "Link" || annotation.type == "Widget" {
+                for annotation in page.annotations where Self.hasTapAction(annotation) || annotation.type == "Widget" {
                     let rect = convert(annotation.bounds,from:page)
                     if rect.intersects(bounds), !rect.isEmpty { path.append(UIBezierPath(rect:rect)) }
                 }

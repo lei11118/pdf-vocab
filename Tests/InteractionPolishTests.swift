@@ -8,10 +8,16 @@ import SwiftUI
 @MainActor
 final class InteractionPolishTests:XCTestCase {
     func testLinkedTextLongPressSelectsAndSingleTapNavigates() throws {
-        let url = try XCTUnwrap(Bundle(for:RealPDFSelectionTests.self).url(forResource:"OpenStax-selection",withExtension:"pdf"))
+        let url = try XCTUnwrap(Bundle(for:GlyphSelectionTests.self).url(forResource:"OpenStax-selection",withExtension:"pdf"))
         let document = try XCTUnwrap(PDFDocument(url:url))
         let page = try XCTUnwrap(document.page(at:0)), target = try XCTUnwrap(document.page(at:1))
         let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene:scene), controller = UIViewController()
+        window.frame = view.bounds; controller.view = view; window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKey() }
         view.displayMode = .singlePage
         view.document = document
         view.scaleFactor = 1.5
@@ -31,6 +37,8 @@ final class InteractionPolishTests:XCTestCase {
         coordinator.perform(NSSelectorFromString("handlePress:"),with:press)
         XCTAssertEqual(texts.last,"Functions")
         XCTAssertTrue(view.currentPage === page,"selecting linked text must preserve page")
+        press.testState = .ended
+        coordinator.perform(NSSelectorFromString("handlePress:"),with:press)
         coordinator.clearTempHighlight()
         // Use a destination-only annotation too: not every PDF link has an action.
         page.removeAnnotation(link)
@@ -62,6 +70,65 @@ final class InteractionPolishTests:XCTestCase {
         }
         XCTAssertEqual(picked,["word","next","+"])
         coordinator.clearTempHighlight()
+    }
+
+    func testWordGeometryAcrossFontsAndSizes() throws {
+        let words = ["Alpha", "beta", "gamma", "don't", "well-known", "2026"]
+        for name in ["Helvetica", "Helvetica-Bold", "TimesNewRomanPSMT", "Courier"] {
+            for size in [CGFloat(12),CGFloat(24)] {
+                let font = try XCTUnwrap(UIFont(name:name,size:size))
+                let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:700,height:200)).pdfData { ctx in
+                    ctx.beginPage()
+                    (words.joined(separator:" ") as NSString).draw(at:CGPoint(x:30,y:40),withAttributes:[.font:font])
+                }
+                let document = try XCTUnwrap(PDFDocument(data:data)), page = try XCTUnwrap(document.page(at:0))
+                let text = try XCTUnwrap(page.string) as NSString
+                for word in words {
+                    let range = text.range(of:word)
+                    XCTAssertNotEqual(range.location,NSNotFound)
+                    guard range.location != NSNotFound else { continue }
+                    for i in range.location..<NSMaxRange(range) {
+                        let rect = try XCTUnwrap(page.selection(for:NSRange(location:i,length:1))).bounds(for:page)
+                        let selection = SelectionGeometry.initialWord(on:page,at:CGPoint(x:rect.midX,y:rect.midY),tolerance:0)
+                        XCTAssertEqual(selection.map { SelectionGeometry.lookupText(for:$0) },word,"\(name) \(size) glyph=\(i)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testLinkBlueOutlinesDoNotModifyPDF() async throws {
+        let bytes = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:300)).pdfData { ctx in
+            ctx.beginPage()
+            ("Linked text" as NSString).draw(at:CGPoint(x:30,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:24)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data:bytes)), page = try XCTUnwrap(document.page(at:0))
+        let textRect = try XCTUnwrap(page.selection(for:NSRange(location:0,length:11))).bounds(for:page)
+        let link = PDFAnnotation(bounds:textRect,forType:.link,withProperties:nil)
+        link.action = PDFActionURL(url:try XCTUnwrap(URL(string:"https://example.com")))
+        page.addAnnotation(link)
+        let before = page.annotations.count
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene:scene)
+        window.frame = CGRect(x:0,y:0,width:900,height:700)
+        let controller = UIViewController(), view = VocabPDFView(frame:window.bounds)
+        controller.view = view; window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKey() }
+        view.document = document; view.autoScales = true
+        view.layoutDocumentView()
+        try await Task.sleep(for:.milliseconds(200))
+        view.refreshLinkOutlines()
+        let outline = try XCTUnwrap(view.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.last)
+        XCTAssertFalse(try XCTUnwrap(outline.path).isEmpty)
+        XCTAssertEqual(outline.lineWidth,1)
+        XCTAssertEqual(page.annotations.count,before)
+        let image = UIGraphicsImageRenderer(size:view.bounds.size).image { _ in
+            view.drawHierarchy(in:view.bounds,afterScreenUpdates:true)
+        }
+        let attachment = XCTAttachment(image:image)
+        attachment.name = "linked-text-blue-outline"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
     func testNativeControlTapAndScrollAndPinchRemainAvailable() {
@@ -553,9 +620,11 @@ private final class CompletedWordTap: UITapGestureRecognizer {
     override func location(in view: UIView?) -> CGPoint { point }
 }
 
+@MainActor
 private final class BeganWordPress: UILongPressGestureRecognizer {
     private let hit: CGPoint
     init(point:CGPoint) { hit = point; super.init(target:nil,action:nil) }
-    override var state: UIGestureRecognizer.State { get { .began } set { } }
+    var testState: UIGestureRecognizer.State = .began
+    override var state: UIGestureRecognizer.State { get { testState } set { testState = newValue } }
     override func location(in view:UIView?) -> CGPoint { hit }
 }

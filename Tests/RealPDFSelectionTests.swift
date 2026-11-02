@@ -4,7 +4,7 @@ import UIKit
 @testable import PdfVocab
 
 @MainActor
-final class RealPDFSelectionTests: XCTestCase {
+final class GlyphSelectionTests: XCTestCase {
     func testOriginalOpenStaxWordHits() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
         let document = try XCTUnwrap(PDFDocument(url: url))
