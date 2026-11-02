@@ -14,6 +14,7 @@ enum GraphConfig {
     static let edgeHitWidth: CGFloat = 20
     static let snapshotZoom: CGFloat = 0.55
     static let nodeSize = CGSize(width: 300, height: 200)
+    static let headerHeight: CGFloat = 32
 }
 
 enum GraphAnchor: String, CaseIterable, Codable {
