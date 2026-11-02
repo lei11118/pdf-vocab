@@ -56,6 +56,7 @@ struct ReaderView: View {
     @State private var capturing = false
     @State private var inkUndoRevision = 0
     @State private var captureMessage: String?
+    @State private var captureThumbnail: UIImage?
     @State private var lastCaptureId: String?
     @StateObject private var graphModel: KnowledgeGraphStore
     /// v0.23.0:页面缩略图 / 双页显示 / 清空本页手写
@@ -672,11 +673,12 @@ struct ReaderView: View {
             .overlay(alignment: .bottom) {
                 if let captureMessage {
                     HStack {
+                        if let captureThumbnail { Image(uiImage:captureThumbnail).resizable().scaledToFit().frame(width:48,height:36).accessibilityHidden(true) }
                         Text(captureMessage)
                         if let id = lastCaptureId {
                             Button("撤销") {
                                 graphModel.checkpoint(); graphModel.graph.delete(id); graphModel.save(immediate: true)
-                                self.captureMessage = nil; lastCaptureId = nil
+                                self.captureMessage = nil; lastCaptureId = nil; captureThumbnail = nil
                             }
                         }
                     }.padding().background(.regularMaterial,in:RoundedRectangle(cornerRadius:12)).padding(.bottom,100)
@@ -686,6 +688,7 @@ struct ReaderView: View {
 
     private func capture(_ rect: CGRect) {
         capturing = false
+        captureThumbnail = nil
         guard let view = readerHandle.coordinator?.pdfView else { return }
         do {
             let result = try GraphCapture.render(view: view, rect: rect, docId: doc.sha256, ink: PencilInkStore(db: store.db))
@@ -706,8 +709,8 @@ struct ReaderView: View {
                     let bottom = graphModel.graph.nodes.map { $0.frame.maxY }.max() ?? -40
                     let shot = GraphScreenshot(imagePath:imageName,thumbPath:thumbName,sourceDocId:doc.sha256,pageIndex:result.page,sourceRect:result.normalized,words:result.words,ocrStatus:result.words.isEmpty ? "pending" : "done")
                     graphModel.checkpoint()
-                    graphModel.graph.nodes.append(KnowledgeNode(id:id,graphId:graphModel.graph.id,kind:.screenshot,frame:CGRect(x:0,y:bottom+40,width:300,height:300*image.size.height/image.size.width+32),zIndex:graphModel.graph.nodes.count,screenshot:shot))
-                    graphModel.save(immediate:true); captureMessage = "已加入知识图谱"; lastCaptureId = id
+                    graphModel.graph.nodes.append(KnowledgeNode(id:id,graphId:graphModel.graph.id,kind:.screenshot,frame:CGRect(x:0,y:bottom+40,width:300,height:300*image.size.height/image.size.width+GraphConfig.headerHeight),zIndex:graphModel.graph.nodes.count,screenshot:shot))
+                    graphModel.save(immediate:true); captureMessage = "已加入知识图谱"; captureThumbnail = image; lastCaptureId = id
                     if result.words.isEmpty {
                         let words = (try? await Task.detached(priority:.utility) { try GraphCapture.recognize(image) }.value) ?? []
                         if let index = graphModel.graph.nodes.firstIndex(where: { $0.id == id }) {
@@ -717,7 +720,7 @@ struct ReaderView: View {
                         }
                     }
                     try? await Task.sleep(nanoseconds:4_000_000_000)
-                    if lastCaptureId == id { captureMessage = nil; lastCaptureId = nil }
+                    if lastCaptureId == id { captureMessage = nil; lastCaptureId = nil; captureThumbnail = nil }
                 } catch { captureMessage = error.localizedDescription }
             }
         } catch { captureMessage = error.localizedDescription }

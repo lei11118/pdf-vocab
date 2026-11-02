@@ -16,6 +16,10 @@ struct KnowledgeGraphView: View {
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
     @State private var moveMode = false
+    private var connectionTarget: String? {
+        guard let connection else { return nil }
+        return model.graph.nodes.sorted { $0.zIndex > $1.zIndex }.first { $0.id != connection.0 && $0.frame.contains(connection.2) }?.id
+    }
 
     init(docId: String, db: AppDatabase, tools: PencilToolSession, onSource: ((GraphScreenshot) -> Void)? = nil) {
         _model = StateObject(wrappedValue: KnowledgeGraphStore(docId: docId, db: db))
@@ -148,7 +152,7 @@ struct KnowledgeGraphView: View {
                 if let shot = node.screenshot, onSource != nil { Button("来源") { model.save(immediate: true); dismiss(); onSource?(shot) }.font(.caption) }
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
             }
-            .padding(7).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
+            .padding(.horizontal,7).frame(height:GraphConfig.headerHeight).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
             .gesture(DragGesture().onChanged { value in
                 selected = node.id; editing = nil
                 if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame }
@@ -160,7 +164,7 @@ struct KnowledgeGraphView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected == node.id ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected == node.id ? 2 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected == node.id || connectionTarget == node.id ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected == node.id || connectionTarget == node.id ? 2 : 1))
         .overlay { if selected == node.id { handles(node) } }
         .onTapGesture { selected = node.id }
         .onHover { inside in if inside { selected = node.id } }
@@ -230,7 +234,7 @@ struct KnowledgeGraphView: View {
                         var rect = original
                         rect.size.width = max(GraphConfig.minSize, original.width + (corner % 2 == 0 ? -dx : dx))
                         rect.size.height = max(GraphConfig.minSize, original.height + (corner < 2 ? -dy : dy))
-                        if node.kind == .screenshot { rect.size.height = (rect.width * (original.height-32)/original.width)+32 }
+                        if node.kind == .screenshot { rect.size.height = (rect.width * (original.height-GraphConfig.headerHeight)/original.width)+GraphConfig.headerHeight }
                         if corner % 2 == 0 { rect.origin.x = original.maxX-rect.width }
                         if corner < 2 { rect.origin.y = original.maxY-rect.height }
                         var n = node; n.frame = rect; binding(node.id).wrappedValue = n

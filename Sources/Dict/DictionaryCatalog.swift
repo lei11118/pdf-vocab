@@ -27,8 +27,9 @@ extension DictionaryStore {
         if Bundle.main.url(forResource:"lexical",withExtension:"sqlite") != nil {
             result.append(DictionarySource(id:"wordnet",name:"Open English WordNet 英英补充",detail:"含数学、科学等多义项 · CC BY 4.0 / WordNet License",count:0))
         }
+        var config = Configuration(); config.readonly = true
         if let url = Bundle.main.url(forResource: "science", withExtension: "sqlite"),
-           let queue = try? DatabaseQueue(path: url.path) {
+           let queue = try? DatabaseQueue(path: url.path, configuration:config) {
             let counts = (try? queue.read { db in try Row.fetchAll(db, sql: "SELECT domain,COUNT(*) AS n FROM dict GROUP BY domain") }) ?? []
             for row in counts {
                 let id: String = row["domain"], count: Int = row["n"]
