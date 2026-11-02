@@ -698,7 +698,15 @@ final class ReaderCoordinator: NSObject {
                 let isLinkTap = (gr as? UITapGestureRecognizer).map {
                     $0.numberOfTapsRequired == 1 && $0.numberOfTouchesRequired == 1
                 } ?? false
-                if (isLongPress || isMultiTap || isLinkTap), gr.isEnabled {
+                if isLinkTap {
+                    // Preserve native controls (form fields etc.). A completed
+                    // custom tap/press wins; native tap is available only when
+                    // our recognizers deliberately decline the touch.
+                    if let tapRef { gr.require(toFail:tapRef) }
+                    if let fingerPressRef { gr.require(toFail:fingerPressRef) }
+                    if let pencilPressRef { gr.require(toFail:pencilPressRef) }
+                }
+                if (isLongPress || isMultiTap), gr.isEnabled {
                     gr.isEnabled = false
                     disabled += 1
                 }
@@ -758,7 +766,7 @@ final class ReaderCoordinator: NSObject {
             if let (page, lineRects) = orderedSelectionRects(),
                page === hit.page,
                let firstLine = lineRects.first, let lastLine = lineRects.last,
-               lineRects.contains(where: { $0.insetBy(dx: -6, dy: -6).contains(hit.point) }) {
+               lineRects.contains(where: { $0.contains(hit.point) }) {
                 let startAnchor = CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
                 let endAnchor = CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
                 let nearerStart = SelectionGeometry.distanceSquared(hit.point, startAnchor)
@@ -2502,6 +2510,11 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         if markMode && toolSession?.kind == .laser { return false }
         if gestureRecognizer.view is SelectionHandleView { return true }
         if touch.view is InkEditingOverlay { return false }
+        if gestureRecognizer === tapRef, let pdfView,
+           let hit = pageHit(touch.location(in:pdfView)),
+           hit.page.annotations.contains(where: { $0.type == "Widget" && $0.bounds.contains(hit.point) }) {
+            return false // Preserve native form control activation on a short tap.
+        }
         // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
         if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }

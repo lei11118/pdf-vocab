@@ -16,20 +16,19 @@ final class InteractionPolishTests:XCTestCase {
         view.document = document
         view.scaleFactor = 1.5
         view.layoutDocumentView()
+        for annotation in page.annotations where annotation.type == "Link" { page.removeAnnotation(annotation) }
         let link = PDFAnnotation(bounds:CGRect(x:160,y:370,width:50,height:18),forType:.link,withProperties:nil)
         let action = PDFActionGoTo(destination:PDFDestination(page:target,at:CGPoint(x:0,y:700)))
         link.action = action
         page.addAnnotation(link)
         view.go(to:page)
-        view.perform(action)
-        XCTAssertTrue(view.currentPage === page,"native annotation action must not navigate")
         var texts: [String] = []
         let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 { texts.append(info.text) } })
         coordinator.pdfView = view
         coordinator.hapticsEnabled = false
         let point = view.convert(CGPoint(x:183.4946,y:377.4785),from:page)
         let press = BeganWordPress(point:point)
-        coordinator.perform(NSSelectorFromString("handleFingerPress:"),with:press)
+        coordinator.perform(NSSelectorFromString("handlePress:"),with:press)
         XCTAssertEqual(texts.last,"Functions")
         XCTAssertTrue(view.currentPage === page,"selecting linked text must preserve page")
         coordinator.clearTempHighlight()
@@ -65,7 +64,7 @@ final class InteractionPolishTests:XCTestCase {
         coordinator.clearTempHighlight()
     }
 
-    func testNativeSingleTapSuppressionPreservesScrollAndPinch() {
+    func testNativeControlTapAndScrollAndPinchRemainAvailable() {
         let view = VocabPDFView(frame:CGRect(x:0,y:0,width:900,height:1100))
         let content = UIView(frame:view.bounds)
         view.addSubview(content)
@@ -76,7 +75,7 @@ final class InteractionPolishTests:XCTestCase {
         content.addGestureRecognizer(pinch)
         let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ _ in })
         coordinator.suppressNativeSelection(in:view)
-        XCTAssertFalse(nativeLink.isEnabled)
+        XCTAssertTrue(nativeLink.isEnabled)
         XCTAssertTrue(pan.isEnabled)
         XCTAssertTrue(pinch.isEnabled)
     }

@@ -7,11 +7,6 @@ import PDFKit
 final class VocabPDFView: PDFView {
     var handwritingMode = false
 
-    // Native annotation taps are routed through the coordinator after long press fails.
-    override func perform(_ action: PDFAction) {
-        DiagLog.log("link: native action blocked type=\(type(of: action))")
-    }
-
     func openLink(_ annotation: PDFAnnotation) {
         DiagLog.log("link: explicitly opened")
         if let action = annotation.action { super.perform(action) }
@@ -33,12 +28,13 @@ final class VocabPDFView: PDFView {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        linkOutline.frame = bounds
+        linkOutline.bounds = bounds
+        linkOutline.position = CGPoint(x:bounds.midX,y:bounds.midY)
         linkOutline.path = path.cgPath
         linkOutline.fillColor = UIColor.clear.cgColor
         linkOutline.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8).cgColor
         linkOutline.lineWidth = 1
-        if linkOutline.superlayer == nil { layer.addSublayer(linkOutline) }
+        layer.addSublayer(linkOutline)
         CATransaction.commit()
     }
 
