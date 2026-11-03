@@ -30,7 +30,7 @@ struct ToolArcGeometry {
         let distance = radius * cos(ToolArcConfig.sweep / 2)
         return CGPoint(x: anchor.x - sin(mid) * distance * (leftHanded ? -1 : 1), y: anchor.y + cos(mid) * distance)
     }
-    var pitch: CGFloat { radius * ToolArcConfig.sweep / 4 }
+    var pitch: CGFloat { ToolArcConfig.diameter + 4 }
     var initialCount: Int { min(4, count) }
     var initialRange: Range<Int> {
         let start = max(0, (count - initialCount) / 2)

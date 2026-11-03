@@ -814,6 +814,7 @@ struct ReaderView: View {
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
                         if arcAnchor != nil { arcAnchor = nil; return }
+                        if !markMode, wordInteraction.squeeze() { return }
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
                         withAnimation(reduceMotion ? nil : DS.Motion.quickSpring) {
                             if arcAnchor == nil {

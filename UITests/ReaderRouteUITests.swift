@@ -5,6 +5,8 @@ final class ReaderRouteUITests:XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
         app.launch()
+        let document = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
+        if document.waitForExistence(timeout:10) { document.tap() }
         XCTAssertTrue(app.buttons["更多"].waitForExistence(timeout:30))
         for writing in [false,true] {
             if writing { app.buttons["标记模式"].tap() }
@@ -41,6 +43,8 @@ final class ReaderRouteUITests:XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
         app.launch()
+        let document = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
+        if document.waitForExistence(timeout:10) { document.tap() }
         XCTAssertTrue(app.buttons["更多"].waitForExistence(timeout:30))
         app.buttons["进入专注模式"].tap()
         XCTAssertTrue(app.buttons["退出专注"].waitForExistence(timeout:5))

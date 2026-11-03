@@ -411,8 +411,8 @@ struct CompactCardView: View {
         switch content {
         case .word(let term):
             return term
-        case .sentence(let text, _):
-            return text
+        case .sentence:
+            return "选区翻译"
         }
     }
 
@@ -420,8 +420,8 @@ struct CompactCardView: View {
         switch content {
         case .word(let term):
             return term
-        case .sentence(let text, _):
-            return text
+        case .sentence:
+            return "选区翻译"
         }
     }
 
@@ -461,7 +461,7 @@ struct CompactCardView: View {
             DictionaryService.lookup(term)
         }.value
         if case .found(let entry) = outcome {
-            translation = WordInteraction.fullDetail(entry)
+            translation = entry.translation?.components(separatedBy:"\n").filter { !$0.isEmpty && !$0.hasPrefix("【") }.prefix(2).joined(separator:"；")
         } else {
             translation = nil
         }

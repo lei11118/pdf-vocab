@@ -903,6 +903,18 @@ final class ReaderCoordinator: NSObject {
         switch gesture.state {
         case .began, .changed:
             let viewPoint = gesture.location(in: pdfView)
+            if let hit = pageHit(viewPoint), let words = ocrWords(for:hit.page),
+               let index = ocrWordIndex(at:hit.point,on:hit.page) {
+                let text = words[index].text
+                let term = WordPicker.firstLexicalWord(in:text) ?? text
+                let key = VocabStore.normalizedKey(term)
+                if !key.isEmpty {
+                    let rect = pdfView.convert(OCRService.pageRect(from:words[index],pageBounds:hit.page.bounds(for:.mediaBox)),from:hit.page)
+                    hoverKey = key
+                    onHoverUpdate?(term,key,CGPoint(x:rect.midX,y:rect.minY))
+                    return
+                }
+            }
             guard let hit = pageHit(viewPoint),
                   let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
                   let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),

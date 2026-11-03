@@ -45,7 +45,7 @@ final class OCRStore: @unchecked Sendable {
     func markDone(docSha: String) {
         try? db.dbQueue.write { db in
             try db.execute(
-                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 3, ?)",
+                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 5, ?)",
                 arguments: [docSha, Date()]
             )
         }
@@ -56,7 +56,7 @@ final class OCRStore: @unchecked Sendable {
             try Int.fetchOne(db, sql: "SELECT done FROM ocr_status WHERE docSha = ?", arguments: [docSha])
         }) ?? nil
         // Version 3 includes page-level scanning and overlapping recognition tiles.
-        return done == 3
+        return done == 5
     }
 
     /// v0.23.2:整本 OCR 词文本(词频分析补全扫描版用;按页/词序输出)

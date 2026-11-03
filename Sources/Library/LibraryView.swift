@@ -26,7 +26,7 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var showVocab = false
     @State private var showGraph = false
-    @State private var auditDocument: DocumentRecord?
+    @State private var activeDocument: DocumentRecord?
     #if DEBUG
     @State private var didLaunchRouteAudit = false
     #endif
@@ -64,7 +64,7 @@ struct LibraryView: View {
             .navigationDestination(for: DocumentRecord.self) { doc in
                 ReaderView(doc: doc, store: store)
             }
-            .navigationDestination(item:$auditDocument) { doc in ReaderView(doc:doc,store:store) }
+            .navigationDestination(item:$activeDocument) { doc in ReaderView(doc:doc,store:store) }
             .navigationDestination(item: $readerJump) { target in
                 if let rec = try? store.document(sha256: target.docSha) {
                     ReaderView(doc: rec, store: store, jumpTarget: target)
@@ -164,7 +164,8 @@ struct LibraryView: View {
                         }
                     }
                     try? data.write(to:url)
-                    auditDocument = try? store.importFile(from:url)
+                    _ = try? store.importFile(from:url)
+                    reload()
                     try? FileManager.default.removeItem(at:url)
                 }
                 #endif
@@ -271,7 +272,7 @@ struct LibraryView: View {
                 spacing: DS.Space.l
             ) {
                 ForEach(filteredDocuments) { doc in
-                    NavigationLink(value: doc) {
+                    Button { activeDocument = doc } label: {
                         LibraryCoverCell(
                             doc: doc,
                             url: try? store.pdfURL(for: doc)
@@ -293,7 +294,7 @@ struct LibraryView: View {
     }
 
     private func resumeCard(_ doc: DocumentRecord) -> some View {
-        NavigationLink(value: doc) {
+        Button { activeDocument = doc } label: {
             HStack(spacing: DS.Space.s) {
                 DocumentCoverThumbnail(doc: doc, url: try? store.pdfURL(for: doc))
                     .frame(width: 104)

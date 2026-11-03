@@ -131,7 +131,7 @@ enum OCRService {
     private static func recognizeRegion(page: PDFPage, region: CGRect) -> [OCRWord] {
         let pageBounds = region
         guard pageBounds.width > 1, pageBounds.height > 1 else { return [] }
-        let factor = min(4.2, min(4096/max(pageBounds.width,pageBounds.height),sqrt(6_000_000/(pageBounds.width*pageBounds.height))))
+        let factor = min(6, min(5120/max(pageBounds.width,pageBounds.height),sqrt(10_000_000/(pageBounds.width*pageBounds.height))))
         let target = CGSize(width:floor(pageBounds.width*factor),height:floor(pageBounds.height*factor))
         guard target.width>1,target.height>1 else { return [] }
         guard let cgImage = recognitionImage(page: page, size: target, region: region) else { return [] }

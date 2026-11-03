@@ -22,7 +22,7 @@ struct PencilArcMenu: View {
     @State private var appeared = false
     @State private var customizing = false
     @State private var toolStart = 0
-    @State private var showActions = false
+    @State private var showActions = true
     private var capacity: Int {
         12
     }
@@ -156,7 +156,7 @@ struct PencilArcMenu: View {
         reset = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(ToolArcConfig.resetDelay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            leftExtent = 0; rightExtent = 0; showActions = false; reset = nil
+            leftExtent = 0; rightExtent = 0; showActions = true; reset = nil
         }
     }
 }
