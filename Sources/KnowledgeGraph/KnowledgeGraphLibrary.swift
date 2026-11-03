@@ -6,7 +6,9 @@ struct KnowledgeGraphLibrary: View {
     @State private var documents: [DocumentRecord] = []
     @State private var chosen: DocumentRecord?
     @StateObject private var tools = PencilToolSession()
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     var body: some View {
         NavigationStack {
             List(documents) { doc in
@@ -16,9 +18,9 @@ struct KnowledgeGraphLibrary: View {
             }
             .overlay { if documents.isEmpty { ContentUnavailableView("暂无文档",systemImage:"books.vertical",description:Text("导入文档后可创建对应的知识图谱。")) } }
             .navigationTitle("选择文档图谱")
-            .toolbar { ToolbarItem(placement:.topBarLeading) { Button("完成") { dismiss() } } }
+            .toolbar { ToolbarItem(placement:.topBarLeading) { Button("完成") { closePanel() } } }
             .task { documents = (try? store.allDocuments()) ?? [] }
-            .fullScreenCover(item:$chosen) { doc in
+            .readerAwarePanel(item:$chosen,title:"知识图谱") { doc in
                 KnowledgeGraphView(docId:doc.sha256,db:store.db,tools:tools)
             }
         }

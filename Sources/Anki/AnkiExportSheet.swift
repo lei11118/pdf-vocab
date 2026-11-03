@@ -7,7 +7,9 @@ struct AnkiExportSheet: View {
     let words: [VocabStore.WordSummary]
     var docStore: DocumentStore? = nil
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var deckName = "跃文"
     @State private var includeAudio = true
     @State private var includeReverse = false
@@ -94,7 +96,7 @@ struct AnkiExportSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
+                    Button("关闭") { closePanel() }
                 }
             }
             .sheet(item: $shareItem) { item in

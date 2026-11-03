@@ -135,6 +135,7 @@ final class DocumentTranslationRepository: @unchecked Sendable {
     var onPagePrepared: ((Int) -> Void)?
     func prioritize(_ page:Int) { preferredPage = page }
     func requestContext(term:String,location:TranslationLocation?) {
+        contextStatus = ""
         requestedTerm = term; requestedLocation = location
         if let location { preferredPage = location.page }
         contextRevision += 1

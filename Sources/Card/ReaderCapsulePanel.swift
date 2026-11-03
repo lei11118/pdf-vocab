@@ -51,3 +51,25 @@ struct ReaderCapsulePanel<Content:View>: View {
         }
     }
 }
+
+/// Nested app panels use the same window only when reached from a reader.
+private struct ReaderAwarePanel<Panel:View>:ViewModifier {
+    @Environment(\.readerPanelClose) private var parentClose
+    @Binding var presented:Bool
+    let title:String
+    @ViewBuilder var panel:() -> Panel
+    @ViewBuilder func body(content:Content) -> some View {
+        if parentClose != nil { content.readerPanel(isPresented:$presented,title:title,content:panel) }
+        else { content.sheet(isPresented:$presented,content:panel) }
+    }
+}
+extension View {
+    func readerAwarePanel<Panel:View>(isPresented:Binding<Bool>,title:String,@ViewBuilder content:@escaping () -> Panel) -> some View {
+        modifier(ReaderAwarePanel(presented:isPresented,title:title,panel:content))
+    }
+    func readerAwarePanel<Item:Identifiable,Panel:View>(item:Binding<Item?>,title:String,@ViewBuilder content:@escaping (Item) -> Panel) -> some View {
+        readerAwarePanel(isPresented:Binding(get:{item.wrappedValue != nil},set:{if !$0 {item.wrappedValue = nil}}),title:title) {
+            if let value = item.wrappedValue { content(value) }
+        }
+    }
+}

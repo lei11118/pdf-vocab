@@ -151,6 +151,7 @@ struct LibraryView: View {
                 reload()
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("--reader-route-audit"),auditDocument == nil {
+                    UserDefaults.standard.set(false,forKey:"restoreWritingState")
                     let url = FileManager.default.temporaryDirectory.appendingPathComponent("Reader-route-audit.pdf")
                     let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:600,height:800)).pdfData { context in
                         for _ in 0..<2 {

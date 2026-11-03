@@ -182,4 +182,12 @@ final class TranslationAndInteractionTests: XCTestCase {
         XCTAssertTrue(detail.contains("语境释义·模型建议")); XCTAssertTrue(detail.contains("数学中的映射关系"))
     }
 
+    func testContextSpanRejectsMissingReorderedOrDuplicateMarkers() throws {
+        let source = "A function differs from another function."
+        let token = try XCTUnwrap(TranslationAlignment.tokens(source).last { $0.word == "function" })
+        XCTAssertEqual(ContextSpan.marked(source:source,token:token),"A function differs from another ⟦function⟧.")
+        XCTAssertEqual(ContextSpan.gloss(in:"一个函数不同于另一个⟦函数⟧。",word:"function"),"函数")
+        for text in ["一个函数。","⟧函数⟦","⟦函数⟧与⟦功能⟧","⟦function⟧","⟦⟧"] { XCTAssertNil(ContextSpan.gloss(in:text,word:"function")) }
+    }
+
 }
