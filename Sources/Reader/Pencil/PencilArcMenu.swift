@@ -42,7 +42,7 @@ struct PencilArcMenu: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.001).ignoresSafeArea()
-            lowerTrack.stroke(DS.background3.opacity(0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
+            lowerTrack.trim(from:trackTrim.lowerBound,to:trackTrim.upperBound).stroke(DS.background3.opacity(0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
             if debugGeometry {
                 Path { path in
                     let a = geometry.point(angle:geometry.mid-ToolArcConfig.sweep/2,radius:geometry.radius)
@@ -60,7 +60,7 @@ struct PencilArcMenu: View {
                     if let preset = tool.preset {
                         Circle().fill(Color(uiColor:preset.state.currentUIColor)).frame(width:10,height:10).padding(3).allowsHitTesting(false)
                     }
-                }.opacity(appeared ? 1 : 0).position(geometry.position(index, count: tools.count, upper: false))
+                }.transition(.identity).opacity(appeared ? 1 : 0).position(geometry.position(index, count: tools.count, upper: false))
             }
             ForEach(upper.indices, id: \.self) { index in
                 icon(upper[index].0, label: upper[index].1, active: false) { activateUpper(index) }
@@ -103,15 +103,23 @@ struct PencilArcMenu: View {
     }
     private var lowerTrack: Path {
         var path = Path()
-        let initial = min(tools.count,geometry.initialCount),base = (tools.count-initial)/2
-        let left = min(CGFloat(base),leftExtent),right = min(CGFloat(tools.count-base-initial),rightExtent)
-        let start = geometry.mid-ToolArcConfig.sweep/2-left*geometry.pitch/geometry.radius
-        let end = geometry.mid+ToolArcConfig.sweep/2+right*geometry.pitch/geometry.radius
+        let half = fullTrackHalf
+        let start = geometry.mid-half
+        let end = geometry.mid+half
         for step in 0...80 {
             let point = geometry.point(angle:start+(end-start)*CGFloat(step)/80,radius:geometry.radius)
             if step == 0 { path.move(to:point) } else { path.addLine(to:point) }
         }
         return path
+    }
+    private var fullTrackHalf: CGFloat {
+        max(ToolArcConfig.sweep/2,(CGFloat(max(0,tools.count-1))*geometry.pitch+ToolArcConfig.diameter)/geometry.radius/2)
+    }
+    private var trackTrim: ClosedRange<CGFloat> {
+        let middle = CGFloat(max(0,tools.count-1))/2
+        let left = max(ToolArcConfig.sweep/2,((middle-CGFloat(visibleIndices.lowerBound))*geometry.pitch+ToolArcConfig.diameter/2)/geometry.radius)
+        let right = max(ToolArcConfig.sweep/2,((CGFloat(max(0,visibleIndices.upperBound-1))-middle)*geometry.pitch+ToolArcConfig.diameter/2)/geometry.radius)
+        return max(0,(fullTrackHalf-left)/(fullTrackHalf*2))...min(1,(fullTrackHalf+right)/(fullTrackHalf*2))
     }
     private func enabled(_ index: Int) -> Bool {
         if index == upper.count-3 { return toolStart > 0 }
