@@ -480,7 +480,14 @@ final class InteractionPolishTests:XCTestCase {
                     let context = try XCTUnwrap(CGContext(data:buffer.baseAddress,width:140,height:80,bitsPerComponent:8,bytesPerRow:140*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue))
                     context.draw(crop,in:CGRect(x:0,y:0,width:140,height:80))
                     let bytes = buffer.bindMemory(to:UInt8.self)
-                    return stride(from:0,to:bytes.count,by:4).filter { Int(bytes[$0])+Int(bytes[$0+1])+Int(bytes[$0+2]) < 540 }.count
+                    var count = 0
+                    for offset in stride(from:0,to:bytes.count,by:4) {
+                        let red = Int(bytes[offset])
+                        let green = Int(bytes[offset+1])
+                        let blue = Int(bytes[offset+2])
+                        if red + green + blue < 540 { count += 1 }
+                    }
+                    return count
                 }
                 XCTAssertGreaterThan(dark,50,"The definition body below the heading must actually render")
             }
