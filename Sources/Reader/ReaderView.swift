@@ -736,17 +736,17 @@ struct ReaderView: View {
     }
 
     /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
-    private func runOCROnce() async {
+    private func runOCROnce(url:URL) async {
         let sha = doc.sha256
         let ocrStore = OCRStore(db: store.db)
         if ocrStore.isDone(docSha: sha) { return }
-        guard let url = try? store.pdfURL(for: doc) else { return }
         DiagLog.log("ocr: start (scanned doc)")
         ocrRunning = true
         ocrDone = 0
         ocrTotal = max(doc.pageCount, 1)
         await OCRService.run(url: url, docSha: sha, store: ocrStore) { current, total in
             DispatchQueue.main.async {
+                readerHandle.coordinator?.ocrDidFinish()
                 ocrDone = current
                 ocrTotal = total
             }
@@ -915,8 +915,9 @@ struct ReaderView: View {
             resolvedURL = url
             optimizing = false
         }
-        .task(id: doc.sha256) {
-            await runOCROnce()
+        .task(id: resolvedURL) {
+            guard let resolvedURL else { return }
+            await runOCROnce(url:resolvedURL)
         }
         .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText).id(translateText) }
     }

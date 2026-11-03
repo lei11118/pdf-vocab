@@ -11,7 +11,6 @@ import PDFKit
         ocr.save(docSha:sha,page:0,words:words)
         defer { try? db.dbQueue.write { db in
             try db.execute(sql:"DELETE FROM ocr_word WHERE docSha=?",arguments:[sha])
-            try db.execute(sql:"DELETE FROM ocr_page_status WHERE docSha=?",arguments:[sha])
         } }
         let bytes = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:600)).pdfData { $0.beginPage() }
         let document = try XCTUnwrap(PDFDocument(data:bytes)),page = try XCTUnwrap(document.page(at:0))
