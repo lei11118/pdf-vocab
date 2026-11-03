@@ -20,6 +20,7 @@ struct FloatingCardWindow: View {
     var body: some View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose) {
             WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,onTranslate:onTranslate)
+                .environment(\.readerPanelClose, onClose)
         } compact: {
             CompactCardView(content:content,onClose:onClose)
         }
@@ -56,9 +57,11 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     private let minSize = CGSize(width: 180, height: 64)
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
-    private let defaultSize = CGSize(width: 320, height: 430)
+    private var defaultSize: CGSize {
+        windowID == "word" ? CGSize(width: 320, height: 430) : CGSize(width: 560, height: 600)
+    }
 
-    private var isCompact: Bool { size.height < compactThreshold }
+    private var isCompact: Bool { size.height < compactThreshold || size.width < 260 }
     /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
     private var cornerRadius: CGFloat {
         let capsule = size.height / 2
@@ -92,6 +95,8 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         .onAppear {
             if storedW >= minSize.width, storedH >= minSize.height {
                 size = CGSize(width: storedW, height: storedH)
+            } else {
+                size = defaultSize
             }
             size = clampedSize(size)
             if position == nil {
@@ -114,9 +119,9 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 dragStrip
-                Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:26) }
+                Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:44) }
                     .buttonStyle(.plain).accessibilityLabel("小胶囊模式")
-                Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:26) }
+                Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:44) }
                     .buttonStyle(.plain).accessibilityLabel("关闭窗口")
             }
             Divider()
@@ -131,7 +136,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
                 .frame(width: 36, height: 5)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 26)
+        .frame(height: 44)
         .contentShape(Rectangle())
         .gesture(moveGesture)
     }
@@ -215,7 +220,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     // MARK: - 迷你/展开切换(双击胶囊)
 
     private func toggleCompact() {
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) {
             if isCompact {
                 size = clampedSize(sizeBeforeCompact ?? defaultSize)
                 sizeBeforeCompact = nil

@@ -45,7 +45,9 @@ struct LibraryView: View {
                             if query.isEmpty { learningDesk }
                             bookshelfContent
                         }
-                        .padding(DS.Layout.pageMargin)
+                        .padding(DS.Layout.margin(for: geometry.size.width))
+                        .frame(maxWidth: DS.Layout.contentMaxWidth)
+                        .frame(maxWidth: .infinity)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -55,7 +57,8 @@ struct LibraryView: View {
                     libraryHeader
 
                 }
-                .padding(.horizontal, DS.Layout.pageMargin)
+                .frame(maxWidth: DS.Layout.contentMaxWidth)
+                .padding(.horizontal, DS.Space.m)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.m)
                 .background(DS.background1)
@@ -228,8 +231,7 @@ struct LibraryView: View {
                 Image(systemName: icon)
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(DS.accent)
-                    .frame(width: 54, height: 54)
-                    .background(DSReliefSurface(radius: 18, inset: true))
+                    .frame(width: 40, height: 44)
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Text(title).font(DS.Fonts.headline).foregroundStyle(DS.foreground1)
                     Text(detail).font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
@@ -237,9 +239,9 @@ struct LibraryView: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(DS.foreground3)
             }
-            .padding(DS.Space.l)
-            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-            .background(DSReliefSurface())
+            .padding(DS.Space.m)
+            .frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
+            .background(DS.background2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(DSPressableButtonStyle())
     }
@@ -297,14 +299,9 @@ struct LibraryView: View {
         Button { activeDocument = doc } label: {
             HStack(spacing: DS.Space.s) {
                 DocumentCoverThumbnail(doc: doc, url: try? store.pdfURL(for: doc))
-                    .frame(width: 104)
+                    .frame(width: 76)
 
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text(doc.lastPage > 0 ? "继续阅读" : "准备好，开始阅读")
-                        .font(DS.Fonts.caption2)
-                        .tracking(0.8)
-                        .foregroundStyle(DS.accent)
-
                     Text(doc.title)
                         .font(DS.Fonts.title2)
                         .foregroundStyle(DS.foreground1)
@@ -338,7 +335,7 @@ struct LibraryView: View {
                     .frame(width: 24, height: 44)
             }
             .padding(DS.Space.l)
-            .frame(minHeight: 204)
+            .frame(minHeight: 156)
             .background(DSReliefSurface(radius: 30))
 
             .contentShape(Rectangle())

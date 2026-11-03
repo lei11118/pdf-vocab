@@ -41,6 +41,7 @@ struct WordCardPanel: View {
 // MARK: - 单词卡
 
 struct WordCardView: View {
+    @Environment(\.readerPanelClose) private var panelClose
     let term: String
     let onClose: () -> Void
     var vocab: CardVocabBridge? = nil
@@ -61,13 +62,13 @@ struct WordCardView: View {
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .top) {
                 Text(term)
                     .font(DS.Fonts.wordTitle)
                     .foregroundStyle(DS.foreground1)
                     .textSelection(.enabled)
                 Spacer()
-                closeButton(onClose)
+                if panelClose == nil { closeButton(onClose) }
             }
 
             switch state {
@@ -94,7 +95,7 @@ struct WordCardView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(DS.Space.l)
+        .padding(DS.Space.m)
         }
         .background(DS.background2)
 
@@ -283,6 +284,7 @@ struct WordCardView: View {
 // MARK: - 整句卡
 
 struct SentenceCardView: View {
+    @Environment(\.readerPanelClose) private var panelClose
     let text: String
     let wordCount: Int
     let onClose: () -> Void
@@ -305,7 +307,7 @@ struct SentenceCardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                closeButton(onClose)
+                if panelClose == nil { closeButton(onClose) }
             }
 
             ScrollView {
@@ -446,7 +448,7 @@ struct CompactCardView: View {
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
             Button(action:onClose) { Image(systemName:"xmark.circle.fill").foregroundStyle(.secondary) }
-                .buttonStyle(.plain).frame(width:28,height:44).accessibilityLabel("关闭")
+                .buttonStyle(.plain).frame(width:44,height:44).accessibilityLabel("关闭")
         }
         .padding(.vertical,8).padding(.leading,16).padding(.trailing,52)
         .task(id:displayText) { await loadTranslation() }

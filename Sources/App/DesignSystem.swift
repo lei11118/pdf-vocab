@@ -38,9 +38,9 @@ enum DS {
     /// 背景 1:页面底(中性灰)
     static let background1 = dynamic(light: 0xE9ECF0, dark: 0x242933)
     /// 背景 2:卡片 / 面板
-    static let background2 = dynamic(light: 0xE9ECF0, dark: 0x242933)
+    static let background2 = dynamic(light: 0xF4F5F7, dark: 0x2A303B)
     /// 背景 3:浮层(工具托盘、词卡)
-    static let background3 = dynamic(light: 0xE9ECF0, dark: 0x2A303B)
+    static let background3 = dynamic(light: 0xF4F5F7, dark: 0x303744)
     /// 背景 4:选中底 / 强调容器
     static let background4 = dynamic(light: 0xDDE2EF, dark: 0x30394D)
 
@@ -115,20 +115,20 @@ enum DS {
         static let subhead = Font.subheadline
         static let body = Font.body
         static let caption = Font.caption
-        static let caption2 = Font.system(size: 11, weight: .medium, design: .default)
+        static let caption2 = Font.caption2.weight(.medium)
         static let micro = Font.caption2.weight(.semibold)
 
         /// 学习内容的“纸媒”声部:英文词条、例句、阅读摘要用衬线字体。
         static let wordTitle = Font.system(.largeTitle, design: .serif, weight: .bold)
         /// v0.25.0:生词卡上的词条(网格卡片用,比 wordTitle 小一档,一屏能放三四个)
         static let wordCard = Font.system(.title2, design: .serif, weight: .bold)
-        static let wordBody = Font.system(size: 17, weight: .regular, design: .serif)
-        static let wordQuote = Font.system(size: 16, weight: .regular, design: .serif).italic()
+        static let wordBody = Font.system(.body, design: .serif)
+        static let wordQuote = Font.system(.callout, design: .serif).italic()
         /// v0.25.0:卡片里的小号衬线(词汇释义的第二行,避免和正文抢注意力)
-        static let wordMeta = Font.system(size: 14, weight: .regular, design: .serif)
+        static let wordMeta = Font.system(.subheadline, design: .serif)
 
         /// 元数据 / 页码 / 数量使用等宽数字,避免跳动。
-        static let monoCaption = Font.system(size: 12, weight: .semibold, design: .monospaced)
+        static let monoCaption = Font.system(.caption, design: .monospaced, weight: .semibold)
     }
 
     // MARK: - 动效(短、轻;书写过程零装饰动效)
@@ -145,7 +145,9 @@ enum DS {
 
     enum Layout {
         static let pageMargin: CGFloat = 28
-        static let cardGap: CGFloat = 24
+        static let cardGap: CGFloat = 16
+        static let contentMaxWidth: CGFloat = 1100
+        static func margin(for width: CGFloat) -> CGFloat { width < 600 ? Space.m : pageMargin }
         static let libraryGridMin: CGFloat = 164
         static let coverAspect: CGFloat = 0.72
     }
@@ -168,7 +170,7 @@ enum DS {
         var radius: CGFloat = DS.Radius.comfy
         var padding: CGFloat = DS.Space.m
         func body(content: Content) -> some View {
-            content.padding(padding).background(DSReliefSurface(radius: radius))
+            content.padding(padding).background(DS.background2, in: RoundedRectangle(cornerRadius: min(radius, 20), style: .continuous))
         }
     }
 
@@ -220,7 +222,6 @@ struct DSPressableButtonStyle: ButtonStyle {
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
-            .offset(y: configuration.isPressed && !reduceMotion ? 2 : 0)
             .opacity(!enabled ? 0.38 : configuration.isPressed ? 0.9 : 1)
             .overlay {
                 if configuration.isPressed {
@@ -279,13 +280,13 @@ struct DSReliefSurface: View {
         Group {
             if inset {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(fill.shadow(.inner(color: DS.reliefDark.opacity(0.65), radius: 5, x: 4, y: 4))
-                        .shadow(.inner(color: DS.reliefLight.opacity(0.9), radius: 5, x: -4, y: -4)))
+                    .fill(fill.shadow(.inner(color: DS.reliefDark.opacity(0.28), radius: 3, x: 2, y: 2))
+                        .shadow(.inner(color: DS.reliefLight.opacity(0.65), radius: 3, x: -2, y: -2)))
             } else {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(fill)
-                    .shadow(color: DS.reliefLight.opacity(0.9), radius: 8, x: -6, y: -6)
-                    .shadow(color: DS.reliefDark.opacity(0.6), radius: 9, x: 7, y: 7)
+                    .shadow(color: DS.reliefLight.opacity(0.65), radius: 4, x: -2, y: -2)
+                    .shadow(color: DS.reliefDark.opacity(0.25), radius: 6, x: 3, y: 4)
             }
         }
         .overlay {
@@ -300,6 +301,7 @@ struct DSReliefSurface: View {
 
 /// Shared page hierarchy. Actions wrap below the title when space is constrained.
 struct DSPageHeading<Actions: View>: View {
+    @Environment(\.readerPanelClose) private var panelClose
     let title: String
     let eyebrow: String
     let subtitle: String
@@ -308,11 +310,11 @@ struct DSPageHeading<Actions: View>: View {
     private var heading: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text(title)
-                .font(DS.Fonts.display3)
+                .font(panelClose == nil ? DS.Fonts.display3 : DS.Fonts.title2)
                 .foregroundStyle(DS.foreground1)
                 .accessibilityAddTraits(.isHeader)
             Text(subtitle)
-                .font(DS.Fonts.subhead)
+                .font(panelClose == nil ? DS.Fonts.subhead : DS.Fonts.caption)
                 .foregroundStyle(DS.foreground3)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -397,7 +399,7 @@ struct DSIconButton: View {
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(DSReliefButtonStyle(radius: 22))
+        .buttonStyle(DSPressableButtonStyle())
         .accessibilityLabel(accessibility ?? systemImage)
     }
 }

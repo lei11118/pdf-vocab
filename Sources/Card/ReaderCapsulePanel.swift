@@ -43,9 +43,9 @@ struct ReaderCapsulePanel<Content:View>: View {
             ReaderPanelContent(content:content().environment(\.readerPanelClose,onClose))
         } compact: {
             HStack {
-                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(DS.foreground1).lineLimit(1)
                 Spacer()
-                Button(action:onClose) { Image(systemName:"xmark.circle.fill") }
+                Button(action:onClose) { Image(systemName:"xmark.circle.fill").frame(width:44,height:44) }
                     .buttonStyle(.plain).accessibilityLabel("关闭窗口")
             }.padding(.leading,16).padding(.trailing,52)
         }

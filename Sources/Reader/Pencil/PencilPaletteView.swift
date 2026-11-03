@@ -23,6 +23,7 @@ struct PencilPaletteView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
+    @State private var availableWidth: CGFloat = 834
 
     var body: some View {
         VStack(spacing: DS.Space.xs) {
@@ -35,6 +36,10 @@ struct PencilPaletteView: View {
         .animation(reduceMotion ? nil : DS.Motion.spring, value: expanded)
         .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: session.kind)
         .accessibilityElement(children: .contain)
+        .background(GeometryReader { geo in
+            Color.clear.onAppear { availableWidth = geo.size.width }
+                .onChange(of: geo.size.width) { _, width in availableWidth = width }
+        })
     }
 
     // MARK: - 常驻胶囊
@@ -43,26 +48,42 @@ struct PencilPaletteView: View {
         // v0.16.1:去掉 ViewThatFits(测量不确定,曾怀疑与选工具卡死有关);
         // 常规宽度直接用 HStack 收成一颗胶囊,窄分屏(compact)才横向滚动。
         // v0.24.0:左侧多一个握把(拖它移动整条工具带),握把不参与横向滚动。
+        Group {
+            if availableWidth < 600 {
+                VStack(spacing: 0) {
+                    toolStrip
+                    Divider().padding(.horizontal, DS.Space.m)
+                    paletteActions.frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    toolStrip
+                    divider
+                    paletteActions.fixedSize(horizontal: true, vertical: false)
+                }
+            }
+        }
+        .dsFloatingPanel(radius: availableWidth < 600 ? 24 : DS.Radius.pill)
+    }
+
+    private var toolStrip: some View {
         HStack(spacing: 0) {
             if let dragChanged = onDockDragChanged {
                 dockGrip(onChanged: dragChanged)
             }
-            ScrollView(.horizontal, showsIndicators: true) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 barContent
             }
             .frame(maxWidth: 560)
             .fixedSize(horizontal: false, vertical: true)
-            divider
-            paletteActions.fixedSize(horizontal: true, vertical: false)
         }
-        .dsFloatingPanel(radius: DS.Radius.pill)
     }
 
     /// v0.24.0:拖动握把 —— 长按/拖动移动工具条,双击复位到底部居中。
     private func dockGrip(onChanged: @escaping (CGSize) -> Void) -> some View {
         Image(systemName: "line.3.horizontal")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(DS.foreground4)
+            .foregroundStyle(DS.foreground3)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
             .padding(.leading, DS.Space.x3s)
@@ -150,7 +171,7 @@ struct PencilPaletteView: View {
                 .foregroundStyle(selected ? DS.accent : DS.foreground2)
 
                 .frame(width: 44, height: 44)
-                .background(DSReliefSurface(radius: 16, inset: selected))
+                .background(selected ? DS.accentContainer : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -176,7 +197,7 @@ struct PencilPaletteView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(session.rulerActive ? DS.accent : DS.foreground2)
                 .frame(width: 44, height: 44)
-                .background(DSReliefSurface(radius: 16, inset: session.rulerActive))
+                .background(session.rulerActive ? DS.accentContainer : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(DSPressableButtonStyle())
@@ -295,7 +316,7 @@ struct PencilPaletteView: View {
             HStack(spacing: DS.Space.xs) {
                 ColorPicker("", selection: customColorBinding, supportsOpacity: false)
                     .labelsHidden()
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 44)
                 Text(session.kind == .marker ? "自定义荧光色" : "自定义墨色")
                     .font(DS.Fonts.micro)
                     .foregroundStyle(DS.foreground3)

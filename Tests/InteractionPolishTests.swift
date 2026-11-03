@@ -352,9 +352,10 @@ final class InteractionPolishTests:XCTestCase {
     func testPageLayoutReviewSnapshots() async throws {
         let db = try XCTUnwrap(AppDatabase.shared), store = VocabStore(db: db)
         var ids: [Int64] = []
+        let existingIDs = Set(store.listWords().map(\.id))
         for surface in ["serendipity", "luminous", "resilience", "wanderlust"] {
-            let lemma = "ui-review-" + UUID().uuidString.lowercased()
-            ids.append(try XCTUnwrap(store.collectHeadword(lemma: lemma, surface: surface)))
+            let id = try XCTUnwrap(store.collectHeadword(lemma: surface, surface: surface))
+            if !existingIDs.contains(id) { ids.append(id) }
         }
         defer { for id in ids { store.deleteWord(id: id) } }
         let folder = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
@@ -362,7 +363,7 @@ final class InteractionPolishTests:XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Real imported sample exercises the reading chrome and populated home.
         let docs = DocumentStore(db: db)
-        let sampleURL = FileManager.default.temporaryDirectory.appendingPathComponent("Reading workspace " + UUID().uuidString + ".pdf")
+        let sampleURL = FileManager.default.temporaryDirectory.appendingPathComponent("The architecture of language.pdf")
         let sample = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 820)).pdfData { ctx in
             ctx.beginPage()
             ("The architecture of language" as NSString).draw(at: CGPoint(x: 50, y: 100), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 26)])
@@ -401,6 +402,12 @@ final class InteractionPolishTests:XCTestCase {
             ("workspace-folder-editor", CGSize(width: 480, height: 900), AnyView(WorkspaceFolderEditor(folder: reviewFolder, onSave: { _, _ in }))),
             ("vocab-ipad", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store))),
             ("vocab-split", CGSize(width: 480, height: 900), AnyView(VocabListView(store: store))),
+            ("vocab-window-narrow", CGSize(width: 300, height: 700), AnyView(VocabListView(store: store).environment(\.readerPanelClose, {}))),
+            ("library-narrow", CGSize(width: 320, height: 900), AnyView(LibraryView(store: docs))),
+            ("word-window", CGSize(width: 834, height: 900), AnyView(FloatingCardWindow(content:.word("function"),bounds:CGSize(width:834,height:900),onClose:{},onSelectWord:{_ in}))),
+            ("word-capsule", CGSize(width: 360, height: 96), AnyView(CompactCardView(content:.word("function"),onClose:{}).background(DS.background3))),
+            ("function-window", CGSize(width: 834, height: 900), AnyView(ReaderCapsulePanel(title:"设置",bounds:CGSize(width:834,height:900),onClose:{}) { SettingsView(db:db) })),
+            ("graph-window-narrow", CGSize(width: 300, height: 650), AnyView(KnowledgeGraphView(model:graphReview,tools:PencilToolSession(),vocab:store))),
             ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark))),
             ("library-split", CGSize(width: 480, height: 900), AnyView(LibraryView(store: docs))),
             ("vocab-large-type", CGSize(width: 480, height: 1100), AnyView(VocabListView(store: store).dynamicTypeSize(.xxxLarge))),
@@ -413,7 +420,8 @@ final class InteractionPolishTests:XCTestCase {
             ("reader-ipad", CGSize(width: 834, height: 1194), AnyView(ReaderView(doc: record, store: docs))),
             ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs))),
             ("palette-ipad", CGSize(width: 834, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),
-            ("palette-split", CGSize(width: 480, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1)))
+            ("palette-split", CGSize(width: 480, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),
+            ("palette-window-narrow", CGSize(width:320,height:240),AnyView(PencilPaletteView(session:PencilToolSession(),onUndo:{},onRedo:{},onExitWriting:{},onArc:{}).padding().background(DS.background1)))
         ]
         for (name, size, content) in cases {
             UserDefaults.standard.set(name == "vocab-compact", forKey: "vocabCompactLayout")

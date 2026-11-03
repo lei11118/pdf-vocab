@@ -82,16 +82,21 @@ struct KnowledgeGraphView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("完成") { model.save(immediate: true); closePanel() } }
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
                     Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动", systemImage: moveMode ? "text.cursor" : "hand.draw") }
+                    Divider()
                     Button { add(.text) } label: { Label("文本框", systemImage: "text.badge.plus") }
                     Button { add(.ink) } label: { Label("标记框", systemImage: "pencil.tip.crop.circle.badge.plus") }
+                    Divider()
                     Button { model.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
                     Button { model.redo() } label: { Label("重做", systemImage: "arrow.uturn.forward") }.disabled(model.redoStack.isEmpty)
                     Button { withAnimation(.smooth(duration:0.24)) { fit() } } label: { Label("适应画面", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button(role: .destructive) {
                         if let selected { model.checkpoint(); model.graph.delete(selected); self.selected = nil; model.save() }
                     } label: { Label("删除", systemImage: "trash") }.disabled(selected == nil)
+                    } label: { Label("图谱操作", systemImage: "ellipsis.circle") }
+                    .accessibilityLabel("图谱操作")
                 }
             }
             .safeAreaInset(edge: .bottom) {

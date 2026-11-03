@@ -59,6 +59,7 @@ struct VocabListView: View {
     @State private var dragCancel:DispatchWorkItem?
     @State private var scrollProxy:ScrollViewProxy?
     @State private var scrollHeight:CGFloat=0
+    @State private var viewportWidth: CGFloat = 480
     @State private var cardFrames:[Int64:CGRect]=[:]
     @State private var edgeWork:DispatchWorkItem?
     @State private var edgeDirection=0
@@ -112,13 +113,18 @@ struct VocabListView: View {
                             gridSection
                         }
                     }
-                    .padding(.horizontal, DS.Layout.pageMargin)
+                    .padding(.horizontal, DS.Layout.margin(for: viewportWidth))
+                    .frame(maxWidth: DS.Layout.contentMaxWidth)
+                    .frame(maxWidth: .infinity)
                     .padding(.top, DS.Space.xs)
                     .padding(.bottom, DS.Space.l)
                 }
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name:"vocab-scroll")
-                .background(GeometryReader { geometry in Color.clear.onAppear { scrollHeight=geometry.size.height }.onChange(of:geometry.size.height) { _,value in scrollHeight=value } })
+                .background(GeometryReader { geometry in
+                    Color.clear.onAppear { scrollHeight=geometry.size.height; viewportWidth=geometry.size.width }
+                        .onChange(of:geometry.size) { _,value in scrollHeight=value.height; viewportWidth=value.width }
+                })
                 .onPreferenceChange(VocabCardFrames.self) { cardFrames=$0 }
                 .onAppear { scrollProxy=proxy }
                 .onDrop(of:[UTType.text],delegate:VocabGridDropDelegate(enter:{},leave:{scheduleDragCancel()},finish:{finishCardDrag(commit:true)},update:{point in updateEdgeScroll(y:point.y)}))
@@ -127,7 +133,9 @@ struct VocabListView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: DS.Space.m) { header }
-                    .padding(.horizontal, DS.Layout.pageMargin)
+                    .padding(.horizontal, DS.Layout.margin(for: viewportWidth))
+                    .frame(maxWidth: DS.Layout.contentMaxWidth)
+                    .frame(maxWidth: .infinity)
                     .padding(.top, DS.Space.s)
                     .padding(.bottom, DS.Space.m)
                     .background(DS.background1)
@@ -402,7 +410,7 @@ struct VocabListView: View {
             LazyVGrid(
                 columns: [
                     GridItem(
-                        .adaptive(minimum: compactLayout ? 360 : 250, maximum: compactLayout ? 900 : 380),
+                        .adaptive(minimum: min(compactLayout ? 360 : 250, max(120, viewportWidth - 2 * DS.Layout.margin(for: viewportWidth))), maximum: compactLayout ? 1100 : 380),
                         spacing: DS.Layout.cardGap,
                         alignment: .top
                     )
@@ -793,7 +801,7 @@ struct VocabListView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             dockContent.padding(DS.Space.s)
         }
-        .background(DSReliefSurface(radius: 24, inset: true))
+        .background(DS.background2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentTransition(.numericText())
     }
 
@@ -997,9 +1005,9 @@ private struct VocabCardView: View {
                         Spacer(minLength: 0)
                     }
                     if let ordinal {
-                        Text(String(format: "%02d", ordinal))
+                        Text("顺序 \(ordinal)")
                             .font(DS.Fonts.micro.monospacedDigit())
-                            .foregroundStyle(DS.foreground4)
+                            .foregroundStyle(DS.foreground3)
                     }
                 }
                 Button(action: onAudio) {
@@ -1034,8 +1042,8 @@ private struct VocabCardView: View {
             footer
         }
         .padding(DS.Space.m)
-        .frame(maxWidth: .infinity, minHeight: compact ? 108 : 176, alignment: .topLeading)
-        .background(DSReliefSurface(radius: 26, inset: selected))
+        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 132, alignment: .topLeading)
+        .background(selected ? DS.accentContainer : DS.background2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(alignment: .topTrailing) {
             if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accent).padding(8) }
         }

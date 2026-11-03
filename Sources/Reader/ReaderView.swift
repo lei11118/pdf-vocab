@@ -458,8 +458,8 @@ struct ReaderView: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(DS.foreground2)
-                        .frame(width: 38, height: 38)
-                        .background(DSReliefSurface(radius: 20))
+                        .frame(width: 44, height: 44)
+                        .background(DS.background4, in: Circle())
                 }
                 .accessibilityLabel("更多")
             }
