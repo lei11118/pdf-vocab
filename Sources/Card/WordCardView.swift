@@ -437,37 +437,23 @@ struct CompactCardView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(displayText)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1).frame(maxWidth:120,alignment:.leading)
-                .layoutPriority(1)
-            Button {
-                SpeechService.shared.speak(speakText, language: SpeechService.usVoice)
-            } label: {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.footnote)
-                    .foregroundStyle(Color.accentColor)
-            }
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel("发音")
-            if !(translation ?? "").isEmpty || !correction.isEmpty {
-                DefinitionScrollText(text: [correction,translation ?? ""].filter { !$0.isEmpty }.joined(separator:"\n"))
+        HStack(spacing:8) {
+            VStack(alignment:.leading,spacing:2) {
+                HStack(spacing:6) {
+                    Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Button { SpeechService.shared.speak(speakText,language:SpeechService.usVoice) } label: {
+                        Image(systemName:"speaker.wave.2.fill").font(.footnote)
+                    }.buttonStyle(.plain).accessibilityLabel("发音")
+                    Spacer(minLength:0)
+                }
+                DefinitionScrollText(text:[correction,translation ?? ""].filter { !$0.isEmpty }.joined(separator:"\n"))
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
-            Spacer(minLength: 0)
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel("关闭")
+            Button(action:onClose) { Image(systemName:"xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain).frame(width:28,height:44).accessibilityLabel("关闭")
         }
-        .padding(.leading, 16)
-        // v0.10.0:右侧给缩放手柄 44pt 热区腾位置(× 不与热区重叠)
-        .padding(.trailing, 52)
-        .task(id: displayText) { await loadTranslation() }
+        .padding(.vertical,8).padding(.leading,16).padding(.trailing,52)
+        .task(id:displayText) { await loadTranslation() }
     }
 
     private func loadTranslation() async {
