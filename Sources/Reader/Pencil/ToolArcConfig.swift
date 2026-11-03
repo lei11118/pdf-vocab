@@ -44,7 +44,7 @@ struct ToolArcGeometry {
     }
     var translation: CGSize {
         var rect = CGRect.null
-        let half = max(ToolArcConfig.sweep/2, (CGFloat(max(count-1,0))*pitch+ToolArcConfig.diameter)/radius/2)
+        let half = max(ToolArcConfig.sweep/2, (max(toolMid,CGFloat(max(count-1,0))-toolMid)*pitch+ToolArcConfig.diameter/2)/radius)
         for step in 0...72 {
             let angle = mid-half + CGFloat(step)/72*half*2
             for r in [radius, radius+ToolArcConfig.gap] {
