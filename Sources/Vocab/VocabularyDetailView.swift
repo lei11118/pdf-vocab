@@ -32,6 +32,7 @@ struct VocabularyDetailView: View {
                         setSense: { key, idx, keep in vs.setSenseSelection(forLemma: key, idx: idx, keep: keep) }
                     )
                 )
+                .environment(\.readerPanelClose, { closePanel() })
                 Divider()
                 VStack(alignment: .leading, spacing: 10) {
                     Text("备注")

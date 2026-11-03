@@ -61,7 +61,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         windowID == "word" ? CGSize(width: 320, height: 430) : CGSize(width: 560, height: 600)
     }
 
-    private var isCompact: Bool { size.height < compactThreshold || size.width < 260 }
+    private var isCompact: Bool { size.height < compactThreshold }
     /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
     private var cornerRadius: CGFloat {
         let capsule = size.height / 2
@@ -257,7 +257,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         let maxW = max(minSize.width, bounds.width - 16)
         let maxH = max(minSize.height, bounds.height - 16)
         return CGSize(
-            width: min(max(value.width, minSize.width), maxW),
+            width: min(max(value.width, value.height < compactThreshold ? minSize.width : 260), maxW),
             height: min(max(value.height, minSize.height), maxH)
         )
     }

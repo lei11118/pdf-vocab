@@ -53,7 +53,8 @@ struct PencilPaletteView: View {
                 VStack(spacing: 0) {
                     toolStrip
                     Divider().padding(.horizontal, DS.Space.m)
-                    paletteActions.frame(maxWidth: .infinity, alignment: .trailing)
+                    ScrollView(.horizontal, showsIndicators: false) { paletteActions }
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 HStack(spacing: 0) {
