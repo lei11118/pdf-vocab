@@ -464,7 +464,7 @@ struct CompactCardView: View {
         let outcome = await Task.detached(priority: .utility) {
             DictionaryService.lookup(term)
         }.value
-        if case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty {
+        if case .found(let entry) = outcome {
             translation = WordInteraction.fullDetail(entry)
         } else {
             translation = nil

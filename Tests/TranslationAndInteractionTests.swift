@@ -106,6 +106,8 @@ final class TranslationAndInteractionTests: XCTestCase {
         let entry = DictEntry(word:"function",phonetic:"fʌŋkʃən",translation:"【通用】\n功能\n【数学】\n函数\n【医学】\n机能",definition:"【WordNet】\na mathematical relation",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
         let detail = WordInteraction.fullDetail(entry)
         for value in ["fʌŋkʃən","功能","函数","机能","a mathematical relation"] { XCTAssertTrue(detail.contains(value)) }
+        var englishOnly = entry; englishOnly.translation = nil
+        XCTAssertTrue(WordInteraction.fullDetail(englishOnly).contains("a mathematical relation"))
     }
     @MainActor func testPagePreparationStreamsCurrentPageAndReadsCachedPhotoOCR() async throws {
         let db = try XCTUnwrap(AppDatabase.shared),doc = "stream-test-\(UUID().uuidString)"
