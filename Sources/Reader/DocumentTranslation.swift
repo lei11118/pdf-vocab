@@ -230,6 +230,7 @@ struct DocumentTranslationDriver: View {
                             }
                         }.value
                         guard results.count == batch.count,results.allSatisfy({ !$0.target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty }) else { throw CocoaError(.coderValueNotFound) }
+                        try Task.checkCancellation()
                         try await model.accept(results)
                         await Task.yield()
                     }

@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import PdfVocab
 
 final class TranslationAndInteractionTests: XCTestCase {
@@ -47,6 +48,22 @@ final class TranslationAndInteractionTests: XCTestCase {
         try repository.save(doc:doc,records:[obsolete],preservingReviews:true)
         XCTAssertEqual(try repository.load(doc:doc),[value],"Background results must never overwrite a human correction")
         XCTAssertTrue(TranslationAlignment.correction(in:[value],term:"function",location:TranslationLocation(page:2,character:value.start+value.links[index].sourceStart)).contains("人工已确认"))
+    }
+    @MainActor func testDeletingDocumentRemovesItsFullTextTranslationCache() throws {
+        let db = try XCTUnwrap(AppDatabase.shared),store = DocumentStore(db:db)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("translation-delete-\(UUID().uuidString).pdf")
+        let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:300,height:300)).pdfData { context in
+            context.beginPage(); ("A function exists." as NSString).draw(at:CGPoint(x:30,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:18)])
+        }
+        try data.write(to:url); defer { try? FileManager.default.removeItem(at:url) }
+        let record = try store.importFile(from:url)
+        let repository = DocumentTranslationRepository(db:db)
+        _ = try repository.load(doc:record.sha256)
+        let sentence = try XCTUnwrap(TranslationAlignment.sentences(text:"A function exists.",page:0).first)
+        try repository.save(doc:record.sha256,records:[sentence])
+        XCTAssertEqual(try repository.load(doc:record.sha256).count,1)
+        try store.delete(record)
+        XCTAssertTrue(try repository.load(doc:record.sha256).isEmpty)
     }
     @MainActor func testSqueezeDuplicateRoutesDoNotToggleTwice() {
         let gate = ReaderSqueezeGate()

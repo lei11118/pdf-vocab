@@ -171,6 +171,9 @@ struct DocumentStore: Sendable {
 
     func delete(_ rec: DocumentRecord) throws {
         try db.dbQueue.write { db in
+            if try db.tableExists("document_translation") {
+                try db.execute(sql:"DELETE FROM document_translation WHERE doc=?",arguments:[rec.sha256])
+            }
             _ = try DocumentRecord.deleteOne(db, key: rec.sha256)
         }
         if let url = try? pdfURL(for: rec) {

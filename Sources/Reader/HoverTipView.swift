@@ -22,19 +22,34 @@ struct WordBubbleContent: View {
     let term: String
     let detail: String
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(term).font(.subheadline.weight(.semibold))
-                    Button { WordInteraction.speak(term) } label: { Image(systemName: "speaker.wave.2.fill") }
-                        .accessibilityLabel("朗读")
-                }
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-        }
+        VStack(alignment:.leading,spacing:8) {
+            HStack(alignment:.firstTextBaseline) {
+                Text(term).font(.subheadline.weight(.semibold))
+                Button { WordInteraction.speak(term) } label: { Image(systemName:"speaker.wave.2.fill") }
+                    .accessibilityLabel("朗读")
+            }
+            DefinitionScrollText(text:detail).frame(maxWidth:.infinity,maxHeight:.infinity)
+        }.padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.primary.opacity(0.08)))
         .shadow(radius: 6, y: 2)
+    }
+}
+
+/// Native text layout keeps an arbitrarily long definition visible and scrollable
+/// inside a bounded hover window; it does not depend on Text's selected-text snapshot rendering.
+struct DefinitionScrollText: UIViewRepresentable {
+    let text: String
+    func makeUIView(context:Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false; view.isSelectable = true; view.isScrollEnabled = true
+        view.backgroundColor = .clear; view.textColor = .secondaryLabel
+        view.font = .preferredFont(forTextStyle:.caption1); view.adjustsFontForContentSizeCategory = true
+        view.textContainerInset = .zero; view.textContainer.lineFragmentPadding = 0
+        view.setContentCompressionResistancePriority(.defaultLow,for:.vertical)
+        return view
+    }
+    func updateUIView(_ view:UITextView,context:Context) {
+        if view.text != text { view.text = text; view.setContentOffset(.zero,animated:false) }
     }
 }
