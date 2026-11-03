@@ -33,6 +33,7 @@ struct LibraryView: View {
     @State private var readerJump: VocabJumpTarget?
     @State private var query = ""
     @State private var vocabCount = 0
+    @State private var viewportWidth: CGFloat = 834
 
     var body: some View {
         NavigationStack {
@@ -50,6 +51,8 @@ struct LibraryView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .scrollIndicators(.hidden)
+                    .onAppear { viewportWidth = geometry.size.width }
+                    .onChange(of: geometry.size.width) { _, width in viewportWidth = width }
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -57,8 +60,8 @@ struct LibraryView: View {
                     libraryHeader
 
                 }
+                .padding(.horizontal, DS.Layout.margin(for: viewportWidth))
                 .frame(maxWidth: DS.Layout.contentMaxWidth)
-                .padding(.horizontal, DS.Space.m)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.m)
                 .background(DS.background1)
