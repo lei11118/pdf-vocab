@@ -16,22 +16,44 @@ struct FloatingCardWindow: View {
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
-    /// v0.13.0:整句卡「翻译」(透传给 WordCardPanel)
     var onTranslate: ((String) -> Void)? = nil
+    var body: some View {
+        ReaderWindowSurface(bounds:bounds,onClose:onClose) {
+            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,onTranslate:onTranslate)
+        } compact: {
+            CompactCardView(content:content,onClose:onClose)
+        }
+    }
+}
 
+/// The identical shell, geometry and grip for words and reader functions.
+struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
+    let bounds: CGSize
+    let onClose: () -> Void
+    var windowID = "word"
+    @ViewBuilder var expanded: () -> Expanded
+    @ViewBuilder var compact: () -> Compact
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
     @State private var moveBase: CGPoint?
     @State private var resizeBase: CGSize?
     @State private var sizeBeforeCompact: CGSize?
-    @AppStorage("readerCardX") private var storedX: Double = -1
-    @AppStorage("readerCardY") private var storedY: Double = -1
-    @AppStorage("readerCardW") private var storedW: Double = -1
-    @AppStorage("readerCardH") private var storedH: Double = -1
+    @GestureState private var moving = false
+    @GestureState private var resizing = false
+    private func storageKey(_ axis: String) -> String {
+        windowID == "word" ? "readerCard" + axis : "readerWindow." + windowID + "." + axis
+    }
+    private func stored(_ axis: String) -> Double {
+        (UserDefaults.standard.object(forKey: storageKey(axis)) as? Double) ?? -1
+    }
+    private var storedX: Double { stored("X") }
+    private var storedY: Double { stored("Y") }
+    private var storedW: Double { stored("W") }
+    private var storedH: Double { stored("H") }
 
     /// 最小尺寸(可缩成胶囊)
-    private let minSize = CGSize(width: 180, height: 48)
+    private let minSize = CGSize(width: 180, height: 64)
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
     private let defaultSize = CGSize(width: 320, height: 430)
@@ -46,15 +68,7 @@ struct FloatingCardWindow: View {
     }
 
     var body: some View {
-        ZStack {
-            fullBody
-                .opacity(isCompact ? 0 : 1)
-                .allowsHitTesting(!isCompact)
-            compactBody
-                .opacity(isCompact ? 1 : 0)
-                .allowsHitTesting(isCompact)
-        }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: isCompact)
+        Group { if isCompact { compactBody } else { fullBody } }
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -84,6 +98,8 @@ struct FloatingCardWindow: View {
                 position = currentPosition
             }
         }
+        .onChange(of:moving) { _,active in if !active { moveBase = nil; persist() } }
+        .onChange(of:resizing) { _,active in if !active { resizeBase = nil; persist() } }
         .onChange(of: bounds) { _, _ in
             size = clampedSize(size)
             if let p = position {
@@ -96,9 +112,15 @@ struct FloatingCardWindow: View {
 
     private var fullBody: some View {
         VStack(spacing: 0) {
-            dragStrip
+            HStack(spacing: 0) {
+                dragStrip
+                Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:26) }
+                    .buttonStyle(.plain).accessibilityLabel("小胶囊模式")
+                Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:26) }
+                    .buttonStyle(.plain).accessibilityLabel("关闭窗口")
+            }
             Divider()
-            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord, vocab: vocab, onTranslate: onTranslate)
+            expanded()
         }
     }
 
@@ -117,17 +139,20 @@ struct FloatingCardWindow: View {
     // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
 
     private var compactBody: some View {
-        CompactCardView(content: content, onClose: onClose)
+        compact()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .gesture(moveGesture)
+            .overlay(alignment:.top) {
+                Color.clear.frame(height:12).contentShape(Rectangle()).gesture(moveGesture)
+            }
             .onTapGesture(count: 2) { toggleCompact() }
     }
 
     private var moveGesture: some Gesture {
         // v0.10.0:同样改为"起手位置 + 总位移"——不做逐帧增量,坐标系重置也不会跳。
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($moving) { _,state,_ in state = true }
             .onChanged { value in
                 if moveBase == nil {
                     moveBase = currentPosition
@@ -160,6 +185,7 @@ struct FloatingCardWindow: View {
     /// 严禁逐帧增量累加,坐标系重置/事件冒泡都不会再产生"瞬移"。
     private var resizeDragGesture: some Gesture {
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($resizing) { _,state,_ in state = true }
             .onChanged { value in
                 if resizeBase == nil {
                     resizeBase = size
@@ -232,16 +258,16 @@ struct FloatingCardWindow: View {
     }
 
     private func persist() {
-        storedX = Double(currentPosition.x)
-        storedY = Double(currentPosition.y)
-        storedW = Double(size.width)
-        storedH = Double(size.height)
+        UserDefaults.standard.set(Double(currentPosition.x), forKey: storageKey("X"))
+        UserDefaults.standard.set(Double(currentPosition.y), forKey: storageKey("Y"))
+        UserDefaults.standard.set(Double(size.width), forKey: storageKey("W"))
+        UserDefaults.standard.set(Double(size.height), forKey: storageKey("H"))
     }
 }
 
 /// 窗口右下角的白色缩放手柄弧条(v0.6.7):**造型即窗口边缘的一段**——
 /// 沿右下圆角画一段弧,半径随窗口圆角连续变化(胶囊态半圆、矩形态圆角),始终贴合边缘。
-private struct CornerGripArc: Shape {
+struct CornerGripArc: Shape {
     var cornerRadius: CGFloat
 
     func path(in rect: CGRect) -> Path {

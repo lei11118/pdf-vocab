@@ -19,22 +19,31 @@ struct WordPreview {
     private(set) var isHovering = false
     private var request: Task<Void, Never>?
     private var generation = 0
+    private var activeTerm = ""
+    private var activeQuery = ""
+    private var latestPoint = CGPoint.zero
     func clear() {
-        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false
+        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false; activeTerm = ""; activeQuery = ""
     }
     func hover(_ term: String, query: String? = nil, at point: CGPoint) {
-        resolve(term,query:query ?? term,at:point,hover:true)
+        let query = query ?? term
+        if isHovering && activeTerm == term && activeQuery == query {
+            latestPoint = point
+            if var preview,preview.point != point { preview.point = point; self.preview = preview }
+            return
+        }
+        resolve(term,query:query,at:point,hover:true)
     }
     func select(_ term: String, at point: CGPoint) { resolve(term,query:term,at:point,hover:false) }
     private func resolve(_ term: String, query: String, at point: CGPoint, hover: Bool) {
-        clear(); isHovering = hover
+        clear(); isHovering = hover; activeTerm = term; activeQuery = query; latestPoint = point
         let token = generation
         request = Task { @MainActor [weak self] in
             if hover { try? await Task.sleep(nanoseconds:ToolArcConfig.hoverDelay) }
             guard !Task.isCancelled else { return }
             let detail = await Task.detached(priority:.utility) { WordInteraction.detail(query) }.value
             guard !Task.isCancelled,let self,self.generation == token else { return }
-            self.preview = WordPreview(term:term,detail:detail ?? "词库未收录",point:point,translated:detail != nil)
+            self.preview = WordPreview(term:term,detail:detail ?? "词库未收录",point:self.latestPoint,translated:detail != nil)
         }
     }
     @discardableResult func squeeze() -> Bool {
@@ -47,7 +56,14 @@ struct WordPreview {
 enum WordInteraction {
     static func detail(_ term: String) -> String? {
         guard case .found(let entry) = DictionaryService.lookup(term) else { return nil }
-        return entry.translation ?? entry.definition
+        return fullDetail(entry)
+    }
+    static func fullDetail(_ entry: DictEntry) -> String {
+        var sections: [String] = []
+        if let phonetic = entry.phonetic, !phonetic.isEmpty { sections.append("/\(phonetic)/") }
+        if let value = entry.translation, !value.isEmpty { sections.append(value) }
+        if let value = entry.definition, !value.isEmpty { sections.append(value) }
+        return sections.joined(separator: "\n\n")
     }
     @MainActor static func speak(_ term: String) {
         let language = NLLanguageRecognizer.dominantLanguage(for: term)?.rawValue ?? "en"
@@ -98,14 +114,19 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         addSubview(picture); addSubview(label)
         highlight.fillColor = UIColor.systemBlue.withAlphaComponent(0.22).cgColor
         layer.addSublayer(highlight)
-        bubble.isHidden = true; bubble.isUserInteractionEnabled = false
+        bubble.isHidden = true; bubble.isUserInteractionEnabled = true
         bubbleHost.view.backgroundColor = .clear; bubble.addSubview(bubbleHost.view)
-        addSubview(bubble)
         subscription = interactionSession.$preview.sink { [weak self] preview in
             guard let self else { return }
             guard let preview else { self.bubble.isHidden = true; return }
             self.bubbleHost.rootView = WordBubbleContent(term:preview.term,detail:preview.detail)
-            self.bubble.frame = CGRect(x:4,y:max(0,preview.point.y-100),width:max(100,self.bounds.width-8),height:min(110,self.bounds.height))
+            guard let window = self.window else { return }
+            if self.bubble.superview !== window { window.addSubview(self.bubble) }
+            let source = self.convert(preview.point, to: window)
+            let width = min(340,window.bounds.width-16)
+            let height = min(300,max(0,source.y-window.safeAreaInsets.top-12))
+            guard height >= 36 else { self.bubble.isHidden = true; return }
+            self.bubble.frame = CGRect(x:min(max(8,source.x-width/2),window.bounds.width-width-8),y:source.y-height-8,width:width,height:height)
             self.bubbleHost.view.frame = self.bubble.bounds
             self.bubble.isHidden = false
         }
@@ -120,6 +141,10 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
         let pencil = UIPencilInteraction(); pencil.delegate = self; addInteraction(pencil)
         isAccessibilityElement = true; accessibilityTraits = .staticText
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { interactionSession.clear(); bubble.removeFromSuperview() }
     }
     required init?(coder: NSCoder) { fatalError() }
     func configure(text: String, image: UIImage?, words: [GraphWord], enabled: Bool) {
@@ -194,11 +219,15 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         guard index != hoverIndex else { return }
         hoverIndex = index; interactionSession.clear()
         guard let index else { return }
-        let term = words[index].text, point = gesture.location(in: self)
+        let term = words[index].text
+        let rect = words[index].rect
+        let point = CGPoint(x:rect.midX*bounds.width,y:rect.minY*bounds.height)
         interactionSession.hover(term,at:point)
     }
     private func translate(_ term: String, at point: CGPoint) {
-        interactionSession.select(term,at:point)
+        let index = hit(point)
+        let top = index.map { CGPoint(x:words[$0].rect.midX*bounds.width,y:words[$0].rect.minY*bounds.height) } ?? point
+        interactionSession.select(term,at:top)
     }
     private var selectedText: String {
         guard let selection else { return "" }

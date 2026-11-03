@@ -6,7 +6,9 @@ struct VocabularyDetailView: View {
     let word: VocabStore.WordSummary
     var onJump: ((VocabJumpTarget) -> Void)? = nil
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var note = ""
     @State private var groups: [VocabStore.GroupSummary] = []
     @State private var members: Set<Int64> = []
@@ -19,7 +21,7 @@ struct VocabularyDetailView: View {
                 let vs = store
                 WordCardPanel(
                     content: .word(word.lemma),
-                    onClose: { dismiss() },
+                    onClose: { closePanel() },
                     onSelectWord: { _ in },
                     vocab: CardVocabBridge(
                         query: { key in
@@ -63,7 +65,7 @@ struct VocabularyDetailView: View {
                         if let target = jumpTarget {
                             Button {
                                 onJump?(target)
-                                dismiss()
+                                closePanel()
                             } label: {
                                 Label("跳转至原文", systemImage: "arrow.up.right")
                             }
@@ -81,7 +83,7 @@ struct VocabularyDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .task { load() }

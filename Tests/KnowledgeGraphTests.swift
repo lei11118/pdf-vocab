@@ -21,11 +21,11 @@ final class KnowledgeGraphTests: XCTestCase {
     func testArcChordMidpointAndPolarHitWithMirroring() {
         for left in [false,true] {
             let geometry = ToolArcGeometry(anchor:CGPoint(x:500,y:500),bounds:CGSize(width:1000,height:1000),count:9,leftHanded:left)
-            let r = ToolArcConfig.radius, d = r*cos(ToolArcConfig.sweep/2)
+            let r = geometry.radius, d = r*cos(ToolArcConfig.sweep/2)
             let c = geometry.center
             XCTAssertEqual(c.y-d*cos(geometry.mid),geometry.anchor.y,accuracy:0.001)
             XCTAssertEqual(c.x+d*sin(geometry.mid)*(left ? -1 : 1),geometry.anchor.x,accuracy:0.001)
-            XCTAssertEqual(geometry.initialCount,5)
+            XCTAssertEqual(geometry.initialCount,4)
             for i in 0..<9 {
                 let p = geometry.position(i,count:9,upper:false)
                 XCTAssertEqual(geometry.index(at:p,count:9,upper:false),i)

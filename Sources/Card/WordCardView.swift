@@ -59,6 +59,7 @@ struct WordCardView: View {
     @State private var excludedSenses: Set<Int> = []
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(term)
@@ -94,6 +95,7 @@ struct WordCardView: View {
             Spacer(minLength: 0)
         }
         .padding(DS.Space.l)
+        }
         .background(DS.background2)
 
         .task(id: term) { await load() }
@@ -197,7 +199,7 @@ struct WordCardView: View {
 
             Divider()
 
-            ScrollView {
+            Group {
                 VStack(alignment: .leading, spacing: 14) {
                     if let translation = entry.translation, !translation.isEmpty {
                         // v0.13.0:义项勾选 —— 已收录词可逐条勾选保留(卡片只保留需要的义项;导出同步过滤)
@@ -410,7 +412,7 @@ struct CompactCardView: View {
         case .word(let term):
             return term
         case .sentence(let text, _):
-            return text.count > 60 ? String(text.prefix(60)) + "…" : text
+            return text
         }
     }
 
@@ -431,39 +433,23 @@ struct CompactCardView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(displayText)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .layoutPriority(1)
-            Button {
-                SpeechService.shared.speak(speakText, language: SpeechService.usVoice)
-            } label: {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.footnote)
-                    .foregroundStyle(Color.accentColor)
+        HStack(spacing:8) {
+            VStack(alignment:.leading,spacing:2) {
+                HStack(spacing:6) {
+                    Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Button { SpeechService.shared.speak(speakText,language:SpeechService.usVoice) } label: {
+                        Image(systemName:"speaker.wave.2.fill").font(.footnote)
+                    }.buttonStyle(.plain).accessibilityLabel("发音")
+                    Spacer(minLength:0)
+                }
+                DefinitionScrollText(text:translation ?? "")
+                    .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel("发音")
-            if let translation, !translation.isEmpty {
-                Text(translation)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel("关闭")
+            Button(action:onClose) { Image(systemName:"xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain).frame(width:28,height:44).accessibilityLabel("关闭")
         }
-        .padding(.leading, 16)
-        // v0.10.0:右侧给缩放手柄 44pt 热区腾位置(× 不与热区重叠)
-        .padding(.trailing, 52)
-        .task(id: displayText) { await loadTranslation() }
+        .padding(.vertical,8).padding(.leading,16).padding(.trailing,52)
+        .task(id:displayText) { await loadTranslation() }
     }
 
     private func loadTranslation() async {
@@ -474,8 +460,8 @@ struct CompactCardView: View {
         let outcome = await Task.detached(priority: .utility) {
             DictionaryService.lookup(term)
         }.value
-        if case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty {
-            translation = raw.split(separator: "\n").first.map(String.init)
+        if case .found(let entry) = outcome {
+            translation = WordInteraction.fullDetail(entry)
         } else {
             translation = nil
         }

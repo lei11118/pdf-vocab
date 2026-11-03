@@ -140,17 +140,17 @@ struct VocabListView: View {
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: filter)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: selectedIds)
             .onChange(of: searchText) { _, _ in reload() }
-            .sheet(item: $contextWord) { word in contextSheet(word) }
-            .sheet(item: $detailWord) { word in
+            .readerAwarePanel(item:$contextWord,title:"原句与出处") { word in contextSheet(word) }
+            .readerAwarePanel(item:$detailWord,title:"生词详情") { word in
                 VocabularyDetailView(store: store, word: word, onJump: onJump)
             }
-            .fullScreenCover(isPresented:$showGraph) {
+            .readerAwarePanel(isPresented:$showGraph,title:"知识图谱") {
                 if let scopeDocSha {
                     KnowledgeGraphView(docId: scopeDocSha, db: store.db, tools: PencilToolSession())
                 } else if let docStore { KnowledgeGraphLibrary(store: docStore) }
             }
             .onDisappear { finishCardDrag(commit:false) }
-            .sheet(isPresented: $showExport) {
+            .readerAwarePanel(isPresented:$showExport,title:"导出到 Anki") {
                 AnkiExportSheet(store: store, words: words, docStore: docStore)
             }
             .alert("新建分组", isPresented: $showNewGroup) {

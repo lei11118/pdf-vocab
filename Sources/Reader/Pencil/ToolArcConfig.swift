@@ -2,9 +2,10 @@ import CoreGraphics
 import Foundation
 
 enum ToolArcConfig {
-    static let sweep = CGFloat.pi / 4
-    static let tilt = CGFloat(25) * .pi / 180
+    static let sweep = CGFloat(108) * .pi / 180
+    static let tilt = CGFloat(53) * .pi / 180
     static let radius: CGFloat = 340
+    static func effectiveRadius(in bounds: CGSize) -> CGFloat { min(radius,max(50,(min(bounds.width,bounds.height)-2*safeMargin-2*gap)/2)) }
     static let gap: CGFloat = 64
     static let diameter: CGFloat = 44
     static let pitch: CGFloat = 52
@@ -21,27 +22,34 @@ struct ToolArcGeometry {
     let bounds: CGSize
     let count: Int
     var leftHanded = false
-    var mid: CGFloat { -ToolArcConfig.tilt + ToolArcConfig.sweep / 2 }
+    // Tangent/chord tilt is measured from the screen horizontal, as requested.
+    var mid: CGFloat { -ToolArcConfig.tilt }
+    var radius: CGFloat { ToolArcConfig.effectiveRadius(in:bounds) }
     var center: CGPoint {
-        let distance = ToolArcConfig.radius * cos(ToolArcConfig.sweep / 2)
+        let distance = radius * cos(ToolArcConfig.sweep / 2)
         return CGPoint(x: anchor.x - sin(mid) * distance * (leftHanded ? -1 : 1), y: anchor.y + cos(mid) * distance)
     }
-    var pitch: CGFloat { count > 18 ? 48 : ToolArcConfig.pitch }
-    var initialCount: Int {
-        let available = Int((ToolArcConfig.sweep * ToolArcConfig.radius - ToolArcConfig.diameter) / pitch) + 1
-        return max(1, available % 2 == 0 ? available - 1 : available)
+    var pitch: CGFloat { radius * ToolArcConfig.sweep / 4 }
+    var initialCount: Int { min(4, count) }
+    var initialRange: Range<Int> {
+        let start = max(0, (count - initialCount) / 2)
+        return start..<(start + initialCount)
     }
+    var toolMid: CGFloat { CGFloat(initialRange.lowerBound + initialRange.upperBound - 1) / 2 }
+    func delta(_ angle: CGFloat) -> CGFloat { atan2(sin(angle-mid), cos(angle-mid)) }
     func rawPosition(_ index: Int, count: Int, upper: Bool) -> CGPoint {
-        let radius = ToolArcConfig.radius + (upper ? ToolArcConfig.gap : 0)
-        let angle = mid + (CGFloat(index) - CGFloat(count - 1) / 2) * pitch / radius
+        let radius = self.radius + (upper ? ToolArcConfig.gap : 0)
+        let angle = mid + (CGFloat(index) - (count == self.count ? toolMid : CGFloat(count-1)/2)) * pitch / radius
         return CGPoint(x: center.x + sin(angle) * radius * (leftHanded ? -1 : 1), y: center.y - cos(angle) * radius)
     }
     var translation: CGSize {
         var rect = CGRect.null
-        for angle in [mid - ToolArcConfig.sweep / 2, mid + ToolArcConfig.sweep / 2] {
-            for r in [ToolArcConfig.radius, ToolArcConfig.radius + ToolArcConfig.gap] {
-                let p = CGPoint(x: center.x + sin(angle) * r * (leftHanded ? -1 : 1), y: center.y - cos(angle) * r)
-                rect = rect.union(CGRect(x: p.x, y: p.y, width: 1, height: 1))
+        let half = max(ToolArcConfig.sweep/2, (CGFloat(max(count-1,0))*pitch+ToolArcConfig.diameter)/radius/2)
+        for step in 0...72 {
+            let angle = mid-half + CGFloat(step)/72*half*2
+            for r in [radius, radius+ToolArcConfig.gap] {
+                let p = CGPoint(x:center.x+sin(angle)*r*(leftHanded ? -1 : 1),y:center.y-cos(angle)*r)
+                rect = rect.union(CGRect(x:p.x,y:p.y,width:1,height:1))
             }
         }
         let inset = ToolArcConfig.safeMargin
@@ -63,9 +71,10 @@ struct ToolArcGeometry {
     }
     func index(at p: CGPoint, count: Int, upper: Bool) -> Int? {
         guard count > 0 else { return nil }
-        let polar = polar(p), radius = ToolArcConfig.radius + (upper ? ToolArcConfig.gap : 0)
+        let polar = polar(p), radius = self.radius + (upper ? ToolArcConfig.gap : 0)
         guard abs(polar.r - radius) <= ToolArcConfig.diameter / 2 else { return nil }
-        let value = (polar.angle - mid) * radius / pitch + CGFloat(count - 1) / 2
+        let delta = delta(polar.angle)
+        let value = delta * radius / pitch + (count == self.count ? toolMid : CGFloat(count-1)/2)
         let index = Int(value.rounded())
         guard (0..<count).contains(index), abs(value - CGFloat(index)) * pitch <= ToolArcConfig.diameter / 2 else { return nil }
         return index

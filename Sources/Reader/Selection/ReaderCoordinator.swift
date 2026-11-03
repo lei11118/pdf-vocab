@@ -920,7 +920,8 @@ final class ReaderCoordinator: NSObject {
             if key != hoverKey {
                 hoverKey = key
                 setHoverAnnotation(page: hit.page, word: word)
-                onHoverUpdate?(term, key, viewPoint)
+                let wordRect = pdfView.convert(word.bounds(for: hit.page), from: hit.page)
+                onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
                 DiagLog.log("hover: 「\(term)」")
             }
         case .ended, .cancelled, .failed:
@@ -2566,7 +2567,7 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
     /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(0.7s 内 20 次)。
     /// v0.19.0:改为只响应 `.began`(每次挤压一次),再用 0.25s 去重;回调里不做重活。
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended else { return }
+        guard squeeze.phase == .began, ReaderSqueezeGate.shared.accept() else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastSqueezeAt > 0.25 else { return }
         lastSqueezeAt = now

@@ -20,6 +20,7 @@ struct ReaderView: View {
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
+    @State private var showToolCustomization = false
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
@@ -73,7 +74,9 @@ struct ReaderView: View {
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
 
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
@@ -96,7 +99,7 @@ struct ReaderView: View {
     // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
     private var lifecycleContent: some View {
         pencilSyncContent
-            .onChange(of: arcAnchor != nil || capturing || showGraph) { _, blocked in
+            .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
             }
@@ -156,7 +159,8 @@ struct ReaderView: View {
 
     private var sheetContent: some View {
         primarySheetContent
-            .sheet(isPresented: $showAnalyze) {
+            .readerPanel(isPresented:$showToolCustomization,title:"自定义手写工具") { PencilToolCustomization(session:pencilTools) }
+            .readerPanel(isPresented: $showAnalyze, title: "词频分析") {
                 if let resolvedURL {
                     VocabAnalyzeSheet(
                         url: resolvedURL,
@@ -165,7 +169,7 @@ struct ReaderView: View {
                     )
                 }
             }
-            .sheet(isPresented: $showPageJump) {
+            .readerPanel(isPresented: $showPageJump, title: "跳转页面") {
                 PageJumpSheet(
                     pageCount: doc.pageCount,
                     current: currentPage,
@@ -176,15 +180,13 @@ struct ReaderView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            .alert("导出失败", isPresented: $exportFailed) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text("生成批注版 PDF 时出错,请重试。")
+            .readerPanel(isPresented:$exportFailed,title:"导出失败") {
+                VStack { Text("生成批注版 PDF 时出错，请重试。"); Button("好") { exportFailed = false } }.padding()
             }
             .sheet(item: $shareFile) { item in
                 ActivityShareView(items: [item.url])
             }
-            .sheet(isPresented: $showThumbnails) {
+            .readerPanel(isPresented: $showThumbnails, title: "页面缩略图") {
                 if let doc = readerHandle.coordinator?.document {
                     PageThumbnailSheet(document: doc, currentPage: currentPage) { target in
                         readerHandle.coordinator?.go(toPage: target)
@@ -192,11 +194,12 @@ struct ReaderView: View {
                     }
                 }
             }
-            .alert("清空本页手写?", isPresented: $confirmClearInk) {
-                Button("清空", role: .destructive) { readerHandle.coordinator?.clearCurrentPageInk() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("只清除当前页的笔迹,不影响其他页;清空后可用撤销恢复。")
+            .readerPanel(isPresented:$confirmClearInk,title:"清空本页手写") {
+                VStack(spacing:16) {
+                    Text("只清除当前页的笔迹，清空后可用撤销恢复。")
+                    Button("清空",role:.destructive) { readerHandle.coordinator?.clearCurrentPageInk(); confirmClearInk = false }
+                    Button("取消") { confirmClearInk = false }
+                }.padding()
             }
             .onChange(of: layoutMode) { _, mode in
                 readerHandle.coordinator?.setLayoutMode(mode)
@@ -204,7 +207,7 @@ struct ReaderView: View {
             // v0.37.0:胶囊词卡与其它窗口互斥 —— 任何弹层出现就先收起卡片,
             // 否则两个窗叠在一起,卡片被压住连拖都拖不出来。
             .onChange(of: anySheetOpen) { _, open in
-                if open { dismissFloatingCard() }
+                if open { arcAnchor = nil; wordInteraction.clear() }
             }
             // 进入书写模式同理:底下是工具条,卡片压在上面同样拉不出来
             .onChange(of: markMode) { _, writing in
@@ -214,7 +217,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization || showTranslate
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -225,7 +228,7 @@ struct ReaderView: View {
 
     private var primarySheetContent: some View {
         chromeContent
-            .fullScreenCover(isPresented: $showGraph) {
+            .readerPanel(isPresented: $showGraph, title: "知识图谱") {
                 KnowledgeGraphView(model: graphModel, tools: pencilTools, vocab: VocabStore(db: store.db), onSource: { shot in
                     if let page = readerHandle.coordinator?.pdfView?.document?.page(at:shot.pageIndex) {
                         let bounds = page.bounds(for:.cropBox), r = shot.sourceRect
@@ -235,16 +238,16 @@ struct ReaderView: View {
                     currentPage = shot.pageIndex
                 })
             }
-            .sheet(isPresented: $showSettings) {
+            .readerPanel(isPresented: $showSettings, title: "设置") {
                 SettingsView(db: store.db)
             }
-            .dsLeadingCover(isPresented: $showVocab) { close in
+            .readerPanel(isPresented: $showVocab, title: "生词本") {
                 VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                     showVocab = false
                     readerHandle.coordinator?.jumpToVocab(target: target)
-                }, docStore: store, onClose: close)
+                }, docStore: store, onClose: { showVocab = false })
             }
-            .sheet(isPresented: $showOutline) {
+            .readerPanel(isPresented: $showOutline, title: "目录与书签") {
                 if let resolvedURL {
                     ReaderOutlineSheet(
                         url: resolvedURL,
@@ -259,7 +262,7 @@ struct ReaderView: View {
                     )
                 }
             }
-            .sheet(isPresented: $showSearch) {
+            .readerPanel(isPresented: $showSearch, title: "全文搜索") {
                 if let resolvedURL {
                     ReaderSearchSheet(
                         url: resolvedURL,
@@ -355,7 +358,7 @@ struct ReaderView: View {
                     iconSize: 16,
                     accessibility: "返回文档库"
                 ) {
-                    dismiss()
+                    closePanel()
                 }
 
                 Button {
@@ -390,6 +393,13 @@ struct ReaderView: View {
                 }
 
                 Menu {
+                    Button("自定义手写工具") { showToolCustomization = true }
+                    Button("全文搜索") { showSearch = true }
+                    Button("目录与书签") { showOutline = true }
+                    Button("生词本") { showVocab = true }
+                    Button("知识图谱") { showGraph = true }
+                    Button("词频分析") { showAnalyze = true }
+                    Divider()
                     Toggle(isOn: $nightMode) {
                         Label("夜间模式", systemImage: "moon.fill")
                     }
@@ -903,7 +913,7 @@ struct ReaderView: View {
         .task(id: doc.sha256) {
             await runOCROnce()
         }
-        .translationPresentation(isPresented: $showTranslate, text: translateText)
+        .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText).id(translateText) }
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)
@@ -931,7 +941,9 @@ private struct PageJumpSheet: View {
     let current: Int
     let onJump: (Int) -> Void
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @StateObject private var loader: ThumbnailLoader
     @State private var mode = 0
     @State private var input = ""
@@ -969,7 +981,7 @@ private struct PageJumpSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .onDisappear { loader.invalidate() }
@@ -994,7 +1006,7 @@ private struct PageJumpSheet: View {
                     Slider(value: $sliderValue, in: 1...Double(pageCount), step: 1) { editing in
                         if !editing {
                             onJump(Int(sliderValue.rounded()) - 1)
-                            dismiss()
+                            closePanel()
                         }
                     }
                     HStack {
@@ -1033,7 +1045,7 @@ private struct PageJumpSheet: View {
     private func thumbCell(_ index: Int) -> some View {
         Button {
             onJump(index)
-            dismiss()
+            closePanel()
         } label: {
             VStack(spacing: 4) {
                 ZStack {
@@ -1073,6 +1085,6 @@ private struct PageJumpSheet: View {
             return
         }
         onJump(n - 1)
-        dismiss()
+        closePanel()
     }
 }
