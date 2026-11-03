@@ -21,7 +21,7 @@ final class ReaderRouteUITests:XCTestCase {
             if writing {
                 for label in ["钢笔","毛笔","铅笔","荧光笔","橡皮"] {
                     let tool = app.buttons[label].firstMatch
-                    if tool.exists && tool.isHittable { tool.tap(); XCTAssertTrue(app.buttons["更多"].exists) }
+                    if tool.exists && tool.isHittable { tool.tap(); if app.buttons["关闭窗口"].firstMatch.exists { app.buttons["关闭窗口"].firstMatch.tap() }; XCTAssertTrue(app.buttons["更多"].exists) }
                 }
                 app.buttons["回到阅读模式"].tap()
             }
@@ -60,6 +60,7 @@ final class ReaderRouteUITests:XCTestCase {
             for _ in 0..<4 where !tool.isHittable { palette.swipeLeft() }
             XCTAssertTrue(tool.exists && tool.isHittable,label)
             tool.tap()
+            if app.buttons["关闭窗口"].firstMatch.exists { app.buttons["关闭窗口"].firstMatch.tap() }
             XCTAssertTrue(app.buttons["更多"].exists)
         }
         for _ in 0..<4 where !app.buttons["打开直尺"].isHittable && !app.buttons["关闭直尺"].isHittable { palette.swipeLeft() }

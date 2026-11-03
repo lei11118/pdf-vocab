@@ -21,6 +21,7 @@ struct KnowledgeGraphView: View {
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
     @State private var moveMode = false
+    @State private var showToolStyle = false
     @GestureState private var nodeGestureActive = false
     @GestureState private var panActive = false
     @GestureState private var zoomActive = false
@@ -96,9 +97,12 @@ struct KnowledgeGraphView: View {
             .safeAreaInset(edge: .bottom) {
                 if let node = model.graph.nodes.first(where: { $0.id == selected }), node.kind == .ink {
                     ScrollView(.horizontal) {
-                        PencilPaletteView(session: tools, onUndo: { model.undo() }, onRedo: { model.redo() }, onExitWriting: { selected = nil })
+                        PencilPaletteView(session: tools, onUndo: { model.undo() }, onRedo: { model.redo() }, onExitWriting: { selected = nil },onShowStyle:{showToolStyle = true})
                     }.frame(height: 90)
                 }
+            }
+            .readerPanel(isPresented:$showToolStyle,title:"图谱颜色与笔宽") {
+                ScrollView { PencilPaletteView(session:tools,onUndo:{},onRedo:{}).stylePanel.frame(maxWidth:.infinity) }
             }
             .task {
                 await model.load()

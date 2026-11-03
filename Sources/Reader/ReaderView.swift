@@ -21,6 +21,7 @@ struct ReaderView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
     @State private var showToolCustomization = false
+    @State private var showToolStyle = false
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
@@ -160,6 +161,9 @@ struct ReaderView: View {
 
     private var sheetContent: some View {
         primarySheetContent
+            .readerPanel(isPresented:$showToolStyle,title:"颜色与笔宽") {
+                ScrollView { PencilPaletteView(session:pencilTools,onUndo:{},onRedo:{}).stylePanel.frame(maxWidth:.infinity) }
+            }
             .readerPanel(isPresented:$showToolCustomization,title:"自定义手写工具") { PencilToolCustomization(session:pencilTools) }
             .readerPanel(isPresented: $showAnalyze, title: "词频分析") {
                 if let resolvedURL {
@@ -217,7 +221,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization || showTranslate
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization || showTranslate || showToolStyle
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -478,7 +482,8 @@ struct ReaderView: View {
                 onDockDragChanged: { translation in handleDockDrag(translation) },
                 onDockDragEnded: { endDockDrag() },
                 onDockReset: { resetDock() },
-                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) }
+                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) },
+                onShowStyle: { showToolStyle = true }
             )
             .background(
                 DockSizeReader { size in
