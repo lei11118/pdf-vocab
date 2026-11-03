@@ -184,8 +184,9 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             value.links = TranslationAlignment.align(source:value.source,target:target,lookup:WordInteraction.detail)
         }
         if let word,let index = value.links.firstIndex(where: { $0.sourceStart == word }) {
-            value.links[index].meaning = meaning.trimmingCharacters(in:.whitespacesAndNewlines)
-            let range = (target as NSString).range(of:meaning)
+            let gloss = meaning.trimmingCharacters(in:.whitespacesAndNewlines)
+            value.links[index].meaning = gloss
+            let range = gloss.isEmpty ? NSRange(location:NSNotFound,length:0) : (target as NSString).range(of:gloss)
             value.links[index].targetStart = range.location == NSNotFound ? nil : range.location
             value.links[index].targetLength = range.location == NSNotFound ? nil : range.length
             value.links[index].reviewed = !meaning.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty

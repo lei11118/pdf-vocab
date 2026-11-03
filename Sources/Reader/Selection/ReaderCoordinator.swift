@@ -921,8 +921,7 @@ final class ReaderCoordinator: NSObject {
             if key != hoverKey {
                 hoverKey = key
                 setHoverAnnotation(page: hit.page, word: word)
-                let range = word.range(at:0,on:hit.page)
-                hoverTranslationLocation = TranslationLocation(page:pdfView.document?.index(for:hit.page) ?? -1,character:range.location)
+                hoverTranslationLocation = word.numberOfTextRanges(on:hit.page) > 0 ? TranslationLocation(page:pdfView.document?.index(for:hit.page) ?? -1,character:word.range(at:0,on:hit.page).location) : nil
                 let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of: word, on: hit.page), from: hit.page)
                 onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
                 DiagLog.log("hover: 「\(term)」")
@@ -1238,7 +1237,7 @@ final class ReaderCoordinator: NSObject {
             text: text,
             wordCount: wordCount,
             primaryTerm: primaryTerm,
-            translationLocation: selection.pages.first.map { TranslationLocation(page:pageIndex,character:selection.range(at:0,on:$0).location) }
+            translationLocation: selection.pages.first.flatMap { page in selection.numberOfTextRanges(on:page) > 0 ? TranslationLocation(page:pageIndex,character:selection.range(at:0,on:page).location) : nil }
         ))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)

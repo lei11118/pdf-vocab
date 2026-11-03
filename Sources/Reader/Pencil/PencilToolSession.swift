@@ -120,8 +120,21 @@ final class PencilToolSession: ObservableObject {
         presets.map { PencilArcItem(id:$0.id,kind:$0.state.kind,name:$0.name,preset:$0) }
     }
     func activate(_ item: PencilArcItem) {
-        if let preset = item.preset { apply(preset.state); saveState() }
+        if let preset = item.preset {
+            // A preset replaces only its own tool slot, never the other pens' preferences.
+            var next = state
+            next.kind = preset.state.kind; next.prefs[next.kind.rawValue] = preset.state.activePrefs
+            next.rulerActive = preset.state.rulerActive
+            if next.kind == .shape { next.shapeKind = preset.state.shapeKind }
+            if next.kind == .eraser { next.useCustomEraser = preset.state.useCustomEraser }
+            apply(next); saveState()
+        }
         else { select(kind:item.kind) }
+    }
+    func isActive(_ item: PencilArcItem) -> Bool {
+        guard kind == item.kind else { return false }
+        guard let preset = item.preset else { return true }
+        return state.activePrefs == preset.state.activePrefs && rulerActive == preset.state.rulerActive
     }
     func savePreset(name: String) {
         let name = name.trimmingCharacters(in:.whitespacesAndNewlines)

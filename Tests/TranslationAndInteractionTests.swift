@@ -55,6 +55,22 @@ final class TranslationAndInteractionTests: XCTestCase {
         XCTAssertFalse(gate.accept(at:10.05))
         XCTAssertTrue(gate.accept(at:10.15))
     }
+    @MainActor func testSelectingCustomPenDoesNotRestoreOtherToolsOldPreferences() throws {
+        let defaults = UserDefaults.standard
+        let savedState = defaults.data(forKey:PencilToolStateStore.globalKey)
+        let savedPresets = defaults.data(forKey:"pencil.customPresets.v1")
+        defer {
+            if let savedState { defaults.set(savedState,forKey:PencilToolStateStore.globalKey) } else { defaults.removeObject(forKey:PencilToolStateStore.globalKey) }
+            if let savedPresets { defaults.set(savedPresets,forKey:"pencil.customPresets.v1") } else { defaults.removeObject(forKey:"pencil.customPresets.v1") }
+        }
+        let session = PencilToolSession()
+        session.select(kind:.pen); session.setWidth(1); session.savePreset(name:"Test fine pen")
+        let preset = try XCTUnwrap(session.presets.last)
+        session.select(kind:.brush); session.setWidth(4)
+        session.activate(PencilArcItem(id:preset.id,kind:.pen,name:preset.name,preset:preset))
+        XCTAssertEqual(session.kind,.pen); XCTAssertEqual(session.widthIndex,1)
+        session.select(kind:.brush); XCTAssertEqual(session.widthIndex,4)
+    }
     func testFullDictionaryDetailKeepsAllSourcesAndEnglishDefinitions() {
         let entry = DictEntry(word:"function",phonetic:"fʌŋkʃən",translation:"【通用】\n功能\n【数学】\n函数\n【医学】\n机能",definition:"【WordNet】\na mathematical relation",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
         let detail = WordInteraction.fullDetail(entry)

@@ -54,8 +54,12 @@ struct PencilArcMenu: View {
                 Circle().stroke(Color.red,lineWidth:2).frame(width:10,height:10).position(x:anchor.x+geometry.translation.width,y:anchor.y+geometry.translation.height).allowsHitTesting(false)
             }
             ForEach(Array(tools.enumerated()).filter { visible($0.offset) }, id: \.element.id) { index, tool in
-                icon(tool.systemImage, label: tool.label, active: session.kind == tool.kind) {
+                icon(tool.systemImage, label: tool.label, active: session.isActive(tool)) {
                     session.activate(tool); onSelect(); onDismiss()
+                }.overlay(alignment:.bottomTrailing) {
+                    if let preset = tool.preset {
+                        Circle().fill(Color(uiColor:preset.state.currentUIColor)).frame(width:10,height:10).padding(3).allowsHitTesting(false)
+                    }
                 }.opacity(appeared ? 1 : 0).position(geometry.position(index, count: tools.count, upper: false))
             }
             ForEach(upper.indices, id: \.self) { index in
