@@ -27,7 +27,15 @@ final class ReaderRouteUITests:XCTestCase {
             }
         }
         app.buttons["返回文档库"].tap()
-        XCTAssertFalse(app.buttons["更多"].exists)
+        let returned = XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:app.buttons["更多"])
+        let result = XCTWaiter.wait(for:[returned],timeout:8)
+        if result != .completed {
+            let hierarchy = XCTAttachment(string:app.debugDescription)
+            hierarchy.name = "reader-return-hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+            let screen = XCTAttachment(screenshot:app.screenshot())
+            screen.name = "reader-return-screen"; screen.lifetime = .keepAlways; add(screen)
+        }
+        XCTAssertEqual(result,.completed,"Explicit back must return to the document library after navigation settles")
     }
     func testReaderChromeToolAndWindowControlsStayInDocument() {
         let app = XCUIApplication()
