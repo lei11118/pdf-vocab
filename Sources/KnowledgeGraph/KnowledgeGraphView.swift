@@ -22,6 +22,8 @@ struct KnowledgeGraphView: View {
     @State private var viewport: CGSize = .zero
     @State private var moveMode = false
     @GestureState private var nodeGestureActive = false
+    @GestureState private var panActive = false
+    @GestureState private var zoomActive = false
     private var connectionTarget: String? {
         guard let connection else { return nil }
         return model.graph.nodes.sorted { $0.zIndex > $1.zIndex }.first { $0.id != connection.0 && $0.frame.contains(connection.2) }?.id
@@ -40,7 +42,7 @@ struct KnowledgeGraphView: View {
                 ZStack(alignment: .topLeading) {
                     DS.background1.ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance:2,coordinateSpace:.global).onChanged { value in
+                        .gesture(DragGesture(minimumDistance:2,coordinateSpace:.global).updating($panActive) { _,active,_ in active = true }.onChanged { value in
                             guard zoomOrigin == nil else { return }
                             if panOrigin == nil { panOrigin = model.graph.offset; editing = nil; selected = nil }
                             model.graph.offset = CGPoint(x: panOrigin!.x + value.translation.width, y: panOrigin!.y + value.translation.height)
@@ -62,7 +64,7 @@ struct KnowledgeGraphView: View {
                 .transaction { if movingNode != nil || panOrigin != nil || zoomOrigin != nil { $0.animation = nil } }
                 .clipped()
                 .coordinateSpace(name: "graph")
-                .simultaneousGesture(MagnifyGesture().onChanged { value in
+                .simultaneousGesture(MagnifyGesture().updating($zoomActive) { _,active,_ in active = true }.onChanged { value in
                     guard movingNode == nil else { return }
                     if zoomOrigin == nil { zoomOrigin = model.graph.zoom; zoomOffsetOrigin = model.graph.offset; panOrigin = nil; editing = nil }
                     let old = zoomOrigin!
@@ -106,6 +108,8 @@ struct KnowledgeGraphView: View {
                 await resumePendingTextRecognition()
             }
             .onChange(of: phase) { _, phase in if phase != .active { model.save(immediate: true) } }
+            .onChange(of:panActive) { _,active in if !active { panOrigin = nil; model.save() } }
+            .onChange(of:zoomActive) { _,active in if !active { zoomOrigin = nil; zoomOffsetOrigin = nil; model.save() } }
             .onChange(of:nodeGestureActive) { _,active in if !active && movingNode != nil { finishManipulation() } }
             .onDisappear { finishManipulation(); model.save(immediate: true) }
             .alert("图谱保存提示", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
@@ -198,6 +202,7 @@ struct KnowledgeGraphView: View {
         .overlay {
             if moveMode {
                 Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
+                    guard zoomOrigin == nil else { return }
                     selected = node.id
                     if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                     var n = node; n.frame.origin = CGPoint(x:moveOrigin!.minX+value.translation.width/model.graph.zoom,y:moveOrigin!.minY+value.translation.height/model.graph.zoom)

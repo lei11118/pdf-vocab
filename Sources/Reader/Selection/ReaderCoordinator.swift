@@ -70,7 +70,6 @@ final class ReaderCoordinator: NSObject {
     /// v0.16.2:最近一次落笔/擦除结束时间 —— 双指撤销手势的手掌误触防护
     private var lastInkActivityAt: CFAbsoluteTime = 0
     /// v0.16.2:挤压节流(挤压是持续事件,按住会连发回调)
-    private var lastSqueezeAt: CFAbsoluteTime = 0
     /// v0.18.0:书写贴边自动滚动(只观察 Pencil,不抢 PencilKit 手势)
     private var pencilObserver: PencilTouchObserver?
     private var autoScrollLink: CADisplayLink?
@@ -920,7 +919,7 @@ final class ReaderCoordinator: NSObject {
             if key != hoverKey {
                 hoverKey = key
                 setHoverAnnotation(page: hit.page, word: word)
-                let wordRect = pdfView.convert(word.bounds(for: hit.page), from: hit.page)
+                let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of:word,on:hit.page), from: hit.page)
                 onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
                 DiagLog.log("hover: 「\(term)」")
             }
@@ -2568,9 +2567,6 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
     /// v0.19.0:改为只响应 `.began`(每次挤压一次),再用 0.25s 去重;回调里不做重活。
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .began, ReaderSqueezeGate.shared.accept() else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastSqueezeAt > 0.25 else { return }
-        lastSqueezeAt = now
         let action = UserDefaults.standard.string(forKey: "pencilSqueezeAction") ?? "arc"
         guard action != "off" else {
             DiagLog.log("pencil: squeeze ignored (off)")

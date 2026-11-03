@@ -103,6 +103,7 @@ struct ReaderView: View {
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
             }
+            .onChange(of: arcAnchor != nil) { _,open in if open { readerHandle.coordinator?.clearHover(); wordInteraction.clear() } }
             .onChange(of: markMode) { _, on in
                 // v0.24.0:按书记住「选词 / 书写」状态,退出再进来不再被重置
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
@@ -204,8 +205,7 @@ struct ReaderView: View {
             .onChange(of: layoutMode) { _, mode in
                 readerHandle.coordinator?.setLayoutMode(mode)
             }
-            // v0.37.0:胶囊词卡与其它窗口互斥 —— 任何弹层出现就先收起卡片,
-            // 否则两个窗叠在一起,卡片被压住连拖都拖不出来。
+            // Panels retain independent state; opening one only clears transient hover/arc UI.
             .onChange(of: anySheetOpen) { _, open in
                 if open { arcAnchor = nil; wordInteraction.clear() }
             }
@@ -809,7 +809,6 @@ struct ReaderView: View {
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
                         if arcAnchor != nil { arcAnchor = nil; return }
-                        if !markMode, wordInteraction.squeeze() { return }
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
                         withAnimation(reduceMotion ? nil : DS.Motion.quickSpring) {
                             if arcAnchor == nil {

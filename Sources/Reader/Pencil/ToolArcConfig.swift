@@ -39,7 +39,7 @@ struct ToolArcGeometry {
     func delta(_ angle: CGFloat) -> CGFloat { atan2(sin(angle-mid), cos(angle-mid)) }
     func rawPosition(_ index: Int, count: Int, upper: Bool) -> CGPoint {
         let radius = self.radius + (upper ? ToolArcConfig.gap : 0)
-        let angle = mid + (CGFloat(index) - (count == self.count ? toolMid : CGFloat(count-1)/2)) * pitch / radius
+        let angle = mid + (CGFloat(index) - (!upper ? toolMid : CGFloat(count-1)/2)) * pitch / radius
         return CGPoint(x: center.x + sin(angle) * radius * (leftHanded ? -1 : 1), y: center.y - cos(angle) * radius)
     }
     var translation: CGSize {
@@ -74,7 +74,7 @@ struct ToolArcGeometry {
         let polar = polar(p), radius = self.radius + (upper ? ToolArcConfig.gap : 0)
         guard abs(polar.r - radius) <= ToolArcConfig.diameter / 2 else { return nil }
         let delta = delta(polar.angle)
-        let value = delta * radius / pitch + (count == self.count ? toolMid : CGFloat(count-1)/2)
+        let value = delta * radius / pitch + (!upper ? toolMid : CGFloat(count-1)/2)
         let index = Int(value.rounded())
         guard (0..<count).contains(index), abs(value - CGFloat(index)) * pitch <= ToolArcConfig.diameter / 2 else { return nil }
         return index
