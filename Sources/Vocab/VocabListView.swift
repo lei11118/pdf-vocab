@@ -1116,7 +1116,8 @@ private struct VocabCardView: View {
             let outcome = DictionaryService.lookup(lemma)
             guard case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty else { return nil }
             let meanings = raw.split(separator: "\n").map(String.init).filter {
-                !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("【")
+                let line = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                return !(line.hasPrefix("【") && line.hasSuffix("】"))
             }
             return meanings.prefix(2).joined(separator: "；")
         }.value

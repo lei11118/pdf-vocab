@@ -67,6 +67,16 @@ struct ReaderSearchSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(DS.background1)
+            .overlay {
+                if !searching, hits.isEmpty, note == nil {
+                    if query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
+                        ContentUnavailableView("查找文档内容", systemImage: "text.magnifyingglass",
+                            description: Text("输入至少两个字符，搜索正文或已识别的扫描文字。"))
+                    } else {
+                        ContentUnavailableView.search(text: query)
+                    }
+                }
+            }
             .navigationTitle("全文搜索")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "在文档中搜索")
