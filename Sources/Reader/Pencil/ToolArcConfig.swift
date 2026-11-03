@@ -4,7 +4,7 @@ import Foundation
 enum ToolArcConfig {
     static let sweep = CGFloat(108) * .pi / 180
     static let tilt = CGFloat(53) * .pi / 180
-    static let radius: CGFloat = 340
+    static let radius: CGFloat = 192 / (CGFloat(108) * .pi / 180)
     static func effectiveRadius(in bounds: CGSize) -> CGFloat { min(radius,max(50,(min(bounds.width,bounds.height)-2*safeMargin-2*gap)/2)) }
     static let gap: CGFloat = 64
     static let diameter: CGFloat = 44
