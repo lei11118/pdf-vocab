@@ -6,12 +6,17 @@ struct KnowledgeGraphView: View {
     @ObservedObject var tools: PencilToolSession
     let vocab: VocabStore
     var onSource: ((GraphScreenshot) -> Void)?
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @Environment(\.scenePhase) private var phase
     @State private var selected: String?
     @State private var editing: String?
     @State private var panOrigin: CGPoint?
     @State private var zoomOrigin: CGFloat?
+    @State private var zoomOffsetOrigin: CGPoint?
+    @State private var movingNode: String?
+    @State private var transientFrame: CGRect?
     @State private var moveOrigin: CGRect?
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
@@ -34,46 +39,52 @@ struct KnowledgeGraphView: View {
                 ZStack(alignment: .topLeading) {
                     DS.background1.ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .gesture(DragGesture().onChanged { value in
+                        .gesture(DragGesture(minimumDistance:2,coordinateSpace:.global).onChanged { value in
+                            guard zoomOrigin == nil else { return }
                             if panOrigin == nil { panOrigin = model.graph.offset; editing = nil; selected = nil }
                             model.graph.offset = CGPoint(x: panOrigin!.x + value.translation.width, y: panOrigin!.y + value.translation.height)
                         }.onEnded { _ in panOrigin = nil; model.save() })
                         .onTapGesture { editing = nil; selected = nil }
                         .onLongPressGesture { add(.text) }
                     edges
-                    ForEach(model.graph.nodes.sorted { $0.zIndex < $1.zIndex }) { node in
-                        if screenRect(node.frame).intersects(CGRect(origin: .zero, size: geo.size).insetBy(dx: -100, dy: -100)) {
+                    ForEach(model.graph.nodes.sorted { $0.zIndex < $1.zIndex }) { savedNode in
+                        let node = displayed(savedNode)
+                        if movingNode == node.id || screenRect(node.frame).intersects(CGRect(origin: .zero, size: geo.size).insetBy(dx: -100, dy: -100)) {
                             nodeView(node)
                                 .frame(width: node.frame.width, height: node.frame.height)
                                 .scaleEffect(model.graph.zoom, anchor: .topLeading)
-                                .position(x: screenRect(node.frame).minX + node.frame.width / 2, y: screenRect(node.frame).minY + node.frame.height / 2)
+                                .frame(width: node.frame.width * model.graph.zoom, height: node.frame.height * model.graph.zoom, alignment: .topLeading)
+                                .position(x: screenRect(node.frame).midX, y: screenRect(node.frame).midY)
                         }
                     }
                 }
+                .transaction { if movingNode != nil || panOrigin != nil || zoomOrigin != nil { $0.animation = nil } }
                 .clipped()
                 .coordinateSpace(name: "graph")
                 .simultaneousGesture(MagnifyGesture().onChanged { value in
-                    if zoomOrigin == nil { zoomOrigin = model.graph.zoom; editing = nil }
-                    let old = model.graph.zoom
+                    guard movingNode == nil else { return }
+                    if zoomOrigin == nil { zoomOrigin = model.graph.zoom; zoomOffsetOrigin = model.graph.offset; panOrigin = nil; editing = nil }
+                    let old = zoomOrigin!
+                    let offset = zoomOffsetOrigin!
                     let new = min(GraphConfig.maxZoom, max(GraphConfig.minZoom, zoomOrigin! * value.magnification))
                     let pivot = CGPoint(x: geo.size.width * value.startAnchor.x, y: geo.size.height * value.startAnchor.y)
-                    model.graph.offset = CGPoint(x: pivot.x - (pivot.x-model.graph.offset.x)*new/old, y: pivot.y - (pivot.y-model.graph.offset.y)*new/old)
+                    model.graph.offset = CGPoint(x: pivot.x - (pivot.x-offset.x)*new/old, y: pivot.y - (pivot.y-offset.y)*new/old)
                     model.graph.zoom = new
-                }.onEnded { _ in zoomOrigin = nil; model.save() })
+                }.onEnded { _ in zoomOrigin = nil; zoomOffsetOrigin = nil; model.save() })
                 .onAppear { viewport = geo.size }
                 .onChange(of: geo.size) { _, size in viewport = size }
             }
             .navigationTitle("知识图谱")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("完成") { model.save(immediate: true); dismiss() } }
+                ToolbarItem(placement: .topBarLeading) { Button("完成") { model.save(immediate: true); closePanel() } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动", systemImage: moveMode ? "text.cursor" : "hand.draw") }
                     Button { add(.text) } label: { Label("文本框", systemImage: "text.badge.plus") }
                     Button { add(.ink) } label: { Label("标记框", systemImage: "pencil.tip.crop.circle.badge.plus") }
                     Button { model.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
                     Button { model.redo() } label: { Label("重做", systemImage: "arrow.uturn.forward") }.disabled(model.redoStack.isEmpty)
-                    Button { fit() } label: { Label("适应画面", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    Button { withAnimation(.smooth(duration:0.24)) { fit() } } label: { Label("适应画面", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button(role: .destructive) {
                         if let selected { model.checkpoint(); model.graph.delete(selected); self.selected = nil; model.save() }
                     } label: { Label("删除", systemImage: "trash") }.disabled(selected == nil)
@@ -99,6 +110,19 @@ struct KnowledgeGraphView: View {
                 Button("好") { model.error = nil }
             } message: { Text(model.error ?? "") }
         }
+    }
+    private func displayed(_ node: KnowledgeNode) -> KnowledgeNode {
+        var result = node
+        if movingNode == node.id, let transientFrame { result.frame = transientFrame }
+        return result
+    }
+    private func finishManipulation() {
+        if let id = movingNode, let frame = transientFrame,
+           let index = model.graph.nodes.firstIndex(where: { $0.id == id }) {
+            model.graph.nodes[index].frame = frame
+        }
+        movingNode = nil; transientFrame = nil; moveOrigin = nil
+        model.save()
     }
     private func screenRect(_ rect: CGRect) -> CGRect {
         CGRect(x: rect.minX * model.graph.zoom + model.graph.offset.x, y: rect.minY * model.graph.zoom + model.graph.offset.y,
@@ -149,17 +173,18 @@ struct KnowledgeGraphView: View {
                 Image(systemName: node.kind == .ink ? "pencil.tip" : node.kind == .text ? "text.alignleft" : "photo")
                 Text(node.isNew ? "新" : node.kind == .text ? "文本" : node.kind == .ink ? "标记" : "截图").font(.caption)
                 Spacer()
-                if let shot = node.screenshot, onSource != nil { Button("来源") { model.save(immediate: true); dismiss(); onSource?(shot) }.font(.caption) }
+                if let shot = node.screenshot, onSource != nil { Button("来源") { model.save(immediate: true); closePanel(); onSource?(shot) }.font(.caption) }
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
             }
             .padding(.horizontal,7).frame(height:GraphConfig.headerHeight).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
-            .gesture(DragGesture().onChanged { value in
+            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).onChanged { value in
+                guard zoomOrigin == nil else { return }
                 selected = node.id; editing = nil
-                if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame }
+                if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                 var valueNode = node
                 valueNode.frame.origin = CGPoint(x: moveOrigin!.minX+value.translation.width/model.graph.zoom, y: moveOrigin!.minY+value.translation.height/model.graph.zoom)
-                binding(node.id).wrappedValue = valueNode
-            }.onEnded { _ in moveOrigin = nil; model.save() })
+                transientFrame = valueNode.frame
+            }.onEnded { _ in finishManipulation() })
             content(node)
         }
         .background(Color(uiColor: .systemBackground))
@@ -167,15 +192,15 @@ struct KnowledgeGraphView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected == node.id || connectionTarget == node.id ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected == node.id || connectionTarget == node.id ? 2 : 1))
         .overlay { if selected == node.id { handles(node) } }
         .onTapGesture { selected = node.id }
-        .onHover { inside in if inside { selected = node.id } }
+        .onHover { inside in if inside && movingNode == nil && zoomOrigin == nil { selected = node.id } }
         .overlay {
             if moveMode {
-                Color.clear.contentShape(Rectangle()).gesture(DragGesture().onChanged { value in
+                Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).onChanged { value in
                     selected = node.id
-                    if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame }
+                    if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                     var n = node; n.frame.origin = CGPoint(x:moveOrigin!.minX+value.translation.width/model.graph.zoom,y:moveOrigin!.minY+value.translation.height/model.graph.zoom)
-                    binding(node.id).wrappedValue = n
-                }.onEnded { _ in moveOrigin = nil; model.save() })
+                    transientFrame = n.frame
+                }.onEnded { _ in finishManipulation() })
             }
         }
         .contextMenu {
@@ -194,7 +219,7 @@ struct KnowledgeGraphView: View {
                 WordInteractionLayer(text: node.text, onEdit: { model.checkpoint(); editing = node.id })
             }
         } else if node.kind == .ink {
-            if selected == node.id && model.graph.zoom >= GraphConfig.snapshotZoom {
+            if selected == node.id && (model.graph.zoom >= GraphConfig.snapshotZoom || movingNode == node.id) {
                 GraphInkView(data: Binding(get: { binding(node.id).wrappedValue.drawingData }, set: { data in
                     var n = binding(node.id).wrappedValue; n.drawingData = data; binding(node.id).wrappedValue = n
                 }), tools: tools, live: true, onBegin: { model.checkpoint() })
@@ -228,8 +253,9 @@ struct KnowledgeGraphView: View {
                 let y: CGFloat = corner < 2 ? 0 : node.frame.height
                 Rectangle().fill(Color.accentColor).frame(width: 8, height: 8)
                     .frame(width: GraphConfig.resizeSize, height: GraphConfig.resizeSize).contentShape(Rectangle()).position(x: x,y: y)
-                    .gesture(DragGesture().onChanged { value in
-                        if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame }
+                    .highPriorityGesture(DragGesture(minimumDistance: 1, coordinateSpace: .global).onChanged { value in
+                        guard zoomOrigin == nil else { return }
+                        if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                         let original = moveOrigin!, dx = value.translation.width/model.graph.zoom, dy = value.translation.height/model.graph.zoom
                         var rect = original
                         rect.size.width = max(GraphConfig.minSize, original.width + (corner % 2 == 0 ? -dx : dx))
@@ -237,8 +263,8 @@ struct KnowledgeGraphView: View {
                         if node.kind == .screenshot { rect.size.height = (rect.width * (original.height-GraphConfig.headerHeight)/original.width)+GraphConfig.headerHeight }
                         if corner % 2 == 0 { rect.origin.x = original.maxX-rect.width }
                         if corner < 2 { rect.origin.y = original.maxY-rect.height }
-                        var n = node; n.frame = rect; binding(node.id).wrappedValue = n
-                    }.onEnded { _ in moveOrigin = nil; model.save() })
+                        transientFrame = rect
+                    }.onEnded { _ in finishManipulation() })
             }
         }
     }
@@ -252,7 +278,8 @@ struct KnowledgeGraphView: View {
     private var edges: some View {
         ZStack {
             ForEach(model.graph.edges) { edge in
-                if let a = model.graph.nodes.first(where: { $0.id == edge.from }), let b = model.graph.nodes.first(where: { $0.id == edge.to }) {
+                if let originalA = model.graph.nodes.first(where: { $0.id == edge.from }), let originalB = model.graph.nodes.first(where: { $0.id == edge.to }) {
+                    let a = displayed(originalA), b = displayed(originalB)
                     let path = edgePath(edge.fromAnchor.point(in:a.frame),edge.toAnchor.point(in:b.frame))
                     path.stroke(selected == edge.id ? Color.accentColor : Color.secondary, lineWidth: GraphConfig.edgeWidth)
                     path.stroke(Color.black.opacity(0.001), lineWidth: GraphConfig.edgeHitWidth)

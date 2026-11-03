@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 enum ToolArcConfig {
-    static let sweep = CGFloat.pi / 4
-    static let tilt = CGFloat(25) * .pi / 180
+    static let sweep = CGFloat(108) * .pi / 180
+    static let tilt = CGFloat(53) * .pi / 180
     static let radius: CGFloat = 340
     static let gap: CGFloat = 64
     static let diameter: CGFloat = 44
@@ -21,27 +21,31 @@ struct ToolArcGeometry {
     let bounds: CGSize
     let count: Int
     var leftHanded = false
-    var mid: CGFloat { -ToolArcConfig.tilt + ToolArcConfig.sweep / 2 }
+    // Tangent/chord tilt is measured from the screen horizontal, as requested.
+    var mid: CGFloat { -ToolArcConfig.tilt }
+    var radius: CGFloat { min(ToolArcConfig.radius, max(130, min(bounds.width, bounds.height) * 0.46)) }
     var center: CGPoint {
-        let distance = ToolArcConfig.radius * cos(ToolArcConfig.sweep / 2)
+        let distance = radius * cos(ToolArcConfig.sweep / 2)
         return CGPoint(x: anchor.x - sin(mid) * distance * (leftHanded ? -1 : 1), y: anchor.y + cos(mid) * distance)
     }
     var pitch: CGFloat { count > 18 ? 48 : ToolArcConfig.pitch }
     var initialCount: Int {
-        let available = Int((ToolArcConfig.sweep * ToolArcConfig.radius - ToolArcConfig.diameter) / pitch) + 1
+        let available = Int((ToolArcConfig.sweep * radius - ToolArcConfig.diameter) / pitch) + 1
         return max(1, available % 2 == 0 ? available - 1 : available)
     }
     func rawPosition(_ index: Int, count: Int, upper: Bool) -> CGPoint {
-        let radius = ToolArcConfig.radius + (upper ? ToolArcConfig.gap : 0)
+        let radius = self.radius + (upper ? ToolArcConfig.gap : 0)
         let angle = mid + (CGFloat(index) - CGFloat(count - 1) / 2) * pitch / radius
         return CGPoint(x: center.x + sin(angle) * radius * (leftHanded ? -1 : 1), y: center.y - cos(angle) * radius)
     }
     var translation: CGSize {
         var rect = CGRect.null
-        for angle in [mid - ToolArcConfig.sweep / 2, mid + ToolArcConfig.sweep / 2] {
-            for r in [ToolArcConfig.radius, ToolArcConfig.radius + ToolArcConfig.gap] {
-                let p = CGPoint(x: center.x + sin(angle) * r * (leftHanded ? -1 : 1), y: center.y - cos(angle) * r)
-                rect = rect.union(CGRect(x: p.x, y: p.y, width: 1, height: 1))
+        let half = max(ToolArcConfig.sweep/2, CGFloat(max(count-1,0))*pitch/radius/2)
+        for step in 0...72 {
+            let angle = mid-half + CGFloat(step)/72*half*2
+            for r in [radius, radius+ToolArcConfig.gap] {
+                let p = CGPoint(x:center.x+sin(angle)*r*(leftHanded ? -1 : 1),y:center.y-cos(angle)*r)
+                rect = rect.union(CGRect(x:p.x,y:p.y,width:1,height:1))
             }
         }
         let inset = ToolArcConfig.safeMargin

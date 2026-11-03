@@ -26,7 +26,9 @@ struct VocabAnalyzeSheet: View {
         "ky": "考研", "toefl": "托福", "ielts": "雅思", "gre": "GRE",
     ]
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var analyzing = true
     @State private var allEntries: [AnalyzeEntry] = []
     @State private var selected: Set<String> = []
@@ -64,7 +66,7 @@ struct VocabAnalyzeSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -308,7 +310,7 @@ struct VocabAnalyzeSheet: View {
             }.value
             collecting = false
             onDone()
-            dismiss()
+            closePanel()
         }
     }
 }

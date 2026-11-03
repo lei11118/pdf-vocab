@@ -102,6 +102,7 @@ final class ReaderCoordinator: NSObject {
     var hoverPreviewEnabled = true
     var hapticsEnabled = true
     var onHoverUpdate: ((String, String, CGPoint) -> Void)?
+    private(set) var hoverTranslationLocation: TranslationLocation?
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
     private var hoverEntry: (page: PDFPage, annotation: PDFAnnotation)?
@@ -920,7 +921,10 @@ final class ReaderCoordinator: NSObject {
             if key != hoverKey {
                 hoverKey = key
                 setHoverAnnotation(page: hit.page, word: word)
-                onHoverUpdate?(term, key, viewPoint)
+                let range = word.range(at:0,on:hit.page)
+                hoverTranslationLocation = TranslationLocation(page:pdfView.document?.index(for:hit.page) ?? -1,character:range.location)
+                let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of: word, on: hit.page), from: hit.page)
+                onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
                 DiagLog.log("hover: 「\(term)」")
             }
         case .ended, .cancelled, .failed:
@@ -950,6 +954,7 @@ final class ReaderCoordinator: NSObject {
     func clearHover() {
         guard hoverKey != "" || hoverEntry != nil else { return }
         hoverKey = ""
+        hoverTranslationLocation = nil
         removeHoverAnnotation()
         onHoverEnd?()
     }
@@ -1013,7 +1018,9 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm))
+        let pageIndex = pdfView?.document?.index(for:page) ?? -1
+        let sourceOffset = words.prefix(range.lowerBound).reduce(0) { $0 + ($1.text as NSString).length + 1 }
+        onSelectionInfo(SelectionInfo(text:text,wordCount:wordCount,primaryTerm:primaryTerm,translationLocation:TranslationLocation(page:pageIndex,character:sourceOffset)))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
         }
@@ -1228,9 +1235,10 @@ final class ReaderCoordinator: NSObject {
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
         onSelectionInfo(SelectionInfo(
-            text: display,
+            text: text,
             wordCount: wordCount,
-            primaryTerm: primaryTerm
+            primaryTerm: primaryTerm,
+            translationLocation: selection.pages.first.map { TranslationLocation(page:pageIndex,character:selection.range(at:0,on:$0).location) }
         ))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
@@ -2566,10 +2574,7 @@ extension ReaderCoordinator: UIPencilInteractionDelegate {
     /// v0.16.2(真机日志证据):挤压是**持续事件** —— 按住会连续回调(0.7s 内 20 次)。
     /// v0.19.0:改为只响应 `.began`(每次挤压一次),再用 0.25s 去重;回调里不做重活。
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastSqueezeAt > 0.25 else { return }
-        lastSqueezeAt = now
+        guard squeeze.phase == .began, ReaderSqueezeGate.shared.accept() else { return }
         let action = UserDefaults.standard.string(forKey: "pencilSqueezeAction") ?? "arc"
         guard action != "off" else {
             DiagLog.log("pencil: squeeze ignored (off)")

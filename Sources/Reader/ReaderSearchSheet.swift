@@ -17,7 +17,9 @@ struct ReaderSearchSheet: View {
         let rectsJSON: String
     }
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var query = ""
     @State private var hits: [SearchHit] = []
     @State private var searching = false
@@ -47,7 +49,7 @@ struct ReaderSearchSheet: View {
                             term: query,
                             rectsJSON: hit.rectsJSON
                         ))
-                        dismiss()
+                        closePanel()
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(hit.snippet)
@@ -68,7 +70,7 @@ struct ReaderSearchSheet: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "在文档中搜索")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .task(id: query) {

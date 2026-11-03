@@ -111,6 +111,29 @@ final class PencilToolSession: ObservableObject {
         didSet { UserDefaults.standard.set(hiddenToolRaw, forKey: "pencilHiddenTools") }
     }
 
+    @Published private(set) var presets: [PencilToolPreset] = {
+        guard let data = UserDefaults.standard.data(forKey: "pencil.customPresets.v1") else { return [] }
+        return (try? JSONDecoder().decode([PencilToolPreset].self, from: data)) ?? []
+    }()
+    var arcItems: [PencilArcItem] {
+        visibleKinds.map { PencilArcItem(id:$0.rawValue,kind:$0,name:$0.label,preset:nil) } +
+        presets.map { PencilArcItem(id:$0.id,kind:$0.state.kind,name:$0.name,preset:$0) }
+    }
+    func activate(_ item: PencilArcItem) {
+        if let preset = item.preset { apply(preset.state); saveState() }
+        else { select(kind:item.kind) }
+    }
+    func savePreset(name: String) {
+        let name = name.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        presets.append(PencilToolPreset(name:name,state:state)); persistPresets()
+    }
+    func deletePresets(at offsets: IndexSet) { presets.remove(atOffsets:offsets); persistPresets() }
+    func movePresets(from offsets: IndexSet, to destination: Int) { presets.move(fromOffsets:offsets,toOffset:destination); persistPresets() }
+    private func persistPresets() {
+        if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data,forKey:"pencil.customPresets.v1") }
+    }
+
     /// 橡皮切换前的上一支笔(双击手势回退用)
     private(set) var lastInkKind: PencilToolKind = .pen
 
@@ -408,5 +431,55 @@ final class PencilToolSession: ObservableObject {
         guard !applying else { return }
         saveState()
         stateRevision &+= 1
+    }
+}
+
+struct PencilToolPreset: Codable, Equatable, Identifiable {
+    var id = UUID().uuidString
+    var name: String
+    var state: PencilToolState
+}
+struct PencilArcItem: Identifiable {
+    let id: String
+    let kind: PencilToolKind
+    let name: String
+    let preset: PencilToolPreset?
+    var systemImage: String { kind.systemImage }
+    var label: String { name }
+}
+
+struct PencilToolCustomization: View {
+    @ObservedObject var session: PencilToolSession
+    @State private var name = ""
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("当前笔具参数") {
+                    Picker("类型",selection:Binding(get:{session.kind},set:{session.select(kind:$0)})) {
+                        ForEach(PencilToolKind.allCases) { Text($0.label).tag($0) }
+                    }
+                    PencilPaletteView(session:session,onUndo:{},onRedo:{}).stylePanel
+                        .frame(maxWidth:.infinity).listRowInsets(EdgeInsets())
+                    TextField("自定义工具名称",text:$name)
+                    Button("保存为独立工具") { session.savePreset(name:name); name = "" }
+                        .disabled(name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                }
+                Section("自定义工具（包含颜色、宽度与工具参数）") {
+                    ForEach(session.presets) { preset in
+                        Button { session.activate(PencilArcItem(id:preset.id,kind:preset.state.kind,name:preset.name,preset:preset)) } label: {
+                            Label(preset.name,systemImage:preset.state.kind.systemImage)
+                        }
+                    }.onDelete(perform:session.deletePresets).onMove(perform:session.movePresets)
+                }
+                Section("工具盘显示") {
+                    ForEach(PencilToolKind.allCases) { kind in
+                        Toggle(kind.label,isOn:Binding(get:{!session.hiddenSet.contains(kind.rawValue)},set:{show in
+                            if show { session.unhide(kind) } else { session.hide(kind) }
+                        }))
+                    }
+                }
+            }.navigationTitle("自定义手写工具").navigationBarTitleDisplayMode(.inline)
+                .toolbar { EditButton() }
+        }
     }
 }

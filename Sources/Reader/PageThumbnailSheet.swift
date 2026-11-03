@@ -8,7 +8,9 @@ struct PageThumbnailSheet: View {
     let currentPage: Int
     var onSelect: (Int) -> Void
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var thumbnails: [Int: UIImage] = [:]
 
     private let columns = [GridItem(.adaptive(minimum: 108), spacing: 12)]
@@ -28,7 +30,7 @@ struct PageThumbnailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
         }
@@ -38,7 +40,7 @@ struct PageThumbnailSheet: View {
         let selected = index == currentPage
         return Button {
             onSelect(index)
-            dismiss()
+            closePanel()
         } label: {
             VStack(spacing: 5) {
                 ZStack {

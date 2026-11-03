@@ -17,6 +17,9 @@ struct ReaderView: View {
     @State private var showTranslate = false
     @State private var showPageJump = false
     @State private var cardContent: ReaderCardContent?
+    @State private var selectedTranslationLocation: TranslationLocation?
+    @State private var showTranslationReview = false
+    @StateObject private var documentTranslation: DocumentTranslationModel
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
@@ -73,12 +76,15 @@ struct ReaderView: View {
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
 
     init(doc: DocumentRecord, store: DocumentStore, jumpTarget: VocabJumpTarget? = nil) {
         self.doc = doc
         self.store = store
         self.jumpTarget = jumpTarget
+        _documentTranslation = StateObject(wrappedValue:DocumentTranslationModel(doc:doc.sha256,db:store.db))
         _graphModel = StateObject(wrappedValue: KnowledgeGraphStore(docId: doc.sha256, db: store.db))
         _currentPage = State(initialValue: jumpTarget?.page ?? doc.lastPage)
         _suppressSave = State(initialValue: jumpTarget != nil)
@@ -96,7 +102,7 @@ struct ReaderView: View {
     // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
     private var lifecycleContent: some View {
         pencilSyncContent
-            .onChange(of: arcAnchor != nil || capturing || showGraph) { _, blocked in
+            .onChange(of: capturing || showGraph || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
             }
@@ -156,7 +162,8 @@ struct ReaderView: View {
 
     private var sheetContent: some View {
         primarySheetContent
-            .sheet(isPresented: $showAnalyze) {
+            .readerPanel(isPresented:$showTranslationReview,title:"全文翻译与校对") { DocumentTranslationReview(model:documentTranslation) }
+            .readerPanel(isPresented: $showAnalyze, title: "词频分析") {
                 if let resolvedURL {
                     VocabAnalyzeSheet(
                         url: resolvedURL,
@@ -165,7 +172,7 @@ struct ReaderView: View {
                     )
                 }
             }
-            .sheet(isPresented: $showPageJump) {
+            .readerPanel(isPresented: $showPageJump, title: "跳转页面") {
                 PageJumpSheet(
                     pageCount: doc.pageCount,
                     current: currentPage,
@@ -184,7 +191,7 @@ struct ReaderView: View {
             .sheet(item: $shareFile) { item in
                 ActivityShareView(items: [item.url])
             }
-            .sheet(isPresented: $showThumbnails) {
+            .readerPanel(isPresented: $showThumbnails, title: "页面缩略图") {
                 if let doc = readerHandle.coordinator?.document {
                     PageThumbnailSheet(document: doc, currentPage: currentPage) { target in
                         readerHandle.coordinator?.go(toPage: target)
@@ -214,7 +221,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || showTranslate || showTranslationReview
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -225,7 +232,7 @@ struct ReaderView: View {
 
     private var primarySheetContent: some View {
         chromeContent
-            .fullScreenCover(isPresented: $showGraph) {
+            .readerPanel(isPresented: $showGraph, title: "知识图谱") {
                 KnowledgeGraphView(model: graphModel, tools: pencilTools, vocab: VocabStore(db: store.db), onSource: { shot in
                     if let page = readerHandle.coordinator?.pdfView?.document?.page(at:shot.pageIndex) {
                         let bounds = page.bounds(for:.cropBox), r = shot.sourceRect
@@ -235,16 +242,16 @@ struct ReaderView: View {
                     currentPage = shot.pageIndex
                 })
             }
-            .sheet(isPresented: $showSettings) {
+            .readerPanel(isPresented: $showSettings, title: "设置") {
                 SettingsView(db: store.db)
             }
-            .dsLeadingCover(isPresented: $showVocab) { close in
+            .readerPanel(isPresented: $showVocab, title: "生词本") {
                 VocabListView(store: VocabStore(db: store.db), scopeDocSha: doc.sha256, onJump: { target in
                     showVocab = false
                     readerHandle.coordinator?.jumpToVocab(target: target)
-                }, docStore: store, onClose: close)
+                }, docStore: store, onClose: { showVocab = false })
             }
-            .sheet(isPresented: $showOutline) {
+            .readerPanel(isPresented: $showOutline, title: "目录与书签") {
                 if let resolvedURL {
                     ReaderOutlineSheet(
                         url: resolvedURL,
@@ -259,7 +266,7 @@ struct ReaderView: View {
                     )
                 }
             }
-            .sheet(isPresented: $showSearch) {
+            .readerPanel(isPresented: $showSearch, title: "全文搜索") {
                 if let resolvedURL {
                     ReaderSearchSheet(
                         url: resolvedURL,
@@ -355,7 +362,7 @@ struct ReaderView: View {
                     iconSize: 16,
                     accessibility: "返回文档库"
                 ) {
-                    dismiss()
+                    closePanel()
                 }
 
                 Button {
@@ -514,6 +521,7 @@ struct ReaderView: View {
             DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline = true }
             Rectangle().fill(DS.foreground3.opacity(0.2)).frame(width: 24, height: 1)
             DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab = true }
+            DSIconButton(systemImage:"character.book.closed",accessibility:"全文翻译与校对") { showTranslationReview = true }
             DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", accessibility: "知识图谱") { showGraph = true }
             DSIconButton(systemImage: "circle.grid.cross", accessibility: "弧形工具盘") {
                 arcAnchor = CGPoint(x: dockBounds.width / 2, y: dockBounds.height / 2)
@@ -613,6 +621,7 @@ struct ReaderView: View {
             .overlay { captureOverlay }
             .overlay(alignment:.bottom) { captureToast }
     }
+    private var cardTerm: String { if case .word(let term) = cardContent { return term }; return "" }
     private var wordOverlay: some View {
     GeometryReader { geo in
         if let content = cardContent {
@@ -624,6 +633,7 @@ struct ReaderView: View {
                     cardContent = .word(word)
                     autoSpeak(word)
                 },
+                correction: documentTranslation.correction(term:cardTerm,location:selectedTranslationLocation),
                 vocab: cardVocab,
                 onTranslate: { text in
                     translateText = text
@@ -792,7 +802,10 @@ struct ReaderView: View {
                     ocrStore: OCRStore(db: store.db),
                     hoverPreviewEnabled: pencilHoverPreview,
                     hapticsEnabled: pencilHaptics,
-                    onHoverUpdate: { term, key, point in wordInteraction.hover(term, query: key, at: point) },
+                    onHoverUpdate: { term, key, point in
+                        wordInteraction.setCorrection(documentTranslation.correction(term:term,location:readerHandle.coordinator?.hoverTranslationLocation))
+                        wordInteraction.hover(term,query:key,at:point)
+                    },
                     onHoverEnd: { wordInteraction.clear() },
                     markMode: markMode,
                     toolSession: pencilTools,
@@ -827,6 +840,7 @@ struct ReaderView: View {
                             cardContent = nil
                             return
                         }
+                        selectedTranslationLocation = info.translationLocation
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
                             cardContent = .word(info.primaryTerm)
                             autoSpeak(info.primaryTerm)
@@ -900,10 +914,20 @@ struct ReaderView: View {
             resolvedURL = url
             optimizing = false
         }
-        .task(id: doc.sha256) {
+        .task(id: resolvedURL) {
+            guard let url = resolvedURL else { return }
             await runOCROnce()
+            await documentTranslation.prepare(url:url,ocr:OCRStore(db:store.db))
         }
-        .translationPresentation(isPresented: $showTranslate, text: translateText)
+        .background {
+            if #available(iOS 18.0, *) { DocumentTranslationDriver(model:documentTranslation) }
+        }
+        .onChange(of:documentTranslation.completed) { _,_ in
+            if let preview = wordInteraction.preview {
+                wordInteraction.setCorrection(documentTranslation.correction(term:preview.term,location:readerHandle.coordinator?.hoverTranslationLocation))
+            }
+        }
+        .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText) }
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)
@@ -931,7 +955,9 @@ private struct PageJumpSheet: View {
     let current: Int
     let onJump: (Int) -> Void
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @StateObject private var loader: ThumbnailLoader
     @State private var mode = 0
     @State private var input = ""
@@ -969,7 +995,7 @@ private struct PageJumpSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .onDisappear { loader.invalidate() }
@@ -994,7 +1020,7 @@ private struct PageJumpSheet: View {
                     Slider(value: $sliderValue, in: 1...Double(pageCount), step: 1) { editing in
                         if !editing {
                             onJump(Int(sliderValue.rounded()) - 1)
-                            dismiss()
+                            closePanel()
                         }
                     }
                     HStack {
@@ -1033,7 +1059,7 @@ private struct PageJumpSheet: View {
     private func thumbCell(_ index: Int) -> some View {
         Button {
             onJump(index)
-            dismiss()
+            closePanel()
         } label: {
             VStack(spacing: 4) {
                 ZStack {
@@ -1073,6 +1099,6 @@ private struct PageJumpSheet: View {
             return
         }
         onJump(n - 1)
-        dismiss()
+        closePanel()
     }
 }

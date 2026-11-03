@@ -20,37 +20,39 @@ struct PencilArcMenu: View {
     @State private var rightExtent: CGFloat = 0
     @State private var reset: Task<Void, Never>?
     @State private var appeared = false
-    private var tools: [PencilToolKind] { session.visibleKinds }
+    @State private var customizing = false
+    private var tools: [PencilArcItem] { session.arcItems }
     private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded) }
     private var upper: [(String, String)] {
-        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式")] : [("viewfinder", "知识图谱截图")]
+        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("slider.horizontal.3", "自定义工具")]
     }
-    private func alpha(_ index: Int) -> Double {
-        let offset = CGFloat(index) - CGFloat(tools.count - 1) / 2
-        let initial = CGFloat(geometry.initialCount - 1) / 2
-        let limit = initial + (offset < 0 ? leftExtent : rightExtent)
-        return Double(max(0.25, min(1, 1 - (abs(offset) - limit) / 1.25)))
+    private var visibleIndices: Range<Int> {
+        let initial = max(1,min(tools.count,Int((ToolArcConfig.sweep * min(ToolArcConfig.radius,max(130,min(bounds.width,bounds.height)*0.46)) - ToolArcConfig.diameter)/ToolArcConfig.pitch)+1))
+        let start = max(0,(tools.count-initial)/2-Int(leftExtent))
+        let end = min(tools.count,(tools.count+initial+1)/2+Int(rightExtent))
+        return start..<end
     }
+    private func visible(_ index: Int) -> Bool { visibleIndices.contains(index) }
     var body: some View {
         ZStack {
             Color.black.opacity(0.001).ignoresSafeArea()
-            ForEach(tools.indices,id:\.self) { index in
-                track(index,count:tools.count,upper:false).stroke(DS.background3.opacity(alpha(index)*0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
+            ForEach(Array(visibleIndices),id:\.self) { index in
+                track(index,count:tools.count,upper:false).stroke(DS.background3.opacity(0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
             }
             if debugGeometry {
                 Path { path in
-                    let a = geometry.point(angle:geometry.mid-ToolArcConfig.sweep/2,radius:ToolArcConfig.radius)
-                    let b = geometry.point(angle:geometry.mid+ToolArcConfig.sweep/2,radius:ToolArcConfig.radius)
+                    let a = geometry.point(angle:geometry.mid-ToolArcConfig.sweep/2,radius:geometry.radius)
+                    let b = geometry.point(angle:geometry.mid+ToolArcConfig.sweep/2,radius:geometry.radius)
                     path.move(to:a);path.addLine(to:b)
                     path.move(to:geometry.point(angle:geometry.mid,radius:0));path.addLine(to:a)
                     path.move(to:geometry.point(angle:geometry.mid,radius:0));path.addLine(to:b)
                 }.stroke(Color.red.opacity(0.65),style:StrokeStyle(lineWidth:1,dash:[4,4])).allowsHitTesting(false)
                 Circle().stroke(Color.red,lineWidth:2).frame(width:10,height:10).position(x:anchor.x+geometry.translation.width,y:anchor.y+geometry.translation.height).allowsHitTesting(false)
             }
-            ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
-                icon(tool.systemImage, label: tool.label, active: session.kind == tool) {
-                    session.select(kind: tool); onSelect(); onDismiss()
-                }.opacity(appeared ? alpha(index) : 0).position(geometry.position(index, count: tools.count, upper: false))
+            ForEach(Array(tools.enumerated()).filter { visible($0.offset) }, id: \.element.id) { index, tool in
+                icon(tool.systemImage, label: tool.label, active: session.kind == tool.kind) {
+                    session.activate(tool); onSelect(); onDismiss()
+                }.opacity(appeared ? 1 : 0).position(geometry.position(index, count: tools.count, upper: false))
             }
             ForEach(upper.indices, id: \.self) { index in
                 icon(upper[index].0, label: upper[index].1, active: false) { activateUpper(index) }
@@ -59,14 +61,15 @@ struct PencilArcMenu: View {
             }
             ArcInput(onHover: hover, onTap: { point, pencil in
                 if let index = geometry.index(at: point, count: upper.count, upper: true) { activateUpper(index) }
-                else if let index = geometry.index(at: point, count: tools.count, upper: false), !pencil || alpha(index) >= 0.85 {
-                    session.select(kind: tools[index]); onSelect(); onDismiss()
+                else if let index = geometry.index(at: point, count: tools.count, upper: false), visible(index) {
+                    session.activate(tools[index]); onSelect(); onDismiss()
                 } else { onDismiss() }
-            }, onSqueeze: onDismiss).accessibilityHidden(true)
+            }, onSqueeze: onDismiss).accessibilityHidden(true).allowsHitTesting(!customizing)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: leftExtent)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: rightExtent)
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
+        .readerPanel(isPresented:$customizing,title:"自定义手写工具") { PencilToolCustomization(session:session) }
         .onChange(of: bounds) { _, _ in onDismiss() }
         .onAppear { withAnimation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82)) { appeared = true } }
         .onDisappear { reset?.cancel() }
@@ -81,7 +84,7 @@ struct PencilArcMenu: View {
         }.accessibilityLabel(label)
     }
     private func track(_ index:Int,count:Int,upper:Bool) -> Path {
-        let radius = ToolArcConfig.radius+(upper ? ToolArcConfig.gap : 0)
+        let radius = geometry.radius+(upper ? ToolArcConfig.gap : 0)
         let angle = geometry.mid+(CGFloat(index)-CGFloat(count-1)/2)*geometry.pitch/radius
         var path = Path()
         for i in 0...8 {
@@ -92,6 +95,7 @@ struct PencilArcMenu: View {
     }
     private func enabled(_ index: Int) -> Bool { !marking || index > 1 || (index == 0 ? canUndo : canRedo) }
     private func activateUpper(_ index: Int) {
+        if index == upper.count-1 { customizing = true; return }
         guard enabled(index) else { return }
         if !marking || index == 2 { onDismiss(); onScreenshot() }
         else if index == 0 { onUndo() }
@@ -101,14 +105,14 @@ struct PencilArcMenu: View {
     private func hover(_ point: CGPoint?) {
         if let point {
             let polar = geometry.polar(point)
-            if abs(polar.r - ToolArcConfig.radius) <= ToolArcConfig.band {
+            if abs(polar.r - geometry.radius) <= ToolArcConfig.band {
                 reset?.cancel(); reset = nil
-                let units = (polar.angle - geometry.mid) * ToolArcConfig.radius / geometry.pitch
-                let extent = max(0, abs(units) - CGFloat(geometry.initialCount - 1) / 2 + 1.25)
+                let units = (polar.angle - geometry.mid) * geometry.radius / geometry.pitch
+                let extent = max(0, ceil(abs(units) - CGFloat(geometry.initialCount - 1) / 2 + 1))
                 if units < 0 { leftExtent = max(leftExtent, extent) } else { rightExtent = max(rightExtent, extent) }
                 return
             }
-            if abs(polar.r - ToolArcConfig.radius) < ToolArcConfig.band + ToolArcConfig.hysteresis { return }
+            if abs(polar.r - geometry.radius) < ToolArcConfig.band + ToolArcConfig.hysteresis { return }
         }
         guard reset == nil else { return }
         reset = Task { @MainActor in
@@ -137,7 +141,7 @@ private final class ArcInputView: UIView, UIPencilInteractionDelegate {
     }
     required init?(coder: NSCoder) { fatalError() }
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        if squeeze.phase == .ended { onSqueeze?() }
+        if squeeze.phase == .began, ReaderSqueezeGate.shared.accept() { onSqueeze?() }
     }
     @objc private func hover(_ gesture: UIHoverGestureRecognizer) {
         onHover?(gesture.state == .ended || gesture.state == .cancelled ? nil : gesture.location(in: self))

@@ -1,0 +1,59 @@
+import XCTest
+@testable import PdfVocab
+
+final class TranslationAndInteractionTests: XCTestCase {
+    func testRepeatedWordsAreBoundToOccurrenceNotWordGlobalKey() throws {
+        let source = "A function has a purpose. A function can be mathematical."
+        let sentences = TranslationAlignment.sentences(text:source,page:4)
+        XCTAssertEqual(sentences.count,2)
+        XCTAssertNotEqual(sentences[0].id,sentences[1].id)
+        var first = sentences[0],second = sentences[1]
+        first.target = "一个功能有其用途。"; second.target = "一个函数可以是数学的。"
+        first.links = TranslationAlignment.align(source:first.source,target:first.target,lookup:{ _ in "功能；函数" })
+        second.links = TranslationAlignment.align(source:second.source,target:second.target,lookup:{ _ in "功能；函数" })
+        let a = try XCTUnwrap(first.links.first { $0.word == "function" })
+        let b = try XCTUnwrap(second.links.first { $0.word == "function" })
+        XCTAssertEqual(a.meaning,"功能"); XCTAssertEqual(b.meaning,"函数")
+        XCTAssertFalse(a.reviewed); XCTAssertLessThan(a.confidence,1)
+        let detail = TranslationAlignment.correction(in:[first,second],term:"function",location:TranslationLocation(page:4,character:second.start+b.sourceStart))
+        XCTAssertTrue(detail.contains("函数")); XCTAssertTrue(detail.contains("自动链接·待校对"))
+        XCTAssertFalse(detail.contains("一个功能有其用途"))
+    }
+    func testMissingLinkNeverInventsVerifiedMeaningAndUTF16RangesRoundTrip() throws {
+        var sentence = try XCTUnwrap(TranslationAlignment.sentences(text:"🧮 A function exists.",page:1).first)
+        sentence.target = "存在某种关系。"
+        sentence.links = TranslationAlignment.align(source:sentence.source,target:sentence.target,lookup:{ _ in "功能；函数" })
+        let link = try XCTUnwrap(sentence.links.first { $0.word == "function" })
+        XCTAssertNil(link.meaning); XCTAssertNil(link.targetStart)
+        XCTAssertEqual((sentence.source as NSString).substring(with:NSRange(location:link.sourceStart,length:link.sourceLength)),"function")
+        let detail = TranslationAlignment.correction(in:[sentence],term:"function",location:TranslationLocation(page:1,character:sentence.start+link.sourceStart))
+        XCTAssertTrue(detail.contains("尚无可靠词语链接")); XCTAssertFalse(detail.contains("人工已确认"))
+        XCTAssertEqual(try JSONDecoder().decode(TranslatedSentence.self,from:JSONEncoder().encode(sentence)),sentence)
+    }
+    @MainActor func testTranslationCachePersistsReviewedOccurrence() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared),doc = "translation-test-\(UUID().uuidString)"
+        let repository = DocumentTranslationRepository(db:db)
+        _ = try repository.load(doc:doc)
+        defer { try? db.dbQueue.write { db in try db.execute(sql:"DELETE FROM document_translation WHERE doc=?",arguments:[doc]) } }
+        var value = try XCTUnwrap(TranslationAlignment.sentences(text:"A function exists.",page:2).first)
+        value.target = "函数存在。"; value.reviewed = true
+        value.links = TranslationAlignment.align(source:value.source,target:value.target,lookup:{ _ in "函数" })
+        let index = try XCTUnwrap(value.links.firstIndex { $0.word == "function" })
+        value.links[index].reviewed = true
+        try repository.save(doc:doc,records:[value])
+        XCTAssertEqual(try repository.load(doc:doc),[value])
+        XCTAssertTrue(TranslationAlignment.correction(in:[value],term:"function",location:TranslationLocation(page:2,character:value.start+value.links[index].sourceStart)).contains("人工已确认"))
+    }
+    @MainActor func testSqueezeDuplicateRoutesDoNotToggleTwice() {
+        let gate = ReaderSqueezeGate()
+        XCTAssertTrue(gate.accept(at:10))
+        XCTAssertFalse(gate.accept(at:10.001))
+        XCTAssertFalse(gate.accept(at:10.05))
+        XCTAssertTrue(gate.accept(at:10.15))
+    }
+    func testFullDictionaryDetailKeepsAllSourcesAndEnglishDefinitions() {
+        let entry = DictEntry(word:"function",phonetic:"fʌŋkʃən",translation:"【通用】\n功能\n【数学】\n函数\n【医学】\n机能",definition:"【WordNet】\na mathematical relation",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+        let detail = WordInteraction.fullDetail(entry)
+        for value in ["fʌŋkʃən","功能","函数","机能","a mathematical relation"] { XCTAssertTrue(detail.contains(value)) }
+    }
+}

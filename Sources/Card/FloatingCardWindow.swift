@@ -15,6 +15,7 @@ struct FloatingCardWindow: View {
     let bounds: CGSize
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
+    var correction: String = ""
     var vocab: CardVocabBridge? = nil
     /// v0.13.0:整句卡「翻译」(透传给 WordCardPanel)
     var onTranslate: ((String) -> Void)? = nil
@@ -31,7 +32,7 @@ struct FloatingCardWindow: View {
     @AppStorage("readerCardH") private var storedH: Double = -1
 
     /// 最小尺寸(可缩成胶囊)
-    private let minSize = CGSize(width: 180, height: 48)
+    private let minSize = CGSize(width: 220, height: 180)
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
     private let defaultSize = CGSize(width: 320, height: 430)
@@ -46,15 +47,7 @@ struct FloatingCardWindow: View {
     }
 
     var body: some View {
-        ZStack {
-            fullBody
-                .opacity(isCompact ? 0 : 1)
-                .allowsHitTesting(!isCompact)
-            compactBody
-                .opacity(isCompact ? 1 : 0)
-                .allowsHitTesting(isCompact)
-        }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: isCompact)
+        fullBody
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -98,7 +91,7 @@ struct FloatingCardWindow: View {
         VStack(spacing: 0) {
             dragStrip
             Divider()
-            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord, vocab: vocab, onTranslate: onTranslate)
+            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord, correction:correction, vocab: vocab, onTranslate: onTranslate)
         }
     }
 

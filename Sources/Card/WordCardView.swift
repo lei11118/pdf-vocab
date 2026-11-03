@@ -22,6 +22,7 @@ struct WordCardPanel: View {
     let content: ReaderCardContent
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
+    var correction: String = ""
     var vocab: CardVocabBridge? = nil
     /// v0.13.0:整句卡「翻译」
     var onTranslate: ((String) -> Void)? = nil
@@ -30,7 +31,7 @@ struct WordCardPanel: View {
         Group {
             switch content {
             case .word(let term):
-                WordCardView(term: term, onClose: onClose, vocab: vocab)
+                WordCardView(term: term, onClose: onClose, correction:correction, vocab: vocab)
             case .sentence(let text, let count):
                 SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord, onTranslate: onTranslate)
             }
@@ -43,6 +44,7 @@ struct WordCardPanel: View {
 struct WordCardView: View {
     let term: String
     let onClose: () -> Void
+    var correction: String = ""
     var vocab: CardVocabBridge? = nil
 
     private enum LoadState: Equatable {
@@ -59,6 +61,7 @@ struct WordCardView: View {
     @State private var excludedSenses: Set<Int> = []
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(term)
@@ -69,6 +72,7 @@ struct WordCardView: View {
                 closeButton(onClose)
             }
 
+            if !correction.isEmpty { Text(correction).font(.callout).textSelection(.enabled).fixedSize(horizontal:false,vertical:true) }
             switch state {
             case .loading:
                 ProgressView()
@@ -94,6 +98,7 @@ struct WordCardView: View {
             Spacer(minLength: 0)
         }
         .padding(DS.Space.l)
+        }
         .background(DS.background2)
 
         .task(id: term) { await load() }
@@ -197,7 +202,7 @@ struct WordCardView: View {
 
             Divider()
 
-            ScrollView {
+            Group {
                 VStack(alignment: .leading, spacing: 14) {
                     if let translation = entry.translation, !translation.isEmpty {
                         // v0.13.0:义项勾选 —— 已收录词可逐条勾选保留(卡片只保留需要的义项;导出同步过滤)
@@ -410,7 +415,7 @@ struct CompactCardView: View {
         case .word(let term):
             return term
         case .sentence(let text, _):
-            return text.count > 60 ? String(text.prefix(60)) + "…" : text
+            return text
         }
     }
 
@@ -434,7 +439,7 @@ struct CompactCardView: View {
         HStack(spacing: 8) {
             Text(displayText)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
                 .layoutPriority(1)
             Button {
                 SpeechService.shared.speak(speakText, language: SpeechService.usVoice)
@@ -449,7 +454,7 @@ struct CompactCardView: View {
                 Text(translation)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Button(action: onClose) {
@@ -475,7 +480,7 @@ struct CompactCardView: View {
             DictionaryService.lookup(term)
         }.value
         if case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty {
-            translation = raw.split(separator: "\n").first.map(String.init)
+            translation = WordInteraction.fullDetail(entry)
         } else {
             translation = nil
         }

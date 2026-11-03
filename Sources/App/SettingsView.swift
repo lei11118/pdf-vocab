@@ -20,7 +20,9 @@ struct SettingsView: View {
     @AppStorage("restoreWritingState") private var restoreWritingState = true
     @AppStorage("pencilDoubleTapAction") private var pencilDoubleTapAction = "eraser"
     @AppStorage("pencilSqueezeAction") private var pencilSqueezeAction = "arc"
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
 
     private enum BackupState { case idle, exporting, importing }
     @State private var backupState: BackupState = .idle
@@ -108,7 +110,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .sheet(isPresented: $showRestorePicker) {

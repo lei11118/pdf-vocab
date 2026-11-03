@@ -6,6 +6,7 @@ struct SelectionInfo: Equatable {
     var wordCount: Int
     /// 首个可查询词(侧边词卡用)
     var primaryTerm: String
+    var translationLocation: TranslationLocation? = nil
 }
 
 /// 阅读会话句柄:让 SwiftUI 侧在任意时刻取到协调器(保存阅读位置等)。

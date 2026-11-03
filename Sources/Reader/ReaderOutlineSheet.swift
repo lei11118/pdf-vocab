@@ -17,7 +17,9 @@ struct ReaderOutlineSheet: View {
         let depth: Int
     }
 
+    @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
+    private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
     @State private var outline: [OutlineItem] = []
     @State private var bookmarks: [BookmarkRow] = []
     @State private var loadingOutline = true
@@ -46,7 +48,7 @@ struct ReaderOutlineSheet: View {
                     ForEach(bookmarks) { bm in
                         Button {
                             onJump(bm.page)
-                            dismiss()
+                            closePanel()
                         } label: {
                             HStack {
                                 Image(systemName: "bookmark.fill")
@@ -87,7 +89,7 @@ struct ReaderOutlineSheet: View {
                         Button {
                             if let page = item.page {
                                 onJump(page)
-                                dismiss()
+                                closePanel()
                             }
                         } label: {
                             HStack {
@@ -112,7 +114,7 @@ struct ReaderOutlineSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("完成") { closePanel() }
                 }
             }
             .task {
