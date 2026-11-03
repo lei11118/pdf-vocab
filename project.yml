@@ -75,6 +75,17 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  ReaderRouteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: PdfVocab
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   PdfVocab:
     build:
@@ -87,3 +98,4 @@ schemes:
     test:
       targets:
         - PdfVocabTests
+        - ReaderRouteUITests

@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+#if DEBUG
+import UIKit
+#endif
 
 /// 文档库:导入 PDF、查看列表、进入阅读。
 /// 导入方式:文件选择器(UIKit 文档选择器,asCopy 模式,绕开 iOS 26 fileImporter 问题)。
@@ -23,6 +26,10 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var showVocab = false
     @State private var showGraph = false
+    @State private var auditDocument: DocumentRecord?
+    #if DEBUG
+    @State private var didLaunchRouteAudit = false
+    #endif
     @State private var readerJump: VocabJumpTarget?
     @State private var query = ""
     @State private var vocabCount = 0
@@ -57,6 +64,7 @@ struct LibraryView: View {
             .navigationDestination(for: DocumentRecord.self) { doc in
                 ReaderView(doc: doc, store: store)
             }
+            .navigationDestination(item:$auditDocument) { doc in ReaderView(doc:doc,store:store) }
             .navigationDestination(item: $readerJump) { target in
                 if let rec = try? store.document(sha256: target.docSha) {
                     ReaderView(doc: rec, store: store, jumpTarget: target)
@@ -142,7 +150,25 @@ struct LibraryView: View {
             } message: {
                 Text("同时删除本地副本与阅读进度,且不可撤销。")
             }
-            .task { reload() }
+            .task {
+                reload()
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--reader-route-audit"),!didLaunchRouteAudit {
+                    didLaunchRouteAudit = true
+                    UserDefaults.standard.set(false,forKey:"restoreWritingState")
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("Reader-route-audit.pdf")
+                    let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:600,height:800)).pdfData { context in
+                        for _ in 0..<2 {
+                            context.beginPage()
+                            ("A function relates an input to an output." as NSString).draw(at:CGPoint(x:50,y:250),withAttributes:[.font:UIFont.systemFont(ofSize:22)])
+                        }
+                    }
+                    try? data.write(to:url)
+                    auditDocument = try? store.importFile(from:url)
+                    try? FileManager.default.removeItem(at:url)
+                }
+                #endif
+            }
             .onReceive(NotificationCenter.default.publisher(for: .yuewenDataDidRestore)) { _ in
                 // v0.12.0(M7):备份恢复完成后刷新文档列表
                 reload()

@@ -92,7 +92,7 @@ struct ReaderView: View {
     }
 
     var body: some View {
-        lifecycleContent
+        lifecycleContent.accessibilityIdentifier("reader.document")
     }
 
     // v0.16.0:把原来 20+ 个修饰符的一条长链拆成几段(CI 实测 body 单表达式
