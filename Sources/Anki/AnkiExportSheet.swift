@@ -92,6 +92,9 @@ struct AnkiExportSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(DS.background1)
+            .tint(DS.accent)
             .navigationTitle("导出")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

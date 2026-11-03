@@ -65,6 +65,8 @@ struct ReaderSearchSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(DS.background1)
             .navigationTitle("全文搜索")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "在文档中搜索")

@@ -178,6 +178,8 @@ struct VocabAnalyzeSheet: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(DS.background1)
     }
 
     private var visibleSelectedCount: Int {

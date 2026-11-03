@@ -9,13 +9,15 @@ struct ReaderSentenceTranslationView: View {
     var body: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:16) {
-                Text(text).textSelection(.enabled)
+                Text("原文").font(DS.Fonts.caption).foregroundStyle(DS.foreground3)
+                Text(text).font(DS.Fonts.wordBody).foregroundStyle(DS.foreground2).textSelection(.enabled)
                 Divider()
+                Text("译文").font(DS.Fonts.headline).foregroundStyle(DS.foreground1)
                 if let cached { Text(cached).textSelection(.enabled) }
                 else if let failure { Text(failure) }
                 else if translated.isEmpty { ProgressView("正在端侧翻译…") }
                 else { Text(translated).textSelection(.enabled) }
-            }.padding()
+            }.font(DS.Fonts.body).lineSpacing(4).frame(maxWidth:.infinity,alignment:.leading).padding(DS.Space.m)
         }.background { if cached == nil { if #available(iOS 18.0, *) { SentenceTranslationTask(text:text,onResult:{translated = $0},onError:{failure = $0}) } } }
             .onAppear { if #unavailable(iOS 18.0) { failure = "端侧翻译需要 iPadOS 18 或更高版本" } }
     }

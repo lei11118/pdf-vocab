@@ -27,7 +27,7 @@ struct WorkspaceFolderEditor: View {
                             Button { icon = symbol } label: {
                                 Image(systemName: symbol).font(.system(size: 24))
                                     .foregroundStyle(DS.accent).frame(width: 56, height: 56)
-                                    .background(DSReliefSurface(radius: 18, inset: icon == symbol))
+                                    .background(icon == symbol ? DS.accentContainer : DS.background2, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             }.buttonStyle(DSPressableButtonStyle())
                             .accessibilityLabel(symbol)
                             .accessibilityAddTraits(icon == symbol ? .isSelected : [])

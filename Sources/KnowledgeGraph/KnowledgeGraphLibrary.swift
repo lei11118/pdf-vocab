@@ -16,6 +16,9 @@ struct KnowledgeGraphLibrary: View {
                     Label(doc.title, systemImage: "point.3.connected.trianglepath.dotted")
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(DS.background1)
             .overlay { if documents.isEmpty { ContentUnavailableView("暂无文档",systemImage:"books.vertical",description:Text("导入文档后可创建对应的知识图谱。")) } }
             .navigationTitle("选择文档图谱")
             .toolbar { ToolbarItem(placement:.topBarLeading) { Button("完成") { closePanel() } } }

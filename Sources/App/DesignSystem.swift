@@ -424,7 +424,7 @@ struct DSChip: View {
         .padding(.horizontal, DS.Space.s)
         .frame(height: 30)
         .foregroundStyle(selected ? tint : DS.foreground2)
-        .background(DSReliefSurface(radius: 15, inset: selected))
+        .background(selected ? DS.accentContainer : DS.background2, in: Capsule())
     }
 }
 
