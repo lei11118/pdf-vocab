@@ -39,6 +39,8 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     @State private var moveBase: CGPoint?
     @State private var resizeBase: CGSize?
     @State private var sizeBeforeCompact: CGSize?
+    @GestureState private var moving = false
+    @GestureState private var resizing = false
     @AppStorage("readerCardX") private var storedX: Double = -1
     @AppStorage("readerCardY") private var storedY: Double = -1
     @AppStorage("readerCardW") private var storedW: Double = -1
@@ -90,6 +92,8 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
                 position = currentPosition
             }
         }
+        .onChange(of:moving) { _,active in if !active { moveBase = nil; persist() } }
+        .onChange(of:resizing) { _,active in if !active { resizeBase = nil; persist() } }
         .onChange(of: bounds) { _, _ in
             size = clampedSize(size)
             if let p = position {
@@ -133,13 +137,16 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .gesture(moveGesture)
+            .overlay(alignment:.top) {
+                Color.clear.frame(height:12).contentShape(Rectangle()).gesture(moveGesture)
+            }
             .onTapGesture(count: 2) { toggleCompact() }
     }
 
     private var moveGesture: some Gesture {
         // v0.10.0:同样改为"起手位置 + 总位移"——不做逐帧增量,坐标系重置也不会跳。
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($moving) { _,state,_ in state = true }
             .onChanged { value in
                 if moveBase == nil {
                     moveBase = currentPosition
@@ -172,6 +179,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     /// 严禁逐帧增量累加,坐标系重置/事件冒泡都不会再产生"瞬移"。
     private var resizeDragGesture: some Gesture {
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($resizing) { _,state,_ in state = true }
             .onChanged { value in
                 if resizeBase == nil {
                     resizeBase = size

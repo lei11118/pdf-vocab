@@ -440,7 +440,7 @@ struct CompactCardView: View {
         HStack(spacing: 8) {
             Text(displayText)
                 .font(.subheadline.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1).frame(maxWidth:120,alignment:.leading)
                 .layoutPriority(1)
             Button {
                 SpeechService.shared.speak(speakText, language: SpeechService.usVoice)
@@ -451,8 +451,8 @@ struct CompactCardView: View {
             }
             .buttonStyle(DSPressableButtonStyle())
             .accessibilityLabel("发音")
-            if let translation, !translation.isEmpty {
-                DefinitionScrollText(text: [correction,translation].filter { !$0.isEmpty }.joined(separator:"\n"))
+            if !(translation ?? "").isEmpty || !correction.isEmpty {
+                DefinitionScrollText(text: [correction,translation ?? ""].filter { !$0.isEmpty }.joined(separator:"\n"))
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
             Spacer(minLength: 0)

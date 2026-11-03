@@ -36,9 +36,6 @@ struct ReaderView: View {
     /// v0.11.0(M4-B):悬停预览(迷你释义气泡)
     @StateObject private var wordInteraction = WordInteractionSession()
     /// v0.11.0(M6):扫描版 OCR 进度
-    @State private var ocrRunning = false
-    @State private var ocrDone = 0
-    @State private var ocrTotal = 0
     /// v0.12.0(M7):夜间模式 / 目录书签 / 全文搜索 / 词频分析 / 批注版导出
     @AppStorage("readerNightMode") private var nightMode = false
     @State private var showOutline = false
@@ -744,27 +741,6 @@ struct ReaderView: View {
         } catch { captureMessage = error.localizedDescription }
     }
 
-    /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
-    private func runOCROnce() async {
-        let sha = doc.sha256
-        let ocrStore = OCRStore(db: store.db)
-        if ocrStore.isDone(docSha: sha) { return }
-        guard let url = try? store.pdfURL(for: doc) else { return }
-        DiagLog.log("ocr: start (scanned doc)")
-        ocrRunning = true
-        ocrDone = 0
-        ocrTotal = max(doc.pageCount, 1)
-        await OCRService.run(url: url, docSha: sha, store: ocrStore) { current, total in
-            DispatchQueue.main.async {
-                ocrDone = current
-                ocrTotal = total
-            }
-        }
-        ocrRunning = false
-        readerHandle.coordinator?.ocrDidFinish()
-        DiagLog.log("ocr: done")
-    }
-
     /// v0.12.0(M7):导出批注版 PDF(高亮 + 手写烧录;后台生成 → 分享面板)
     private func exportAnnotatedPDF() {
         guard let url = resolvedURL else { return }
@@ -906,16 +882,6 @@ struct ReaderView: View {
                     Button(documentTranslation.status) { showTranslationReview = true }
                         .font(.caption2).padding(8).background(.regularMaterial,in:Capsule())
                 }
-                // v0.11.0(M6):扫描版 OCR 进度
-                if ocrRunning {
-                    Text("扫描版文字识别中… \(ocrDone)/\(ocrTotal)")
-                        .font(.caption2)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
-                        .allowsHitTesting(false)
-                }
-                // v0.12.0(M7):批注版导出进度
                 if let exportProgress {
                     Text(exportProgress)
                         .font(.caption2)
@@ -949,7 +915,7 @@ struct ReaderView: View {
             ContextMeaningDriver(model:documentTranslation)
         }
         .onChange(of:documentTranslation.contextStatus) { _,_ in refreshHoverContext() }
-        .onChange(of:documentTranslation.records) { _,_ in refreshHoverContext() }
+        .onChange(of:documentTranslation.revision) { _,_ in refreshHoverContext() }
         .onChange(of:documentTranslation.completed) { _,_ in
             if let preview = wordInteraction.preview {
                 wordInteraction.setCorrection(documentTranslation.correction(term:preview.term,location:readerHandle.coordinator?.hoverTranslationLocation))

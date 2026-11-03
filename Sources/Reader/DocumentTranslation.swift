@@ -121,6 +121,7 @@ final class DocumentTranslationRepository: @unchecked Sendable {
     let repository: DocumentTranslationRepository
     @Published private(set) var records: [TranslatedSentence] = []
     @Published private(set) var ready = false
+    @Published private(set) var revision = 0
     @Published var running = false
     @Published var paused = false
     @Published var error: String?
@@ -142,11 +143,16 @@ final class DocumentTranslationRepository: @unchecked Sendable {
     }
     init(doc:String,db:AppDatabase) { self.doc = doc; repository = DocumentTranslationRepository(db:db) }
     var completed: Int { records.filter { !$0.target.isEmpty }.count }
-    var pending: [TranslatedSentence] {
-        records.filter { $0.target.isEmpty }.sorted {
-            let a = abs($0.page-preferredPage), b = abs($1.page-preferredPage)
-            return a == b ? ($0.page == $1.page ? $0.start < $1.start : $0.page < $1.page) : a < b
+    var pending: [TranslatedSentence] { nextBatch(limit:4) }
+    func nextBatch(limit:Int) -> [TranslatedSentence] {
+        var distance = Int.max
+        var batch:[TranslatedSentence] = []
+        for record in records where record.target.isEmpty {
+            let current = abs(record.page-preferredPage)
+            if current < distance { distance = current; batch = [] }
+            if current == distance && batch.count < limit { batch.append(record) }
         }
+        return batch
     }
     var status: String {
         if let error { return error }
@@ -166,6 +172,7 @@ final class DocumentTranslationRepository: @unchecked Sendable {
                 try Task.checkCancellation()
                 let wanted = preferredPage
                 let index = remaining.min { abs($0-wanted) < abs($1-wanted) }!
+                let started = Date()
                 let values = try await Task.detached(priority:.userInitiated) { () throws -> [TranslatedSentence] in
                     try Task.checkCancellation()
                     guard let pdf = PDFDocument(url:url),let page = pdf.page(at:index) else { throw CocoaError(.fileReadCorruptFile) }
@@ -179,11 +186,21 @@ final class DocumentTranslationRepository: @unchecked Sendable {
                         }
                         text = words.map(\.text).joined(separator:" ")
                     }
-                    return TranslationAlignment.sentences(text:text,page:index).map { cache[$0.id] ?? $0 }
+                    return TranslationAlignment.sentences(text:text,page:index).map { fresh in
+                        guard var saved = cache[fresh.id] else { return fresh }
+                        // v0.63 dictionary-overlap hints are not contextual sense decisions.
+                        saved.links = saved.links.map { link in
+                            guard !link.reviewed,link.confidence < 0.8 else { return link }
+                            var value = link; value.meaning = nil; value.targetStart = nil; value.targetLength = nil; value.confidence = 0
+                            return value
+                        }
+                        return saved
+                    }
                 }.value
                 try Task.checkCancellation()
-                records += values; remaining.remove(index); parsedPages += 1
+                records += values; remaining.remove(index); parsedPages += 1; revision += 1
                 if !ready { ready = true }
+                DiagLog.log("translation: prepared page=\(index) sentences=\(values.count) ms=\(Int(Date().timeIntervalSince(started)*1000))")
                 onPagePrepared?(index)
                 await Task.yield()
             }
@@ -219,6 +236,7 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             if preservingReviews && (current.reviewed || current.links.contains(where:{ $0.reviewed })) { return current }
             return updates[current.id] ?? current
         }
+        revision += 1
     }
     func acceptContext(sentence id:String,offset:Int,meaning:String,reason:String) async throws {
         guard var value = records.first(where:{ $0.id == id }),
@@ -248,7 +266,7 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             value.links[index].confidence = value.links[index].reviewed ? 1 : 0
         }
         let result = value
-        if let index = records.firstIndex(where: { $0.id == result.id }) { records[index] = result }
+        if let index = records.firstIndex(where: { $0.id == result.id }) { records[index] = result; revision += 1 }
         Task { do { try await accept([result],preservingReviews:false) } catch { self.error = "校对保存失败：\(error.localizedDescription)" } }
     }
 }
@@ -269,6 +287,7 @@ struct DocumentTranslationDriver: View {
                         try Task.checkCancellation()
                         let batch = Array(model.pending.prefix(4))
                         let requests = batch.map { TranslationSession.Request(sourceText:$0.source,clientIdentifier:$0.id) }
+                        let started = Date()
                         let responses = try await session.translate(batch:requests)
                         var translated: [(String,String)] = []
                         for try await response in responses {
@@ -287,6 +306,7 @@ struct DocumentTranslationDriver: View {
                         guard results.count == batch.count,results.allSatisfy({ !$0.target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty }) else { throw CocoaError(.coderValueNotFound) }
                         try Task.checkCancellation()
                         try await model.accept(results)
+                        DiagLog.log("translation: batch=\(results.count) preferredPage=\(model.preferredPage) ms=\(Int(Date().timeIntervalSince(started)*1000))")
                         await Task.yield()
                     }
                 } catch is CancellationError {} catch { model.error = "全文翻译暂停：\(error.localizedDescription)；可在全文校对中重试" }
