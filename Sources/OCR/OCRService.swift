@@ -178,6 +178,15 @@ enum OCRService {
 
     // MARK: - 命中与几何
 
+    /// Source offsets share the exact whitespace-joined OCR text used by sentence parsing.
+    /// Leading quotes belong to the box but not to the lexical token's character range.
+    static func sourceOffset(words:[OCRWord],index:Int,term:String) -> Int {
+        guard words.indices.contains(index) else { return 0 }
+        let prefix = words.prefix(index).reduce(0) { $0+($1.text as NSString).length+1 }
+        let range = (words[index].text as NSString).range(of:term,options:.caseInsensitive)
+        return prefix+(range.location == NSNotFound ? 0 : range.location)
+    }
+
     /// Exact word boxes outrank padded neighbours; padding is bounded by line height.
     static func wordIndex(at pagePoint: CGPoint, in words: [OCRWord], pageBounds: CGRect) -> Int? {
         guard !words.isEmpty, pageBounds.width > 1, pageBounds.height > 1 else { return nil }

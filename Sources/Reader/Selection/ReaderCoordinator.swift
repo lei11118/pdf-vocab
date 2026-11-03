@@ -906,9 +906,12 @@ final class ReaderCoordinator: NSObject {
         switch gesture.state {
         case .began, .changed:
             let viewPoint = gesture.location(in: pdfView)
-            guard let hit = pageHit(viewPoint),
-                  let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
-                  let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+            guard let hit = pageHit(viewPoint) else { clearHover(); return }
+            guard let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point) else {
+                updateOCRHover(page:hit.page,point:hit.point)
+                return
+            }
+            guard let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty, text.count <= 40 else {
                 clearHover()
                 return
@@ -937,6 +940,30 @@ final class ReaderCoordinator: NSObject {
             clearHover()
         default:
             break
+        }
+    }
+
+    private func updateOCRHover(page:PDFPage,point:CGPoint) {
+        guard let pdfView,let words = ocrWords(for:page),
+              let index = OCRService.wordIndex(at:point,in:words,pageBounds:page.bounds(for:.mediaBox)) else { clearHover(); return }
+        let term = WordPicker.firstLexicalWord(in:words[index].text) ?? words[index].text
+        let key = VocabStore.normalizedKey(term)
+        guard !key.isEmpty,term.count <= 40 else { clearHover(); return }
+        let pageIndex = pdfView.document?.index(for:page) ?? -1
+        let identity = "ocr|\(pageIndex)|\(index)|\(key)"
+        let changed = identity != hoverKey
+        let rect = OCRService.pageRect(from:words[index],pageBounds:page.bounds(for:.mediaBox))
+        if changed {
+            removeHoverAnnotation(); hoverKey = identity
+            let annotation = PDFAnnotation(bounds:rect,forType:.highlight,withProperties:nil)
+            annotation.color = UIColor.systemYellow.withAlphaComponent(0.28)
+            page.addAnnotation(annotation); hoverEntry = (page,annotation)
+            hoverTranslationLocation = TranslationLocation(page:pageIndex,character:OCRService.sourceOffset(words:words,index:index,term:term))
+        }
+        let visible = pdfView.convert(rect,from:page)
+        let anchor = CGPoint(x:visible.midX,y:visible.minY)
+        if changed || hypot(anchor.x-hoverPreviewPoint.x,anchor.y-hoverPreviewPoint.y) >= 0.5 {
+            hoverPreviewPoint = anchor; onHoverUpdate?(term,key,anchor)
         }
     }
 
@@ -1026,7 +1053,7 @@ final class ReaderCoordinator: NSObject {
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
         let pageIndex = pdfView.document?.index(for:page) ?? -1
-        let sourceOffset = words.prefix(range.lowerBound).reduce(0) { $0 + ($1.text as NSString).length + 1 }
+        let sourceOffset = OCRService.sourceOffset(words:words,index:range.lowerBound,term:primaryTerm)
         onSelectionInfo(SelectionInfo(text:text,wordCount:wordCount,primaryTerm:primaryTerm,translationLocation:TranslationLocation(page:pageIndex,character:sourceOffset)))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
