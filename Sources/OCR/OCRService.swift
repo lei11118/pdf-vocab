@@ -150,7 +150,10 @@ enum OCRService {
         }
 
         var out: [OCRWord] = []
-        let regex = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+(?:['’\\-][\\p{L}\\p{N}]+)*|[^\\s]")
+        // Vision boxes are word-precision: a terminal punctuation-only range can
+        // share the word's entire box and be discarded as a duplicate. Keep the
+        // original whitespace token, including its punctuation and numbers.
+        let regex = try? NSRegularExpression(pattern: "\\S+")
         for (lineIdx, observation) in (request.results ?? []).enumerated() {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string

@@ -151,7 +151,7 @@ final class TranslationAndInteractionTests: XCTestCase {
         XCTAssertTrue(OCRService.needsOCR(page:page))
         let words = OCRService.recognize(page:page)
         XCTAssertTrue(words.contains { $0.text == "42" })
-        XCTAssertTrue(words.contains { $0.text == "." })
+        XCTAssertTrue(words.contains { $0.text.hasSuffix(".") }, "OCR must retain original sentence punctuation: \(words.map(\.text))")
         XCTAssertTrue(words.contains { $0.text.lowercased() == "function" })
     }
     @MainActor func testContextMeaningCanDifferFromLiteralSentenceAndSurviveSentenceTranslation() async throws {
