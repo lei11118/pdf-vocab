@@ -27,6 +27,9 @@ struct LibraryView: View {
     @State private var showVocab = false
     @State private var showGraph = false
     @State private var auditDocument: DocumentRecord?
+    #if DEBUG
+    @State private var didLaunchRouteAudit = false
+    #endif
     @State private var readerJump: VocabJumpTarget?
     @State private var query = ""
     @State private var vocabCount = 0
@@ -150,7 +153,8 @@ struct LibraryView: View {
             .task {
                 reload()
                 #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("--reader-route-audit"),auditDocument == nil {
+                if ProcessInfo.processInfo.arguments.contains("--reader-route-audit"),!didLaunchRouteAudit {
+                    didLaunchRouteAudit = true
                     UserDefaults.standard.set(false,forKey:"restoreWritingState")
                     let url = FileManager.default.temporaryDirectory.appendingPathComponent("Reader-route-audit.pdf")
                     let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:600,height:800)).pdfData { context in
