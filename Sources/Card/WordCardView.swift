@@ -407,6 +407,7 @@ struct WrapLayout: Layout {
 struct CompactCardView: View {
     let content: ReaderCardContent
     let onClose: () -> Void
+    var correction: String = ""
 
     @State private var translation: String?
 
@@ -451,10 +452,8 @@ struct CompactCardView: View {
             .buttonStyle(DSPressableButtonStyle())
             .accessibilityLabel("发音")
             if let translation, !translation.isEmpty {
-                Text(translation)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                DefinitionScrollText(text: [correction,translation].filter { !$0.isEmpty }.joined(separator:"\n"))
+                    .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
             Spacer(minLength: 0)
             Button(action: onClose) {

@@ -50,7 +50,7 @@ enum OCRService {
             progress(i, total)
             if i>0 && i%32==0, let fresh=PDFDocument(url:url) { doc=fresh }
             autoreleasepool {
-                guard let page=doc.page(at:i) else { return }
+                guard !store.hasPage(docSha:docSha,page:i),let page=doc.page(at:i) else { return }
                 let words = needsOCR(page: page) ? recognize(page: page) : []
                 if !Task.isCancelled { store.save(docSha:docSha,page:i,words:words) }
             }
@@ -150,7 +150,7 @@ enum OCRService {
         }
 
         var out: [OCRWord] = []
-        let regex = try? NSRegularExpression(pattern: "[A-Za-z][A-Za-z'’\\-]*")
+        let regex = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+(?:['’\\-][\\p{L}\\p{N}]+)*|[^\\s]")
         for (lineIdx, observation) in (request.results ?? []).enumerated() {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string

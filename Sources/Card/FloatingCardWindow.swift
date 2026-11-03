@@ -17,9 +17,22 @@ struct FloatingCardWindow: View {
     let onSelectWord: (String) -> Void
     var correction: String = ""
     var vocab: CardVocabBridge? = nil
-    /// v0.13.0:整句卡「翻译」(透传给 WordCardPanel)
     var onTranslate: ((String) -> Void)? = nil
+    var body: some View {
+        ReaderWindowSurface(bounds:bounds,onClose:onClose) {
+            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,correction:correction,vocab:vocab,onTranslate:onTranslate)
+        } compact: {
+            CompactCardView(content:content,onClose:onClose,correction:correction)
+        }
+    }
+}
 
+/// The identical shell, geometry and grip for words and reader functions.
+struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
+    let bounds: CGSize
+    let onClose: () -> Void
+    @ViewBuilder var expanded: () -> Expanded
+    @ViewBuilder var compact: () -> Compact
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
@@ -32,7 +45,7 @@ struct FloatingCardWindow: View {
     @AppStorage("readerCardH") private var storedH: Double = -1
 
     /// 最小尺寸(可缩成胶囊)
-    private let minSize = CGSize(width: 220, height: 180)
+    private let minSize = CGSize(width: 220, height: 64)
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
     private let defaultSize = CGSize(width: 320, height: 430)
@@ -47,7 +60,7 @@ struct FloatingCardWindow: View {
     }
 
     var body: some View {
-        fullBody
+        Group { if isCompact { compactBody } else { fullBody } }
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -89,9 +102,15 @@ struct FloatingCardWindow: View {
 
     private var fullBody: some View {
         VStack(spacing: 0) {
-            dragStrip
+            HStack(spacing: 0) {
+                dragStrip
+                Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:26) }
+                    .buttonStyle(.plain).accessibilityLabel("小胶囊模式")
+                Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:26) }
+                    .buttonStyle(.plain).accessibilityLabel("关闭窗口")
+            }
             Divider()
-            WordCardPanel(content: content, onClose: onClose, onSelectWord: onSelectWord, correction:correction, vocab: vocab, onTranslate: onTranslate)
+            expanded()
         }
     }
 
@@ -110,7 +129,7 @@ struct FloatingCardWindow: View {
     // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
 
     private var compactBody: some View {
-        CompactCardView(content: content, onClose: onClose)
+        compact()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -234,7 +253,7 @@ struct FloatingCardWindow: View {
 
 /// 窗口右下角的白色缩放手柄弧条(v0.6.7):**造型即窗口边缘的一段**——
 /// 沿右下圆角画一段弧,半径随窗口圆角连续变化(胶囊态半圆、矩形态圆角),始终贴合边缘。
-private struct CornerGripArc: Shape {
+struct CornerGripArc: Shape {
     var cornerRadius: CGFloat
 
     func path(in rect: CGRect) -> Path {

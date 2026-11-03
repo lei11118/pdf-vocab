@@ -11,8 +11,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.63.0"
-    CURRENT_PROJECT_VERSION: "106"
+    MARKETING_VERSION: "0.64.0"
+    CURRENT_PROJECT_VERSION: "107"
 
 packages:
   GRDB:
@@ -75,6 +75,17 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  ReaderRouteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: PdfVocab
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   PdfVocab:
     build:
@@ -87,3 +98,4 @@ schemes:
     test:
       targets:
         - PdfVocabTests
+        - ReaderRouteUITests

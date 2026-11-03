@@ -94,8 +94,15 @@ struct ReaderView: View {
         _markMode = State(initialValue: restoreWriting && savedMark)
     }
 
+    private var isRouteAudit:Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("--reader-route-audit")
+        #else
+        return false
+        #endif
+    }
     var body: some View {
-        lifecycleContent
+        lifecycleContent.accessibilityIdentifier("reader.document")
     }
 
     // v0.16.0:把原来 20+ 个修饰符的一条长链拆成几段(CI 实测 body 单表达式
@@ -397,6 +404,13 @@ struct ReaderView: View {
                 }
 
                 Menu {
+                    Button("全文搜索") { showSearch = true }
+                    Button("目录与书签") { showOutline = true }
+                    Button("生词本") { showVocab = true }
+                    Button("全文翻译与校对") { showTranslationReview = true }
+                    Button("知识图谱") { showGraph = true }
+                    Button("词频分析") { showAnalyze = true }
+                    Divider()
                     Toggle(isOn: $nightMode) {
                         Label("夜间模式", systemImage: "moon.fill")
                     }
@@ -803,6 +817,9 @@ struct ReaderView: View {
                     hoverPreviewEnabled: pencilHoverPreview,
                     hapticsEnabled: pencilHaptics,
                     onHoverUpdate: { term, key, point in
+                        if documentTranslation.requestedTerm != term || documentTranslation.requestedLocation != readerHandle.coordinator?.hoverTranslationLocation {
+                            documentTranslation.requestContext(term:term,location:readerHandle.coordinator?.hoverTranslationLocation)
+                        }
                         wordInteraction.setCorrection(documentTranslation.correction(term:term,location:readerHandle.coordinator?.hoverTranslationLocation))
                         wordInteraction.hover(term,query:key,at:point)
                     },
@@ -833,6 +850,7 @@ struct ReaderView: View {
                     },
                     onPageChanged: { page in
                         currentPage = page
+                        documentTranslation.prioritize(page)
                         scheduleSave()
                     },
                     onSelectionInfo: { info in
@@ -842,6 +860,7 @@ struct ReaderView: View {
                             return
                         }
                         selectedTranslationLocation = info.translationLocation
+                        documentTranslation.requestContext(term:info.primaryTerm,location:info.translationLocation)
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
                             cardContent = .word(info.primaryTerm)
                             autoSpeak(info.primaryTerm)
@@ -921,18 +940,28 @@ struct ReaderView: View {
         }
         .task(id: resolvedURL) {
             guard let url = resolvedURL else { return }
-            await runOCROnce()
+            documentTranslation.prioritize(currentPage)
+            documentTranslation.onPagePrepared = { _ in readerHandle.coordinator?.ocrDidFinish() }
             await documentTranslation.prepare(url:url,ocr:OCRStore(db:store.db))
         }
         .background {
-            if #available(iOS 18.0, *) { DocumentTranslationDriver(model:documentTranslation) }
+            if !isRouteAudit { if #available(iOS 18.0, *) { DocumentTranslationDriver(model:documentTranslation) } }
+            ContextMeaningDriver(model:documentTranslation)
         }
+        .onChange(of:documentTranslation.contextStatus) { _,_ in refreshHoverContext() }
+        .onChange(of:documentTranslation.records) { _,_ in refreshHoverContext() }
         .onChange(of:documentTranslation.completed) { _,_ in
             if let preview = wordInteraction.preview {
                 wordInteraction.setCorrection(documentTranslation.correction(term:preview.term,location:readerHandle.coordinator?.hoverTranslationLocation))
             }
         }
         .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText,cached:documentTranslation.cachedTranslation(text:translateText,location:selectedTranslationLocation)) }
+    }
+
+    private func refreshHoverContext() {
+        if let preview = wordInteraction.preview {
+            wordInteraction.setCorrection(documentTranslation.correction(term:preview.term,location:readerHandle.coordinator?.hoverTranslationLocation))
+        }
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)

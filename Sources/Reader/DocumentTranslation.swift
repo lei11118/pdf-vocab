@@ -19,6 +19,7 @@ struct TranslationWordLink: Codable, Equatable, Identifiable {
     var meaning: String?
     var reviewed = false
     var confidence: Double = 0
+    var contextReason: String? = nil
     var id: Int { sourceStart }
 }
 struct TranslatedSentence: Codable, Equatable, Identifiable {
@@ -83,12 +84,12 @@ enum TranslationAlignment {
         guard let sentence = records.first(where: { $0.page == location.page && location.character >= $0.start && location.character < $0.start+$0.length }) else {
             return "【校对】待全文解析"
         }
-        guard !sentence.target.isEmpty else { return "【校对】本句待翻译" }
         let offset = location.character-sentence.start
         let link = sentence.links.first { offset >= $0.sourceStart && offset < $0.sourceStart+$0.sourceLength }
         if let link,link.word.caseInsensitiveCompare(term) == .orderedSame,let meaning = link.meaning,!meaning.isEmpty {
-            return "【校对：\(link.reviewed ? "人工已确认" : "自动链接·待校对")】\n\(meaning)\n【原句】\n\(sentence.source)\n【句译\(sentence.reviewed ? "·已校对" : "·机器译文")】\n\(sentence.target)"
+            return "【校对：\(link.reviewed ? "人工已确认" : link.confidence == 0.8 ? "语境释义·模型建议" : "自动链接·待校对")】\n\(meaning)\n\(link.contextReason ?? "")\n【原句】\n\(sentence.source)\n【句译\(sentence.reviewed ? "·已校对" : "·机器译文")】\n\(sentence.target)"
         }
+        if sentence.target.isEmpty { return "【语境】本句正在优先翻译\n【原句】\n\(sentence.source)" }
         return "【校对】尚无可靠词语链接，待校对\n【原句】\n\(sentence.source)\n【句译·机器译文】\n\(sentence.target)"
     }
 }
@@ -124,36 +125,69 @@ final class DocumentTranslationRepository: @unchecked Sendable {
     @Published var paused = false
     @Published var error: String?
     @Published var retry = 0
+    @Published var preferredPage = 0
+    @Published private(set) var parsedPages = 0
+    @Published private(set) var totalPages = 0
+    @Published var requestedLocation: TranslationLocation?
+    @Published var requestedTerm = ""
+    @Published var contextRevision = 0
+    @Published var contextStatus = ""
+    var onPagePrepared: ((Int) -> Void)?
+    func prioritize(_ page:Int) { preferredPage = page }
+    func requestContext(term:String,location:TranslationLocation?) {
+        requestedTerm = term; requestedLocation = location
+        if let location { preferredPage = location.page }
+        contextRevision += 1
+    }
     init(doc:String,db:AppDatabase) { self.doc = doc; repository = DocumentTranslationRepository(db:db) }
     var completed: Int { records.filter { !$0.target.isEmpty }.count }
-    var pending: [TranslatedSentence] { records.filter { $0.target.isEmpty } }
+    var pending: [TranslatedSentence] {
+        records.filter { $0.target.isEmpty }.sorted {
+            let a = abs($0.page-preferredPage), b = abs($1.page-preferredPage)
+            return a == b ? ($0.page == $1.page ? $0.start < $1.start : $0.page < $1.page) : a < b
+        }
+    }
     var status: String {
         if let error { return error }
-        if !ready { return "正在解析全文…" }
+        if !ready { return "正在识别当前页…" }
         if records.isEmpty { return "未发现可翻译英文句子" }
-        return "全文翻译 \(completed)/\(records.count)\(paused ? " · 已暂停" : running ? " · 端侧处理" : "")"
+        return "已识别 \(parsedPages)/\(totalPages) 页 · 翻译 \(completed)/\(records.count)\(paused ? " · 已暂停" : running ? " · 端侧处理" : "")"
     }
     func prepare(url: URL, ocr: OCRStore) async {
-        guard !ready else { return }
+        guard totalPages == 0 else { return }
         do {
             let repository = self.repository, doc = self.doc
-            let values = try await Task.detached(priority:.utility) { () throws -> [TranslatedSentence] in
-                let cache = Dictionary(uniqueKeysWithValues:try repository.load(doc:doc).map { ($0.id,$0) })
-                guard let pdf = PDFDocument(url:url) else { throw CocoaError(.fileReadCorruptFile) }
-                var result: [TranslatedSentence] = []
-                for index in 0..<pdf.pageCount {
+            let cached = try await Task.detached(priority:.userInitiated) { try repository.load(doc:doc) }.value
+            let cache = Dictionary(uniqueKeysWithValues:cached.map { ($0.id,$0) })
+            totalPages = await Task.detached { PDFDocument(url:url)?.pageCount ?? 0 }.value
+            var remaining = Set(0..<totalPages)
+            while !remaining.isEmpty {
+                try Task.checkCancellation()
+                let wanted = preferredPage
+                let index = remaining.min { abs($0-wanted) < abs($1-wanted) }!
+                let values = try await Task.detached(priority:.userInitiated) { () throws -> [TranslatedSentence] in
                     try Task.checkCancellation()
-                    var text = pdf.page(at:index)?.string ?? ""
-                    if text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
-                        text = ocr.words(docSha:doc,page:index).map(\.text).joined(separator:" ")
+                    guard let pdf = PDFDocument(url:url),let page = pdf.page(at:index) else { throw CocoaError(.fileReadCorruptFile) }
+                    var text = page.string ?? ""
+                    if OCRService.needsOCR(page:page) {
+                        var words = ocr.words(docSha:doc,page:index)
+                        if !ocr.hasPage(docSha:doc,page:index) {
+                            words = OCRService.recognize(page:page)
+                            try Task.checkCancellation()
+                            ocr.save(docSha:doc,page:index,words:words)
+                        }
+                        text = words.map(\.text).joined(separator:" ")
                     }
-                    result += TranslationAlignment.sentences(text:text,page:index).map { cache[$0.id] ?? $0 }
-                }
-                return result
-            }.value
-            guard !Task.isCancelled else { return }
-            records = values; ready = true
-        } catch is CancellationError {} catch { self.error = "全文解析失败：\(error.localizedDescription)" }
+                    return TranslationAlignment.sentences(text:text,page:index).map { cache[$0.id] ?? $0 }
+                }.value
+                try Task.checkCancellation()
+                records += values; remaining.remove(index); parsedPages += 1
+                if !ready { ready = true }
+                onPagePrepared?(index)
+                await Task.yield()
+            }
+            ocr.markDone(docSha:doc)
+        } catch is CancellationError {} catch { self.error = "页面识别失败：\(error.localizedDescription)" }
     }
     func cachedTranslation(text:String,location:TranslationLocation?) -> String? {
         let key = text.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -162,10 +196,20 @@ final class DocumentTranslationRepository: @unchecked Sendable {
         return match.map { "【句译·\($0.reviewed ? "已校对" : "机器译文")】\n\($0.target)" }
     }
     func correction(term:String,location:TranslationLocation?) -> String {
-        guard let location else { return "【校对】请从 PDF 中选取具体词语以关联原句" }
-        return TranslationAlignment.correction(in:records,term:term,location:location)
+        guard let location else { return "【语境】请从 PDF 中选取具体词语以关联原句" }
+        return TranslationAlignment.correction(in:records,term:term,location:location) + (contextStatus.isEmpty ? "" : "\n【语境辨析】\n"+contextStatus)
     }
     func accept(_ values:[TranslatedSentence],preservingReviews:Bool = true) async throws {
+        let values = values.map { incoming -> TranslatedSentence in
+            guard let current = records.first(where:{ $0.id == incoming.id }) else { return incoming }
+            var result = incoming
+            if incoming.target.isEmpty { result.target = current.target }
+            result.links = result.links.map { link in
+                if let saved = current.links.first(where:{ $0.sourceStart == link.sourceStart }),saved.reviewed || (saved.confidence == 0.8 && link.confidence != 0.8) { return saved }
+                return link
+            }
+            return result
+        }
         let repository = self.repository, doc = self.doc
         // Persist the batch before marking it complete, so interruption resumes without losing work.
         try await Task.detached(priority:.utility) { try repository.save(doc:doc,records:values,preservingReviews:preservingReviews) }.value
@@ -174,6 +218,16 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             if preservingReviews && (current.reviewed || current.links.contains(where:{ $0.reviewed })) { return current }
             return updates[current.id] ?? current
         }
+    }
+    func acceptContext(sentence id:String,offset:Int,meaning:String,reason:String) async throws {
+        guard var value = records.first(where:{ $0.id == id }),
+              let index = value.links.firstIndex(where:{ $0.sourceStart == offset }),!value.links[index].reviewed else { return }
+        value.links[index].meaning = meaning
+        value.links[index].contextReason = reason
+        value.links[index].confidence = 0.8
+        // Contextual glosses need not literally occur in a freely translated sentence.
+        value.links[index].targetStart = nil; value.links[index].targetLength = nil
+        try await accept([value],preservingReviews:true)
     }
     func review(sentence:TranslatedSentence,target:String,word:Int?,meaning:String) {
         guard !target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { error = "请输入句译后再保存校对"; return }
@@ -212,7 +266,7 @@ struct DocumentTranslationDriver: View {
                     try await session.prepareTranslation()
                     while !model.pending.isEmpty && !model.paused {
                         try Task.checkCancellation()
-                        let batch = Array(model.pending.prefix(16))
+                        let batch = Array(model.pending.prefix(4))
                         let requests = batch.map { TranslationSession.Request(sourceText:$0.source,clientIdentifier:$0.id) }
                         let responses = try await session.translate(batch:requests)
                         var translated: [(String,String)] = []
@@ -225,7 +279,7 @@ struct DocumentTranslationDriver: View {
                             output.compactMap { id,target -> TranslatedSentence? in
                                 guard var value = originals[id] else { return nil }
                                 value.target = target
-                                value.links = TranslationAlignment.align(source:value.source,target:value.target,lookup:WordInteraction.detail)
+                                value.links = TranslationAlignment.tokens(value.source)
                                 return value
                             }
                         }.value
@@ -239,6 +293,7 @@ struct DocumentTranslationDriver: View {
             .onAppear { configure() }
             .onChange(of:model.ready) { _,_ in configure() }
             .onChange(of:model.paused) { _,_ in configure() }
+            .onChange(of:model.records.count) { _,_ in if !model.running { configure() } }
             .onChange(of:model.retry) { _,_ in configure() }
     }
     private func configure() {
@@ -259,7 +314,7 @@ struct DocumentTranslationReview: View {
                 Button(model.paused ? "继续" : "暂停") { model.paused.toggle() }
                 Button("重试") { model.error = nil; model.paused = false; model.retry += 1 }
             }.padding(.horizontal)
-            Text("机器译文与自动词语链接均需校对；点击原词可保存该处语境释义。首次使用可能需要下载系统语言包。")
+            Text("优先翻译当前页。选词时按原句辨析该处词义；模型建议与词典义项分别显示，也可手动修订。首次翻译可能需要下载系统语言包。")
                 .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
             Stepper("第 \(page+1) 页",value:$page,in:0...max(0,model.records.map(\.page).max() ?? 0)).padding(.horizontal)
             ScrollView {

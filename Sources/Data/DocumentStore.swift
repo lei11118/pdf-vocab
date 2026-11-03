@@ -174,6 +174,9 @@ struct DocumentStore: Sendable {
             if try db.tableExists("document_translation") {
                 try db.execute(sql:"DELETE FROM document_translation WHERE doc=?",arguments:[rec.sha256])
             }
+            if try db.tableExists("ocr_page_status") {
+                try db.execute(sql:"DELETE FROM ocr_page_status WHERE docSha=?",arguments:[rec.sha256])
+            }
             _ = try DocumentRecord.deleteOne(db, key: rec.sha256)
         }
         if let url = try? pdfURL(for: rec) {

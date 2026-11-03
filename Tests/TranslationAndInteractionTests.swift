@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import PDFKit
 @testable import PdfVocab
 
 final class TranslationAndInteractionTests: XCTestCase {
@@ -106,4 +107,79 @@ final class TranslationAndInteractionTests: XCTestCase {
         let detail = WordInteraction.fullDetail(entry)
         for value in ["fʌŋkʃən","功能","函数","机能","a mathematical relation"] { XCTAssertTrue(detail.contains(value)) }
     }
+    @MainActor func testPagePreparationStreamsCurrentPageAndReadsCachedPhotoOCR() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared),doc = "stream-test-\(UUID().uuidString)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(doc).pdf")
+        let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:500)).pdfData { context in
+            context.beginPage()
+            ("Native text can be translated immediately." as NSString).draw(at:CGPoint(x:20,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:18)])
+            context.beginPage() // photo page with a saved OCR checkpoint
+        }
+        try data.write(to:url)
+        let ocr = OCRStore(db:db)
+        ocr.save(docSha:doc,page:1,words:[OCRWord(text:"A function has 42 inputs.",x:0.1,y:0.1,w:0.6,h:0.05,line:0)])
+        let model = DocumentTranslationModel(doc:doc,db:db)
+        model.prioritize(1)
+        var prepared:[Int] = []
+        model.onPagePrepared = { page in
+            prepared.append(page)
+            if prepared.count == 1 { XCTAssertTrue(model.ready); XCTAssertEqual(model.parsedPages,1); XCTAssertEqual(model.records.first?.page,1) }
+        }
+        defer {
+            try? FileManager.default.removeItem(at:url)
+            try? db.dbQueue.write { db in
+                for table in ["document_translation","ocr_word","ocr_status","ocr_page_status"] {
+                    try db.execute(sql:"DELETE FROM \(table) WHERE \(table == "document_translation" ? "doc" : "docSha")=?",arguments:[doc])
+                }
+            }
+        }
+        await model.prepare(url:url,ocr:ocr)
+        XCTAssertEqual(prepared,[1,0]); XCTAssertEqual(model.parsedPages,2)
+        XCTAssertTrue(model.records.contains { $0.source.contains("42") && $0.source.contains(".") })
+        XCTAssertEqual(model.pending.first?.page,1)
+    }
+    func testPhotoOCRPreservesNumbersAndSentenceBoundaries() throws {
+        let size = CGSize(width:800,height:1000)
+        let image = UIGraphicsImageRenderer(size:size).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(origin:.zero,size:size))
+            ("A function has 42 inputs." as NSString).draw(at:CGPoint(x:80,y:200),withAttributes:[.font:UIFont.systemFont(ofSize:34),.foregroundColor:UIColor.black])
+        }
+        let data = UIGraphicsPDFRenderer(bounds:CGRect(origin:.zero,size:size)).pdfData { context in
+            context.beginPage(); image.draw(in:CGRect(origin:.zero,size:size))
+        }
+        let page = try XCTUnwrap(PDFDocument(data:data)?.page(at:0))
+        XCTAssertTrue(OCRService.needsOCR(page:page))
+        let words = OCRService.recognize(page:page)
+        XCTAssertTrue(words.contains { $0.text == "42" })
+        XCTAssertTrue(words.contains { $0.text == "." })
+        XCTAssertTrue(words.contains { $0.text.lowercased() == "function" })
+    }
+    @MainActor func testContextMeaningCanDifferFromLiteralSentenceAndSurviveSentenceTranslation() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared),doc = "context-test-\(UUID().uuidString)"
+        let model = DocumentTranslationModel(doc:doc,db:db)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(doc).pdf")
+        let data = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:500)).pdfData { context in
+            context.beginPage(); ("A function maps inputs to outputs." as NSString).draw(at:CGPoint(x:20,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:18)])
+        }
+        try data.write(to:url)
+        defer {
+            try? FileManager.default.removeItem(at:url)
+            try? db.dbQueue.write { db in
+                try db.execute(sql:"DELETE FROM document_translation WHERE doc=?",arguments:[doc])
+                try db.execute(sql:"DELETE FROM ocr_status WHERE docSha=?",arguments:[doc])
+            }
+        }
+        await model.prepare(url:url,ocr:OCRStore(db:db))
+        let original = try XCTUnwrap(model.records.first)
+        let token = try XCTUnwrap(original.links.first { $0.word == "function" })
+        try await model.acceptContext(sentence:original.id,offset:token.sourceStart,meaning:"数学中的映射关系",reason:"maps inputs to outputs 限定数学语境")
+        var translated = original; translated.target = "输入与输出之间存在函数映射。"
+        try await model.accept([translated])
+        let result = try XCTUnwrap(model.records.first)
+        XCTAssertEqual(result.links.first { $0.word == "function" }?.meaning,"数学中的映射关系")
+        XCTAssertNil(result.links.first { $0.word == "function" }?.targetStart)
+        let detail = model.correction(term:"function",location:TranslationLocation(page:0,character:token.sourceStart))
+        XCTAssertTrue(detail.contains("语境释义·模型建议")); XCTAssertTrue(detail.contains("数学中的映射关系"))
+    }
+
 }

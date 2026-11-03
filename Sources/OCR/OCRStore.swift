@@ -7,6 +7,9 @@ final class OCRStore: @unchecked Sendable {
 
     init(db: AppDatabase) {
         self.db = db
+        try? db.dbQueue.write { db in
+            try db.execute(sql:"CREATE TABLE IF NOT EXISTS ocr_page_status(docSha TEXT NOT NULL,page INTEGER NOT NULL,version INTEGER NOT NULL,PRIMARY KEY(docSha,page))")
+        }
     }
 
     /// 某页的词框(按识别顺序)。
@@ -29,10 +32,17 @@ final class OCRStore: @unchecked Sendable {
         }) ?? []
     }
 
+    func hasPage(docSha:String,page:Int) -> Bool {
+        (try? db.dbQueue.read { db in
+            try Int.fetchOne(db,sql:"SELECT version FROM ocr_page_status WHERE docSha=? AND page=?",arguments:[docSha,page])
+        }) == 4
+    }
+
     /// 覆盖保存一页的词框(重识别安全)。
     func save(docSha: String, page: Int, words: [OCRWord]) {
         try? db.dbQueue.write { db in
             try db.execute(sql: "DELETE FROM ocr_word WHERE docSha = ? AND page = ?", arguments: [docSha, page])
+            try db.execute(sql:"INSERT OR REPLACE INTO ocr_page_status(docSha,page,version) VALUES(?,?,4)",arguments:[docSha,page])
             for (i, word) in words.enumerated() {
                 try db.execute(
                     sql: "INSERT INTO ocr_word (docSha, page, idx, text, x, y, w, h, line) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -45,7 +55,7 @@ final class OCRStore: @unchecked Sendable {
     func markDone(docSha: String) {
         try? db.dbQueue.write { db in
             try db.execute(
-                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 3, ?)",
+                sql: "INSERT OR REPLACE INTO ocr_status (docSha, done, updatedAt) VALUES (?, 4, ?)",
                 arguments: [docSha, Date()]
             )
         }
@@ -56,7 +66,7 @@ final class OCRStore: @unchecked Sendable {
             try Int.fetchOne(db, sql: "SELECT done FROM ocr_status WHERE docSha = ?", arguments: [docSha])
         }) ?? nil
         // Version 3 includes page-level scanning and overlapping recognition tiles.
-        return done == 3
+        return done == 4
     }
 
     /// v0.23.2:整本 OCR 词文本(词频分析补全扫描版用;按页/词序输出)
