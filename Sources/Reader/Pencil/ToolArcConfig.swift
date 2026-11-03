@@ -5,6 +5,7 @@ enum ToolArcConfig {
     static let sweep = CGFloat(108) * .pi / 180
     static let tilt = CGFloat(53) * .pi / 180
     static let radius: CGFloat = 340
+    static func effectiveRadius(in bounds: CGSize) -> CGFloat { min(radius,max(90,min(bounds.width,bounds.height)*0.4)) }
     static let gap: CGFloat = 64
     static let diameter: CGFloat = 44
     static let pitch: CGFloat = 52
@@ -23,7 +24,7 @@ struct ToolArcGeometry {
     var leftHanded = false
     // Tangent/chord tilt is measured from the screen horizontal, as requested.
     var mid: CGFloat { -ToolArcConfig.tilt }
-    var radius: CGFloat { min(ToolArcConfig.radius, max(130, min(bounds.width, bounds.height) * 0.46)) }
+    var radius: CGFloat { ToolArcConfig.effectiveRadius(in:bounds) }
     var center: CGPoint {
         let distance = radius * cos(ToolArcConfig.sweep / 2)
         return CGPoint(x: anchor.x - sin(mid) * distance * (leftHanded ? -1 : 1), y: anchor.y + cos(mid) * distance)

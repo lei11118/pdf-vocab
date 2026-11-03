@@ -23,7 +23,7 @@ struct PencilArcMenu: View {
     @State private var customizing = false
     @State private var toolStart = 0
     private var capacity: Int {
-        let radius = min(ToolArcConfig.radius,max(130,min(bounds.width,bounds.height)*0.46))
+        let radius = ToolArcConfig.effectiveRadius(in:bounds)
         return max(5,Int((CGFloat.pi*radius-ToolArcConfig.diameter)/ToolArcConfig.pitch)+1)
     }
     private var tools: [PencilArcItem] { Array(session.arcItems.dropFirst(toolStart).prefix(capacity)) }

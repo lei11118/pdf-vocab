@@ -176,7 +176,9 @@ final class DocumentTranslationRepository: @unchecked Sendable {
         }
     }
     func review(sentence:TranslatedSentence,target:String,word:Int?,meaning:String) {
+        guard !target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { error = "请输入句译后再保存校对"; return }
         var value = sentence
+        if word == nil { value.reviewed = true }
         if target != sentence.target {
             value.target = target; value.reviewed = true
             value.links = TranslationAlignment.align(source:value.source,target:target,lookup:WordInteraction.detail)
@@ -281,7 +283,7 @@ private struct TranslationSentenceEditor: View {
         VStack(alignment:.leading,spacing:10) {
             Text(sentence.source).textSelection(.enabled)
             Text(sentence.reviewed ? "句译 · 已校对" : "句译 · 机器译文").font(.caption).foregroundStyle(.secondary)
-            TextEditor(text:$target).frame(minHeight:80).onChange(of:target) { _,_ in dirty = true }
+            TextEditor(text:Binding(get:{target},set:{target = $0; dirty = true})).frame(minHeight:80)
             ScrollView(.horizontal) {
                 HStack {
                     ForEach(sentence.links) { link in

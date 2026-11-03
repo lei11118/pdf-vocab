@@ -21,6 +21,7 @@ struct KnowledgeGraphView: View {
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
     @State private var moveMode = false
+    @GestureState private var nodeGestureActive = false
     private var connectionTarget: String? {
         guard let connection else { return nil }
         return model.graph.nodes.sorted { $0.zIndex > $1.zIndex }.first { $0.id != connection.0 && $0.frame.contains(connection.2) }?.id
@@ -105,7 +106,8 @@ struct KnowledgeGraphView: View {
                 await resumePendingTextRecognition()
             }
             .onChange(of: phase) { _, phase in if phase != .active { model.save(immediate: true) } }
-            .onDisappear { model.save(immediate: true) }
+            .onChange(of:nodeGestureActive) { _,active in if !active && movingNode != nil { finishManipulation() } }
+            .onDisappear { finishManipulation(); model.save(immediate: true) }
             .alert("图谱保存提示", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button("好") { model.error = nil }
             } message: { Text(model.error ?? "") }
@@ -177,7 +179,7 @@ struct KnowledgeGraphView: View {
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
             }
             .padding(.horizontal,7).frame(height:GraphConfig.headerHeight).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).onChanged { value in
+            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
                 guard zoomOrigin == nil else { return }
                 selected = node.id; editing = nil
                 if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
@@ -195,7 +197,7 @@ struct KnowledgeGraphView: View {
         .onHover { inside in if inside && movingNode == nil && zoomOrigin == nil { selected = node.id } }
         .overlay {
             if moveMode {
-                Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).onChanged { value in
+                Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
                     selected = node.id
                     if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                     var n = node; n.frame.origin = CGPoint(x:moveOrigin!.minX+value.translation.width/model.graph.zoom,y:moveOrigin!.minY+value.translation.height/model.graph.zoom)
@@ -253,7 +255,7 @@ struct KnowledgeGraphView: View {
                 let y: CGFloat = corner < 2 ? 0 : node.frame.height
                 Rectangle().fill(Color.accentColor).frame(width: 8, height: 8)
                     .frame(width: GraphConfig.resizeSize, height: GraphConfig.resizeSize).contentShape(Rectangle()).position(x: x,y: y)
-                    .highPriorityGesture(DragGesture(minimumDistance: 1, coordinateSpace: .global).onChanged { value in
+                    .highPriorityGesture(DragGesture(minimumDistance: 1, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
                         guard zoomOrigin == nil else { return }
                         if moveOrigin == nil { model.checkpoint(); moveOrigin = node.frame; movingNode = node.id }
                         let original = moveOrigin!, dx = value.translation.width/model.graph.zoom, dy = value.translation.height/model.graph.zoom
