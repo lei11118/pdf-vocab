@@ -22,6 +22,7 @@ struct ToolArcGeometry {
     let bounds: CGSize
     let count: Int
     var leftHanded = false
+    var upperCount = 7
     // Tangent/chord tilt is measured from the screen horizontal, as requested.
     var mid: CGFloat { -ToolArcConfig.tilt }
     var radius: CGFloat { ToolArcConfig.effectiveRadius(in:bounds) }
@@ -44,7 +45,9 @@ struct ToolArcGeometry {
     }
     var translation: CGSize {
         var rect = CGRect.null
-        let half = max(ToolArcConfig.sweep/2, (max(toolMid,CGFloat(max(count-1,0))-toolMid)*pitch+ToolArcConfig.diameter/2)/radius)
+        let lowerHalf = (max(toolMid,CGFloat(max(count-1,0))-toolMid)*pitch+ToolArcConfig.diameter/2)/radius
+        let upperHalf = (CGFloat(max(upperCount-1,0))*pitch/2+ToolArcConfig.diameter/2)/(radius+ToolArcConfig.gap)
+        let half = max(ToolArcConfig.sweep/2, max(lowerHalf,upperHalf))
         for step in 0...72 {
             let angle = mid-half + CGFloat(step)/72*half*2
             for r in [radius, radius+ToolArcConfig.gap] {

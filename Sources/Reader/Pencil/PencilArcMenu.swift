@@ -27,7 +27,7 @@ struct PencilArcMenu: View {
         12
     }
     private var tools: [PencilArcItem] { Array(session.arcItems.dropFirst(toolStart).prefix(capacity)) }
-    private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded) }
+    private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded, upperCount:upper.count) }
     private var upper: [(String, String)] {
         marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")]
     }

@@ -22,6 +22,12 @@ final class InteractionRebuildTests: XCTestCase {
             for left in [false,true] {
                 for count in 1...12 {
                     let g = ToolArcGeometry(anchor:CGPoint(x:20,y:20),bounds:CGSize(width:width,height:900),count:count,leftHanded:left)
+                    for index in 0..<7 {
+                        let p = g.position(index,count:7,upper:true)
+                        XCTAssertEqual(g.index(at:p,count:7,upper:true),index)
+                        XCTAssertGreaterThanOrEqual(p.x,ToolArcConfig.diameter/2)
+                        XCTAssertLessThanOrEqual(p.x,width-ToolArcConfig.diameter/2)
+                    }
                     for index in 0..<count {
                         let p = g.position(index,count:count,upper:false)
                         XCTAssertEqual(g.index(at:p,count:count,upper:false),index)
