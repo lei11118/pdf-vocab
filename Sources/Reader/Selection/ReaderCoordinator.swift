@@ -105,6 +105,7 @@ final class ReaderCoordinator: NSObject {
     private(set) var hoverTranslationLocation: TranslationLocation?
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
+    private var hoverPreviewPoint = CGPoint.zero
     private var hoverEntry: (page: PDFPage, annotation: PDFAnnotation)?
 
     /// v0.11.0(M6):扫描版 OCR 取词
@@ -918,13 +919,19 @@ final class ReaderCoordinator: NSObject {
                 clearHover()
                 return
             }
-            if key != hoverKey {
-                hoverKey = key
-                setHoverAnnotation(page: hit.page, word: word)
+            let identity = "\(key)|\(pdfView.document?.index(for:hit.page) ?? -1)|\(SelectionGeometry.identity(for:word))"
+            let changed = identity != hoverKey
+            if changed {
+                hoverKey = identity
+                setHoverAnnotation(page:hit.page,word:word)
                 hoverTranslationLocation = word.numberOfTextRanges(on:hit.page) > 0 ? TranslationLocation(page:pdfView.document?.index(for:hit.page) ?? -1,character:word.range(at:0,on:hit.page).location) : nil
-                let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of: word, on: hit.page), from: hit.page)
-                onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
                 DiagLog.log("hover: 「\(term)」")
+            }
+            let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of:word,on:hit.page),from:hit.page)
+            let anchor = CGPoint(x:wordRect.midX,y:wordRect.minY)
+            if changed || hypot(anchor.x-hoverPreviewPoint.x,anchor.y-hoverPreviewPoint.y) >= 0.5 {
+                hoverPreviewPoint = anchor
+                onHoverUpdate?(term,key,anchor)
             }
         case .ended, .cancelled, .failed:
             clearHover()
@@ -953,6 +960,7 @@ final class ReaderCoordinator: NSObject {
     func clearHover() {
         guard hoverKey != "" || hoverEntry != nil else { return }
         hoverKey = ""
+        hoverPreviewPoint = .zero
         hoverTranslationLocation = nil
         removeHoverAnnotation()
         onHoverEnd?()

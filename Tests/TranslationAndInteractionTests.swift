@@ -65,6 +65,19 @@ final class TranslationAndInteractionTests: XCTestCase {
         try store.delete(record)
         XCTAssertTrue(try repository.load(doc:record.sha256).isEmpty)
     }
+    @MainActor func testSameTermHoverMovesWithoutClearingTheCurrentPreview() async throws {
+        let session = WordInteractionSession()
+        session.setCorrection("【校对】第一处")
+        session.hover("function",at:CGPoint(x:40,y:60))
+        for _ in 0..<30 where session.preview == nil { try await Task.sleep(for:.milliseconds(30)) }
+        XCTAssertNotNil(session.preview)
+        session.setCorrection("【校对】第二处")
+        session.hover("function",at:CGPoint(x:80,y:120))
+        XCTAssertEqual(session.preview?.point,CGPoint(x:80,y:120))
+        XCTAssertTrue(session.preview?.detail.contains("第二处") ?? false)
+        XCTAssertFalse(session.preview?.detail.contains("第一处") ?? true)
+        session.clear()
+    }
     @MainActor func testSqueezeDuplicateRoutesDoNotToggleTwice() {
         let gate = ReaderSqueezeGate()
         XCTAssertTrue(gate.accept(at:10))

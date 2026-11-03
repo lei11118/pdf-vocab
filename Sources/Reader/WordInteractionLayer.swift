@@ -21,19 +21,29 @@ struct WordPreview {
     private var generation = 0
     private var baseDetail = ""
     private var correction = ""
+    private var activeTerm = ""
+    private var activeQuery = ""
+    private var latestPoint = CGPoint.zero
     func setCorrection(_ value: String) {
+        guard correction != value else { return }
         correction = value
         if var preview { preview.detail = [correction,baseDetail].filter { !$0.isEmpty }.joined(separator:"\n\n"); self.preview = preview }
     }
     func clear() {
-        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false
+        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false; activeTerm = ""; activeQuery = ""
     }
     func hover(_ term: String, query: String? = nil, at point: CGPoint) {
-        resolve(term,query:query ?? term,at:point,hover:true)
+        let query = query ?? term
+        if isHovering && activeTerm == term && activeQuery == query {
+            latestPoint = point
+            if var preview,preview.point != point { preview.point = point; self.preview = preview }
+            return
+        }
+        resolve(term,query:query,at:point,hover:true)
     }
     func select(_ term: String, at point: CGPoint) { resolve(term,query:term,at:point,hover:false) }
     private func resolve(_ term: String, query: String, at point: CGPoint, hover: Bool) {
-        clear(); isHovering = hover
+        clear(); isHovering = hover; activeTerm = term; activeQuery = query; latestPoint = point
         let token = generation
         request = Task { @MainActor [weak self] in
             if hover { try? await Task.sleep(nanoseconds:ToolArcConfig.hoverDelay) }
@@ -41,7 +51,7 @@ struct WordPreview {
             let detail = await Task.detached(priority:.utility) { WordInteraction.detail(query) }.value
             guard !Task.isCancelled,let self,self.generation == token else { return }
             self.baseDetail = detail ?? "词库未收录"
-            self.preview = WordPreview(term:term,detail:[self.correction,self.baseDetail].filter { !$0.isEmpty }.joined(separator:"\n\n"),point:point,translated:detail != nil)
+            self.preview = WordPreview(term:term,detail:[self.correction,self.baseDetail].filter { !$0.isEmpty }.joined(separator:"\n\n"),point:self.latestPoint,translated:detail != nil)
         }
     }
     @discardableResult func squeeze() -> Bool {
