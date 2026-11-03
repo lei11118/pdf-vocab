@@ -806,7 +806,24 @@ struct VocabListView: View {
     }
 
     private var dockContent: some View {
-        HStack(spacing: DS.Space.x3s) {
+        Group {
+            if viewportWidth < 420 {
+                VStack(alignment: .leading, spacing: DS.Space.x3s) {
+                    dockStatus
+                    WrapLayout(spacing: DS.Space.x3s) { dockActions }
+                }
+                .frame(width: max(120, viewportWidth - 2 * DS.Layout.margin(for: viewportWidth) - 2 * DS.Space.s), alignment: .leading)
+            } else {
+                HStack(spacing: DS.Space.x3s) {
+                    dockStatus
+                    Rectangle().fill(DS.foreground1.opacity(0.09)).frame(width: 1, height: 22)
+                    dockActions
+                }
+            }
+        }
+    }
+
+    private var dockStatus: some View {
             HStack(spacing: DS.Space.x2s) {
                 Image(systemName: listMode == .select ? "checkmark.circle.fill" : "text.book.closed.fill")
                     .font(.system(size: 14, weight: .semibold))
@@ -817,10 +834,9 @@ struct VocabListView: View {
             .padding(.horizontal, DS.Space.s)
             .frame(minHeight: 44)
 
-            Rectangle()
-                .fill(DS.foreground1.opacity(0.09))
-                .frame(width: 1, height: 22)
+    }
 
+    @ViewBuilder private var dockActions: some View {
             switch listMode {
             case .browse:
                 dockGhost(title: "选择", icon: "checkmark.circle") {
@@ -853,7 +869,6 @@ struct VocabListView: View {
                     withAnimation(reduceMotion ? nil : DS.Motion.spring) { exitSpecialMode() }
                 }
             }
-        }
     }
 
     private func dockGhost(title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -1100,7 +1115,10 @@ private struct VocabCardView: View {
         let translation = await Task.detached(priority: .utility) { () -> String? in
             let outcome = DictionaryService.lookup(lemma)
             guard case .found(let entry) = outcome, let raw = entry.translation, !raw.isEmpty else { return nil }
-            return raw.split(separator: "\n").first.map(String.init)
+            let meanings = raw.split(separator: "\n").map(String.init).filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("【")
+            }
+            return meanings.prefix(2).joined(separator: "；")
         }.value
         let storedNote = await Task.detached(priority: .utility) { storeRef.note(forLemma: lemma) }.value
         guard !Task.isCancelled else { return }

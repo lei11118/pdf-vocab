@@ -370,7 +370,7 @@ struct WrapLayout: Layout {
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
         for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
+            let size = sub.sizeThatFits(ProposedViewSize(width: maxWidth.isFinite ? maxWidth : nil, height: nil))
             if x + size.width > maxWidth, x > 0 {
                 x = 0
                 y += rowHeight + spacing
@@ -387,7 +387,7 @@ struct WrapLayout: Layout {
         var y = bounds.minY
         var rowHeight: CGFloat = 0
         for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
+            let size = sub.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
             if x + size.width > bounds.maxX, x > bounds.minX {
                 x = bounds.minX
                 y += rowHeight + spacing

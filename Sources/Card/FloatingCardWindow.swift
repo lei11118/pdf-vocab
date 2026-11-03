@@ -116,7 +116,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     // MARK: - 完整词卡
 
     private var fullBody: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 dragStrip
                 Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:44) }
@@ -124,9 +124,13 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
                 Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:44) }
                     .buttonStyle(.plain).accessibilityLabel("关闭窗口")
             }
+            .frame(width: size.width, height: 44)
             Divider()
             expanded()
+                .frame(width: size.width)
+                .frame(maxHeight: .infinity)
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
     private var dragStrip: some View {
