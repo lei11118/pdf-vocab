@@ -67,9 +67,10 @@ struct ToolArcGeometry {
     }
     func index(at p: CGPoint, count: Int, upper: Bool) -> Int? {
         guard count > 0 else { return nil }
-        let polar = polar(p), radius = ToolArcConfig.radius + (upper ? ToolArcConfig.gap : 0)
+        let polar = polar(p), radius = self.radius + (upper ? ToolArcConfig.gap : 0)
         guard abs(polar.r - radius) <= ToolArcConfig.diameter / 2 else { return nil }
-        let value = (polar.angle - mid) * radius / pitch + CGFloat(count - 1) / 2
+        let delta = atan2(sin(polar.angle-mid),cos(polar.angle-mid))
+        let value = delta * radius / pitch + CGFloat(count - 1) / 2
         let index = Int(value.rounded())
         guard (0..<count).contains(index), abs(value - CGFloat(index)) * pitch <= ToolArcConfig.diameter / 2 else { return nil }
         return index

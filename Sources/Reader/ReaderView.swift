@@ -106,6 +106,7 @@ struct ReaderView: View {
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
             }
+            .onChange(of: arcAnchor != nil) { _,open in if open { readerHandle.coordinator?.clearHover(); wordInteraction.clear() } }
             .onChange(of: markMode) { _, on in
                 // v0.24.0:按书记住「选词 / 书写」状态,退出再进来不再被重置
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
@@ -183,10 +184,8 @@ struct ReaderView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            .alert("导出失败", isPresented: $exportFailed) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text("生成批注版 PDF 时出错,请重试。")
+            .readerPanel(isPresented:$exportFailed,title:"导出失败") {
+                VStack(spacing:16) { Text("生成批注版 PDF 时出错，请重试。"); Button("好") { exportFailed = false } }.padding()
             }
             .sheet(item: $shareFile) { item in
                 ActivityShareView(items: [item.url])
@@ -199,11 +198,12 @@ struct ReaderView: View {
                     }
                 }
             }
-            .alert("清空本页手写?", isPresented: $confirmClearInk) {
-                Button("清空", role: .destructive) { readerHandle.coordinator?.clearCurrentPageInk() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("只清除当前页的笔迹,不影响其他页;清空后可用撤销恢复。")
+            .readerPanel(isPresented:$confirmClearInk,title:"清空本页手写？") {
+                VStack(spacing:16) {
+                    Text("只清除当前页的笔迹，不影响其他页；清空后可用撤销恢复。")
+                    Button("清空",role:.destructive) { readerHandle.coordinator?.clearCurrentPageInk(); confirmClearInk = false }
+                    Button("取消",role:.cancel) { confirmClearInk = false }
+                }.padding()
             }
             .onChange(of: layoutMode) { _, mode in
                 readerHandle.coordinator?.setLayoutMode(mode)
@@ -221,7 +221,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || showTranslate || showTranslationReview
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || showTranslate || showTranslationReview || confirmClearInk || exportFailed
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -828,6 +828,7 @@ struct ReaderView: View {
                     jumpTarget: jumpTarget,
                     onVocabJumpPerformed: { suppressSave = true },
                     onVocabWordTap: { term in
+                        selectedTranslationLocation = nil
                         cardContent = .word(term)
                     },
                     onPageChanged: { page in
@@ -882,6 +883,10 @@ struct ReaderView: View {
         }
         .overlay(alignment: .top) {
             VStack(spacing: 6) {
+                if documentTranslation.running {
+                    Button(documentTranslation.status) { showTranslationReview = true }
+                        .font(.caption2).padding(8).background(.regularMaterial,in:Capsule())
+                }
                 // v0.11.0(M6):扫描版 OCR 进度
                 if ocrRunning {
                     Text("扫描版文字识别中… \(ocrDone)/\(ocrTotal)")
@@ -927,7 +932,7 @@ struct ReaderView: View {
                 wordInteraction.setCorrection(documentTranslation.correction(term:preview.term,location:readerHandle.coordinator?.hoverTranslationLocation))
             }
         }
-        .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText) }
+        .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText,cached:documentTranslation.cachedTranslation(text:translateText,location:selectedTranslationLocation)) }
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)

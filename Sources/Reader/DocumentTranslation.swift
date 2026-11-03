@@ -51,8 +51,9 @@ enum TranslationAlignment {
         return tokens(source).map { token in
             var token = token
             guard let definitions = lookup(token.word) else { return token }
-            let ns = definitions as NSString
-            let candidates = Set(chinese.matches(in:definitions,range:NSRange(location:0,length:ns.length)).map { ns.substring(with:$0.range) })
+            let cleaned = definitions.replacingOccurrences(of:"【[^】]*】",with:"",options:.regularExpression)
+            let ns = cleaned as NSString
+            let candidates = Set(chinese.matches(in:cleaned,range:NSRange(location:0,length:ns.length)).map { ns.substring(with:$0.range) })
             let matches = candidates.compactMap { value -> (String,NSRange)? in
                 let r = targetNS.range(of:value)
                 guard r.location != NSNotFound else { return nil }
@@ -101,9 +102,13 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             return try Data.fetchAll(db,sql:"SELECT payload FROM document_translation WHERE doc=?",arguments:[doc]).compactMap { try? JSONDecoder().decode(TranslatedSentence.self,from:$0) }
         }
     }
-    func save(doc:String,records:[TranslatedSentence]) throws {
+    func save(doc:String,records:[TranslatedSentence],preservingReviews:Bool = false) throws {
         try db.dbQueue.write { db in
             for record in records {
+                if preservingReviews,
+                   let data = try Data.fetchOne(db,sql:"SELECT payload FROM document_translation WHERE doc=? AND id=?",arguments:[doc,record.id]),
+                   let saved = try? JSONDecoder().decode(TranslatedSentence.self,from:data),
+                   saved.reviewed || saved.links.contains(where: { $0.reviewed }) { continue }
                 try db.execute(sql:"INSERT OR REPLACE INTO document_translation(doc,id,payload) VALUES(?,?,?)",arguments:[doc,record.id,try JSONEncoder().encode(record)])
             }
         }
@@ -150,16 +155,25 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             records = values; ready = true
         } catch is CancellationError {} catch { self.error = "全文解析失败：\(error.localizedDescription)" }
     }
+    func cachedTranslation(text:String,location:TranslationLocation?) -> String? {
+        let key = text.trimmingCharacters(in:.whitespacesAndNewlines)
+        let matches = records.filter { $0.source.trimmingCharacters(in:.whitespacesAndNewlines) == key && !$0.target.isEmpty }
+        let match = location.flatMap { location in matches.first { $0.page == location.page && location.character >= $0.start && location.character < $0.start+$0.length } } ?? (matches.count == 1 ? matches.first : nil)
+        return match.map { "【句译·\($0.reviewed ? "已校对" : "机器译文")】\n\($0.target)" }
+    }
     func correction(term:String,location:TranslationLocation?) -> String {
         guard let location else { return "【校对】请从 PDF 中选取具体词语以关联原句" }
         return TranslationAlignment.correction(in:records,term:term,location:location)
     }
-    func accept(_ values:[TranslatedSentence]) async throws {
+    func accept(_ values:[TranslatedSentence],preservingReviews:Bool = true) async throws {
         let repository = self.repository, doc = self.doc
         // Persist the batch before marking it complete, so interruption resumes without losing work.
-        try await Task.detached(priority:.utility) { try repository.save(doc:doc,records:values) }.value
+        try await Task.detached(priority:.utility) { try repository.save(doc:doc,records:values,preservingReviews:preservingReviews) }.value
         let updates = Dictionary(uniqueKeysWithValues:values.map { ($0.id,$0) })
-        records = records.map { updates[$0.id] ?? $0 }
+        records = records.map { current in
+            if preservingReviews && (current.reviewed || current.links.contains(where:{ $0.reviewed })) { return current }
+            return updates[current.id] ?? current
+        }
     }
     func review(sentence:TranslatedSentence,target:String,word:Int?,meaning:String) {
         var value = sentence
@@ -176,7 +190,8 @@ final class DocumentTranslationRepository: @unchecked Sendable {
             value.links[index].confidence = value.links[index].reviewed ? 1 : 0
         }
         let result = value
-        Task { do { try await accept([result]) } catch { self.error = "校对保存失败：\(error.localizedDescription)" } }
+        if let index = records.firstIndex(where: { $0.id == result.id }) { records[index] = result }
+        Task { do { try await accept([result],preservingReviews:false) } catch { self.error = "校对保存失败：\(error.localizedDescription)" } }
     }
 }
 
@@ -197,16 +212,21 @@ struct DocumentTranslationDriver: View {
                         let batch = Array(model.pending.prefix(16))
                         let requests = batch.map { TranslationSession.Request(sourceText:$0.source,clientIdentifier:$0.id) }
                         let responses = try await session.translate(batch:requests)
+                        var translated: [(String,String)] = []
+                        for try await response in responses {
+                            if let id = response.clientIdentifier { translated.append((id,response.targetText)) }
+                        }
+                        let output = translated
                         let originals = Dictionary(uniqueKeysWithValues:batch.map { ($0.id,$0) })
                         let results = await Task.detached(priority:.utility) {
-                            responses.compactMap { response -> TranslatedSentence? in
-                                guard let id = response.clientIdentifier,var value = originals[id] else { return nil }
-                                value.target = response.targetText
+                            output.compactMap { id,target -> TranslatedSentence? in
+                                guard var value = originals[id] else { return nil }
+                                value.target = target
                                 value.links = TranslationAlignment.align(source:value.source,target:value.target,lookup:WordInteraction.detail)
                                 return value
                             }
                         }.value
-                        guard !results.isEmpty else { throw CocoaError(.coderValueNotFound) }
+                        guard results.count == batch.count,results.allSatisfy({ !$0.target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty }) else { throw CocoaError(.coderValueNotFound) }
                         try await model.accept(results)
                         await Task.yield()
                     }
@@ -284,6 +304,7 @@ private struct TranslationSentenceEditor: View {
 
 struct ReaderSentenceTranslationView: View {
     let text: String
+    var cached: String? = nil
     @State private var translated = ""
     @State private var failure: String?
     var body: some View {
@@ -291,11 +312,12 @@ struct ReaderSentenceTranslationView: View {
             VStack(alignment:.leading,spacing:16) {
                 Text(text).textSelection(.enabled)
                 Divider()
-                if let failure { Text(failure) }
+                if let cached { Text(cached).textSelection(.enabled) }
+                else if let failure { Text(failure) }
                 else if translated.isEmpty { ProgressView("正在端侧翻译…") }
                 else { Text(translated).textSelection(.enabled) }
             }.padding()
-        }.background { if #available(iOS 18.0, *) { SentenceTranslationTask(text:text,onResult:{translated = $0},onError:{failure = $0}) } }
+        }.background { if cached == nil { if #available(iOS 18.0, *) { SentenceTranslationTask(text:text,onResult:{translated = $0},onError:{failure = $0}) } } }
             .onAppear { if #unavailable(iOS 18.0) { failure = "端侧翻译需要 iPadOS 18 或更高版本" } }
     }
 }

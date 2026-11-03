@@ -1018,7 +1018,7 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        let pageIndex = pdfView?.document?.index(for:page) ?? -1
+        let pageIndex = pdfView.document?.index(for:page) ?? -1
         let sourceOffset = words.prefix(range.lowerBound).reduce(0) { $0 + ($1.text as NSString).length + 1 }
         onSelectionInfo(SelectionInfo(text:text,wordCount:wordCount,primaryTerm:primaryTerm,translationLocation:TranslationLocation(page:pageIndex,character:sourceOffset)))
         if wordCount <= 1, !primaryTerm.isEmpty {

@@ -42,6 +42,10 @@ final class TranslationAndInteractionTests: XCTestCase {
         value.links[index].reviewed = true
         try repository.save(doc:doc,records:[value])
         XCTAssertEqual(try repository.load(doc:doc),[value])
+        var obsolete = value; obsolete.target = "stale machine output"; obsolete.reviewed = false
+        for index in obsolete.links.indices { obsolete.links[index].reviewed = false }
+        try repository.save(doc:doc,records:[obsolete],preservingReviews:true)
+        XCTAssertEqual(try repository.load(doc:doc),[value],"Background results must never overwrite a human correction")
         XCTAssertTrue(TranslationAlignment.correction(in:[value],term:"function",location:TranslationLocation(page:2,character:value.start+value.links[index].sourceStart)).contains("人工已确认"))
     }
     @MainActor func testSqueezeDuplicateRoutesDoNotToggleTwice() {

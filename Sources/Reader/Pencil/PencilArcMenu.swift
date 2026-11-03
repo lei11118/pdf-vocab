@@ -21,24 +21,28 @@ struct PencilArcMenu: View {
     @State private var reset: Task<Void, Never>?
     @State private var appeared = false
     @State private var customizing = false
-    private var tools: [PencilArcItem] { session.arcItems }
+    @State private var toolStart = 0
+    private var capacity: Int {
+        let radius = min(ToolArcConfig.radius,max(130,min(bounds.width,bounds.height)*0.46))
+        return max(5,Int((CGFloat.pi*radius-ToolArcConfig.diameter)/ToolArcConfig.pitch)+1)
+    }
+    private var tools: [PencilArcItem] { Array(session.arcItems.dropFirst(toolStart).prefix(capacity)) }
     private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded) }
     private var upper: [(String, String)] {
-        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("slider.horizontal.3", "自定义工具")]
+        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")]
     }
     private var visibleIndices: Range<Int> {
-        let initial = max(1,min(tools.count,Int((ToolArcConfig.sweep * min(ToolArcConfig.radius,max(130,min(bounds.width,bounds.height)*0.46)) - ToolArcConfig.diameter)/ToolArcConfig.pitch)+1))
-        let start = max(0,(tools.count-initial)/2-Int(leftExtent))
-        let end = min(tools.count,(tools.count+initial+1)/2+Int(rightExtent))
+        let initial = min(tools.count,geometry.initialCount)
+        let base = (tools.count-initial)/2
+        let start = max(0,base-Int(leftExtent))
+        let end = min(tools.count,base+initial+Int(rightExtent))
         return start..<end
     }
     private func visible(_ index: Int) -> Bool { visibleIndices.contains(index) }
     var body: some View {
         ZStack {
             Color.black.opacity(0.001).ignoresSafeArea()
-            ForEach(Array(visibleIndices),id:\.self) { index in
-                track(index,count:tools.count,upper:false).stroke(DS.background3.opacity(0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
-            }
+            lowerTrack.stroke(DS.background3.opacity(0.75),style:StrokeStyle(lineWidth:ToolArcConfig.diameter+12,lineCap:.round))
             if debugGeometry {
                 Path { path in
                     let a = geometry.point(angle:geometry.mid-ToolArcConfig.sweep/2,radius:geometry.radius)
@@ -93,10 +97,28 @@ struct PencilArcMenu: View {
         }
         return path
     }
-    private func enabled(_ index: Int) -> Bool { !marking || index > 1 || (index == 0 ? canUndo : canRedo) }
+    private var lowerTrack: Path {
+        var path = Path()
+        let initial = min(tools.count,geometry.initialCount),base = (tools.count-initial)/2
+        let left = min(CGFloat(base),leftExtent),right = min(CGFloat(tools.count-base-initial),rightExtent)
+        let start = geometry.mid-ToolArcConfig.sweep/2-left*geometry.pitch/geometry.radius
+        let end = geometry.mid+ToolArcConfig.sweep/2+right*geometry.pitch/geometry.radius
+        for step in 0...80 {
+            let point = geometry.point(angle:start+(end-start)*CGFloat(step)/80,radius:geometry.radius)
+            if step == 0 { path.move(to:point) } else { path.addLine(to:point) }
+        }
+        return path
+    }
+    private func enabled(_ index: Int) -> Bool {
+        if index == upper.count-3 { return toolStart > 0 }
+        if index == upper.count-2 { return toolStart+capacity < session.arcItems.count }
+        return !marking || index > 1 || (index == 0 ? canUndo : canRedo)
+    }
     private func activateUpper(_ index: Int) {
         if index == upper.count-1 { customizing = true; return }
         guard enabled(index) else { return }
+        if index == upper.count-3 { toolStart = max(0,toolStart-capacity); leftExtent = 0; rightExtent = 0; return }
+        if index == upper.count-2 { toolStart += capacity; leftExtent = 0; rightExtent = 0; return }
         if !marking || index == 2 { onDismiss(); onScreenshot() }
         else if index == 0 { onUndo() }
         else if index == 1 { onRedo() }

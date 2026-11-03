@@ -394,7 +394,19 @@ final class InteractionPolishTests:XCTestCase {
         let second = KnowledgeNode(graphId:graphReview.graph.id,kind:.text,frame:CGRect(x:340,y:200,width:290,height:210),text:"Integral\n积分\nConnect ideas by dragging a side anchor.")
         graphReview.graph.nodes = [first,second]
         graphReview.graph.connect(from:first.id,anchor:.right,to:second.id,target:.top)
+        let translationReview = DocumentTranslationModel(doc:"review-translation-"+UUID().uuidString,db:db)
+        await translationReview.prepare(url:sampleURL,ocr:OCRStore(db:db))
+        try await translationReview.accept(translationReview.records.map { record in
+            var value = record
+            value.target = value.source.contains("architecture") ? "语言的结构。" : "每个词都连接着另一个想法。阅读、批注与探索。"
+            value.links = TranslationAlignment.align(source:value.source,target:value.target,lookup:WordInteraction.detail)
+            return value
+        })
+        defer { try? db.dbQueue.write { db in try db.execute(sql:"DELETE FROM document_translation WHERE doc=?",arguments:[translationReview.doc]) } }
         let cases: [(String, CGSize, AnyView)] = [
+            ("capsule-translation-review",CGSize(width:480,height:900),AnyView(ReaderCapsulePanel(title:"全文翻译与校对",bounds:CGSize(width:480,height:900),onClose:{}) { DocumentTranslationReview(model:translationReview) }.background(DS.background1))),
+            ("custom-tools",CGSize(width:480,height:900),AnyView(PencilToolCustomization(session:brushReview))),
+            ("hover-full-definitions",CGSize(width:480,height:800),AnyView(HoverTipView(term:"function",detail:"【校对：自动链接·待校对】\n函数\n【通用】\n功能；作用；典礼；职责\n【数学】\n函数；映射\n【医学】\n机能；功能\n【WordNet】\nA mathematical relation.\n"+String(repeating:"完整义项可滚动查看。\n",count:16),anchor:CGPoint(x:240,y:550),bounds:CGSize(width:480,height:800)).background(DS.background1))),
             ("palette-marker-expanded", CGSize(width: 360, height: 420), AnyView(PencilPaletteView(session: markerReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("palette-brush-expanded", CGSize(width: 320, height: 420), AnyView(PencilPaletteView(session: brushReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),

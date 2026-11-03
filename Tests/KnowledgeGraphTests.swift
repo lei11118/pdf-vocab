@@ -20,7 +20,8 @@ final class KnowledgeGraphTests: XCTestCase {
     }
     func testArcChordMidpointAndPolarHitWithMirroring() {
         for left in [false,true] {
-            let geometry = ToolArcGeometry(anchor:CGPoint(x:500,y:500),bounds:CGSize(width:1000,height:1000),count:9,leftHanded:left)
+          for size in [CGSize(width:1000,height:1000),CGSize(width:480,height:600)] {
+            let geometry = ToolArcGeometry(anchor:CGPoint(x:size.width/2,y:size.height/2),bounds:size,count:9,leftHanded:left)
             let r = geometry.radius, d = r*cos(ToolArcConfig.sweep/2)
             let c = geometry.center
             XCTAssertEqual(c.y-d*cos(geometry.mid),geometry.anchor.y,accuracy:0.001)
@@ -33,6 +34,7 @@ final class KnowledgeGraphTests: XCTestCase {
                 XCTAssertEqual(geometry.index(at:p,count:9,upper:false),i)
             }
             XCTAssertNil(geometry.index(at:CGPoint.zero,count:9,upper:false))
+          }
         }
     }
     func testNormalizedWordBoxesDoNotSnapAcrossWhitespace() {
