@@ -7,6 +7,8 @@ import PDFKit
 struct ReaderView: View {
     let doc: DocumentRecord
     let store: DocumentStore
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
 
     @State private var pdfLoadFailed = false
     @State private var pdfLoadAttempt = 0

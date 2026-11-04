@@ -10,6 +10,11 @@ final class MetalInkHost: UIView {
     private var store: PencilInkStore?
     private var docSha = ""
     private var pages: [Int: InkPage] = [:]
+    private let editorID = UUID()
+    private var inkObserver: NSObjectProtocol?
+    private var inputActive = false
+    private var pendingPeerRefresh = false
+    private var savedPages: [Int: InkPage] = [:]
     private var boxes: [Int: CGRect] = [:]
     private var mappings: [Int: CGAffineTransform] = [:]
     private var observations: [NSKeyValueObservation] = []
@@ -63,7 +68,7 @@ final class MetalInkHost: UIView {
     func attach(to pdfView: PDFView, store: PencilInkStore?, docSha: String) {
         if self.docSha != docSha {
             finishErase(); canvas.handleCancelled(); clearInkSelection()
-            pages.removeAll(); undoStack.removeAll(); redoStack.removeAll()
+            pages.removeAll(); savedPages.removeAll(); undoStack.removeAll(); redoStack.removeAll()
             boxes.removeAll();mappings.removeAll();canvas.renderItems=[];needsInkRefresh=true
         }
         if self.pdfView !== pdfView, let pencilGrab { self.pdfView?.removeGestureRecognizer(pencilGrab); self.pencilGrab = nil }
@@ -98,6 +103,14 @@ final class MetalInkHost: UIView {
                 self.trimPageCache(); self.needsInkRefresh = true; self.scheduleRefresh()
             }
         }
+        if inkObserver == nil {
+            inkObserver = NotificationCenter.default.addObserver(forName: PencilInkStore.didChange, object: nil, queue: .main) { [weak self] note in
+                guard let self, note.object as? String == self.docSha,
+                      note.userInfo?["source"] as? UUID != self.editorID else { return }
+                self.pendingPeerRefresh = true
+                self.refreshPeerInkIfIdle()
+            }
+        }
         isAttached = true
         installPencilGrab(on: pdfView)
         observeScroll()
@@ -107,6 +120,14 @@ final class MetalInkHost: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         if canvas.frame != bounds { canvas.frame = bounds }
+    }
+
+    private func refreshPeerInkIfIdle() {
+        guard pendingPeerRefresh, !inputActive, !transforming, eraseBefore.isEmpty else { return }
+        pendingPeerRefresh = false
+        clearInkSelection()
+        pages.removeAll(); savedPages.removeAll()
+        needsInkRefresh = true; refresh()
     }
 
     private func installPencilGrab(on pdf: PDFView) {
@@ -119,6 +140,7 @@ final class MetalInkHost: UIView {
         }
         grab.onBegan = { [weak self] touch, _ in
             guard let self else { return }
+            self.refreshPeerInkIfIdle(); self.inputActive = true
             self.visitedBoxes=[:];self.visitedMaps=[:]
             self.refresh()
             DiagLog.log("metal ink: input begin tool=\(self.activeTool.rawValue) cachePages=\(self.pages.count) undo=\(self.undoStack.count)")
@@ -147,8 +169,9 @@ final class MetalInkHost: UIView {
                 if let touch = touches.first(where: { $0.type == .pencil }) { self.erase(at: touch.location(in: self.canvas)) }
                 self.finishErase()
             } else { self.canvas.handleEnded(touches, event: event) }
+            self.inputActive = false; self.refreshPeerInkIfIdle()
         }
-        grab.onCancelled = { [weak self] in self?.laser.clear();self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled() }
+        grab.onCancelled = { [weak self] in self?.laser.clear();self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled(); self?.inputActive = false; self?.refreshPeerInkIfIdle() }
         pdf.addGestureRecognizer(grab); pencilGrab = grab
     }
 
@@ -299,7 +322,7 @@ final class MetalInkHost: UIView {
                 result = InkPage(strokes: InkLegacyMigration.strokes(from: old, scale: CGFloat(max(1,record.scale))))
             }
         }
-        pages[index] = result; return result
+        pages[index] = result; savedPages[index] = result; return result
     }
 
     func commit(_ stroke: InkStroke) { commitStrokes([stroke]) }
@@ -368,7 +391,7 @@ final class MetalInkHost: UIView {
         guard let group = undoStack.last?.group else { return }
         var moved: [UndoEntry] = []
         while let entry = undoStack.last, entry.group == group {
-            undoStack.removeLast(); pages[entry.page] = entry.before; moved.append(entry)
+            undoStack.removeLast(); pages[entry.page] = InkPage.applyingChanges(from: entry.after, to: entry.before, onto: pageInk(entry.page)); moved.append(entry)
         }
         redoStack.append(contentsOf: moved.reversed()); persist(Set(moved.map(\.page)))
     }
@@ -377,14 +400,19 @@ final class MetalInkHost: UIView {
         guard let group = redoStack.last?.group else { return }
         var moved: [UndoEntry] = []
         while let entry = redoStack.last, entry.group == group {
-            redoStack.removeLast(); pages[entry.page] = entry.after; moved.append(entry)
+            redoStack.removeLast(); pages[entry.page] = InkPage.applyingChanges(from: entry.before, to: entry.after, onto: pageInk(entry.page)); moved.append(entry)
         }
         undoStack.append(contentsOf: moved.reversed()); persist(Set(moved.map(\.page)))
     }
     private func persist(_ indexes: Set<Int>) {
         needsInkRefresh = true
         if let oldestGroup = undoStack.last.map({ max(0,$0.group-63) }) { undoStack.removeAll { $0.group < oldestGroup } }
-        for index in indexes { store?.save(docSha: docSha,page: index,data: (pages[index] ?? InkPage()).data(),scale: 1) }
+        for index in indexes {
+            let after = pages[index] ?? InkPage()
+            if let merged = store?.merge(docSha: docSha,page: index,before: savedPages[index] ?? InkPage(),after: after,source: editorID) {
+                pages[index] = merged; savedPages[index] = merged
+            }
+        }
         refresh()
     }
     func detach() {
@@ -396,7 +424,7 @@ final class MetalInkHost: UIView {
         laser.clear();laser.removeFromSuperview();editing.removeFromSuperview();removeFromSuperview();isAttached=false
         canvas.releaseCachedResources()
     }
-    deinit { if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }
+    deinit { if let inkObserver { NotificationCenter.default.removeObserver(inkObserver) }; if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }
     private func trimPageCache() {
         guard pages.count > 8, transformBefore.isEmpty, eraseBefore.isEmpty else { return }
         pages = pages.filter { boxes[$0.key] != nil || selected[$0.key] != nil }
@@ -501,6 +529,7 @@ final class MetalInkHost: UIView {
         }
         transformBefore.removeAll(); transformRefs.removeAll()
         if cancelled { needsInkRefresh = true; refresh() } else { persist(Set(originals.keys)) }
+        refreshPeerInkIfIdle()
     }
     func beginEdit(at point: CGPoint) {
         if activeTool == .lasso && editing.point(inside:point,with:nil) {

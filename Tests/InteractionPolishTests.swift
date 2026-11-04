@@ -7,6 +7,34 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testIndependentPDFWindowRequestsKeepPageAndHaveUniqueIdentity() throws {
+        let first = PDFReaderWindowRequest(docSha: "document", page: 42)
+        let second = PDFReaderWindowRequest(docSha: "document", page: 42)
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(try JSONDecoder().decode(PDFReaderWindowRequest.self, from: JSONEncoder().encode(first)), first)
+    }
+
+    func testStaleInkEditorsMergeAdditionsEraseAndUndoWithoutReplacingPeerStrokes() throws {
+        let store = PencilInkStore(db: try XCTUnwrap(AppDatabase.shared))
+        let sha = "multiwindow-" + UUID().uuidString
+        defer { store.delete(docSha: sha, page: 0) }
+        func stroke(_ x: Double) -> InkStroke {
+            InkStroke(kind: .pen, r: 0, g: 0, b: 0, a: 1, points: [InkPoint(x: x, y: 20, width: 2)])
+        }
+        let a = stroke(10), b = stroke(20), c = stroke(30)
+        let empty = InkPage(), first = InkPage(strokes: [a])
+        _ = store.merge(docSha: sha, page: 0, before: empty, after: first)
+        let both = try XCTUnwrap(store.merge(docSha: sha, page: 0, before: empty, after: InkPage(strokes: [b])))
+        XCTAssertEqual(both.strokes, [a,b])
+        let erased = try XCTUnwrap(store.merge(docSha: sha, page: 0, before: first, after: empty))
+        XCTAssertEqual(erased.strokes, [b])
+        _ = store.merge(docSha: sha, page: 0, before: empty, after: InkPage(strokes: [c]))
+        let undo = try XCTUnwrap(store.merge(docSha: sha, page: 0, before: empty, after: first))
+        XCTAssertEqual(undo.strokes, [b,c,a])
+        let ownUndo = InkPage.applyingChanges(from: InkPage(strokes: [c]), to: empty, onto: undo)
+        XCTAssertEqual(ownUndo.strokes, [b,a])
+    }
+
     func testHoverKeepsPartsOfSpeechAndAllChineseSenses() {
         let entry = DictEntry(word:"function",phonetic:"test",translation:"【通用】\nn. 函数；功能\nvi. 运转\n【医学】\nn. 生理功能",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
         XCTAssertEqual(WordInteraction.hoverDetail(entry),"n. 函数；功能\nvi. 运转\nn. 生理功能")

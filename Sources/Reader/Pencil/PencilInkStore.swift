@@ -12,6 +12,7 @@ struct InkDrawingRecord: Sendable {
 
 /// Pencil 手写标记数据层(v0.9.0,M4):按 (docSha, page) 存 PKDrawing 二进制;**不改动原 PDF**。
 struct PencilInkStore: Sendable {
+    static let didChange = Notification.Name("PencilInkStore.didChange")
     let db: AppDatabase
 
     func drawing(docSha: String, page: Int) -> InkDrawingRecord? {
@@ -35,6 +36,26 @@ struct PencilInkStore: Sendable {
                 arguments: [docSha, page, data, scale, Date()]
             )
         }
+    }
+
+    /// Read/merge/write in one SQLite transaction so a stale editor cannot replace a peer's page.
+    func merge(docSha: String, page: Int, before: InkPage, after: InkPage, source: UUID? = nil) -> InkPage? {
+        let result: InkPage? = try? db.dbQueue.write { db -> InkPage? in
+            let row = try Row.fetchOne(db, sql: "SELECT data, scale FROM pencil_ink WHERE docSha=? AND page=?", arguments: [docSha,page])
+            let latest: InkPage
+            if let data: Data = row?["data"] {
+                if let decoded = InkPage.decode(data) { latest = decoded }
+                else if let old = try? PKDrawing(data: data) {
+                    let scale: Double = row?["scale"] ?? 1
+                    latest = InkPage(strokes: InkLegacyMigration.strokes(from: old, scale: CGFloat(max(1,scale))))
+                } else { return nil }
+            } else { latest = InkPage() }
+            let merged = InkPage.applyingChanges(from: before, to: after, onto: latest)
+            try db.execute(sql: "INSERT INTO pencil_ink (docSha,page,data,scale,updatedAt) VALUES (?,?,?,1,?) ON CONFLICT(docSha,page) DO UPDATE SET data=excluded.data,scale=1,updatedAt=excluded.updatedAt", arguments: [docSha,page,merged.data(),Date()])
+            return merged
+        }
+        if result != nil { NotificationCenter.default.post(name: Self.didChange, object: docSha, userInfo: ["source": source as Any]) }
+        return result
     }
 
     /// Find linked fragments without decoding every ink page in memory. Results

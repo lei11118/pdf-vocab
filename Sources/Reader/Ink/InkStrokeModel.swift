@@ -46,6 +46,23 @@ struct InkPage: Codable, Equatable {
     func data() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
     static func decode(_ data: Data) -> InkPage? { try? JSONDecoder().decode(InkPage.self, from: data) }
 
+    /// Apply only this editor's changes, retaining strokes added by another window.
+    /// Multiset subtraction also supports legacy strokes without stable IDs.
+    static func applyingChanges(from before: InkPage, to after: InkPage, onto latest: InkPage) -> InkPage {
+        var removed = before.strokes
+        var added: [InkStroke] = []
+        for stroke in after.strokes {
+            if let index = removed.firstIndex(of: stroke) { removed.remove(at: index) }
+            else { added.append(stroke) }
+        }
+        var result = latest
+        for stroke in removed {
+            if let index = result.strokes.firstIndex(of: stroke) { result.strokes.remove(at: index) }
+        }
+        result.strokes.append(contentsOf: added)
+        return result
+    }
+
     mutating func append(_ stroke: InkStroke) { strokes.append(stroke) }
     mutating func removeLast() { if !strokes.isEmpty { strokes.removeLast() } }
 }

@@ -24,6 +24,13 @@ struct PdfVocabApp: App {
             appContent
             #endif
         }
+        WindowGroup("PDF", id: PDFReaderWindowRequest.sceneID, for: PDFReaderWindowRequest.self) { $request in
+            if let store, let request {
+                PDFReaderWindow(store: store, request: request)
+                    .tint(DS.accent)
+                    .buttonStyle(DSPressableButtonStyle())
+            }
+        }
     }
     @ViewBuilder private var appContent:some View {
             if let store {
@@ -76,3 +83,27 @@ private struct SelectionBarAuditHost:UIViewRepresentable {
     func updateUIView(_ view:UIView,context:Context) {}
 }
 #endif
+
+/// A new identity per opening allows two independent scenes for the same PDF.
+struct PDFReaderWindowRequest: Codable, Hashable {
+    static let sceneID = "pdf-reader"
+    var id = UUID()
+    var docSha: String
+    var page: Int
+}
+
+private struct PDFReaderWindow: View {
+    let store: DocumentStore
+    let request: PDFReaderWindowRequest
+    @Environment(\.dismissWindow) private var dismissWindow
+    var body: some View {
+        NavigationStack {
+            if let doc = try? store.document(sha256: request.docSha) {
+                ReaderView(doc: doc, store: store, jumpTarget: VocabJumpTarget(docSha: doc.sha256, docTitle: doc.title, page: request.page, term: "", rectsJSON: nil))
+                    .environment(\.readerPanelClose, { dismissWindow(id: PDFReaderWindowRequest.sceneID, value: request) })
+            } else {
+                ContentUnavailableView("?????", systemImage: "doc.questionmark", description: Text("??????????????????"))
+            }
+        }
+    }
+}
