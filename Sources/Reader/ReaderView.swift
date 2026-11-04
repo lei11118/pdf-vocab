@@ -598,7 +598,7 @@ struct ReaderView: View {
         SpeechService.shared.speak(term, language: SpeechService.usVoice)
     }
 
-    /// v0.7.0:词卡 ↔ 生词本桥(v0.10.0 精简:只读;收录/高亮统一走编辑栏)
+    /// 词卡 ↔ 生词本桥，选中单词时保留原文位置。
     private var cardVocab: CardVocabBridge {
         let vs = VocabStore(db: store.db)
         return CardVocabBridge(
@@ -637,7 +637,7 @@ struct ReaderView: View {
                 translationRequest:translationRequest
             )
         }
-        // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
+        // Pencil 悬停释义使用独立气泡，长释义可滚动。
         if let preview = wordInteraction.preview {
             HoverTipView(
                 term: preview.term,

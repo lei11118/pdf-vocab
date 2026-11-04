@@ -1,15 +1,8 @@
 import SwiftUI
 import Foundation
 
-/// 悬浮词卡窗口(v0.6.1 引入;v0.6.2 缩放;v0.6.4 胶囊形态 + 迷你模式;用户要求"像 iPad 原生窗口"):
-/// - 按住顶部拖条**自由拖动**;右下角手柄**自由改变大小**;
-/// - **缩到最小时变成胶囊**:横排显示「单词 + 声音 + 翻译」基本信息(双击胶囊可切换迷你/完整);
-/// - 位置与尺寸持久化(@AppStorage);
-/// - **点空白清选区时随选区一起消失**(v0.6.4 用户要求);点 × 关闭;
-/// - 形状:连续圆角 min(30, 高/2)——迷你时即标准胶囊;
-/// - 拖动/缩放都用**全局坐标**(局部坐标会随窗口移动产生反馈抖动);
-/// - 独立成视图:拖动/缩放只重绘窗口自身,不再牵动整页 PDF;
-/// - v0.6.9:触摸判定严格等于窗口**形状**本身(胶囊圆角/窗口圆角之外不拦截触摸)。
+/// 选区词卡可沿边拖动、从右下角缩放，并可缩成胶囊。
+/// 移动和缩放使用全局坐标，窗口位置与大小分别持久化。
 struct FloatingCardWindow: View {
     let content: ReaderCardContent
     let bounds: CGSize
@@ -171,7 +164,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
+    // MARK: - 胶囊迷你
 
     private var compactBody: some View {
         compact()

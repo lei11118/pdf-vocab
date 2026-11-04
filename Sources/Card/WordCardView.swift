@@ -6,8 +6,7 @@ enum ReaderCardContent: Equatable {
     case sentence(String, Int)
 }
 
-/// 词卡 ↔ 生词本桥(v0.7.0;v0.10.0 精简——「加入生词本 / 高亮 / 已掌握」交互全部移出词卡,
-/// 统一到编辑栏(Task 2.1)与生词本页;此处只读查询收录状态)。
+/// 词卡与生词本之间的查询、收录及义项选择接口。
 struct CardVocabBridge {
     /// 查询收录状态(键 = 归一化词元)
     var query: (String) -> (collected: Bool, occurrenceCount: Int)
@@ -148,7 +147,7 @@ struct WordCardView: View {
 
     // MARK: - 生词本(v0.7.0)
 
-    /// v0.10.0(Task 2.1):词卡只读展示收录状态;「加入生词本 / 高亮 / 分组」在文本编辑栏与生词本页操作。
+    /// 词卡内可直接收录，已有条目展示语境数量。
     @ViewBuilder
     private func vocabBar(_ vocab: CardVocabBridge) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -437,9 +436,9 @@ struct WrapLayout: Layout {
     }
 }
 
-// MARK: - 胶囊迷你卡(单词 + 声音 + 翻译,横着排;v0.6.4)
+// MARK: - 胶囊迷你卡
 
-/// 窗口缩到最小时显示的横向基本信息:单词、发音按钮、翻译(首行)。
+/// 窗口缩小时仅显示选中文字和简要译文。
 struct CompactCardView: View {
     let content: ReaderCardContent
     let onClose: () -> Void
@@ -464,11 +463,12 @@ struct CompactCardView: View {
     }
 
     var body: some View {
-        VStack(alignment:.leading,spacing:2) {
+        HStack(alignment:.center,spacing:10) {
             Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
             if let value = sentenceTranslation ?? translation, !value.isEmpty {
                 Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
+            Spacer(minLength:0)
         }
         .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading)
         .padding(.vertical,8).padding(.leading,16).padding(.trailing,92)
@@ -476,13 +476,14 @@ struct CompactCardView: View {
     }
 
     private func loadTranslation() async {
+        translation = nil
         guard let term = lookupTerm else {
-            translation = nil
             return
         }
         let outcome = await Task.detached(priority: .utility) {
             DictionaryService.lookup(term)
         }.value
+        guard !Task.isCancelled else { return }
         if case .found(let entry) = outcome {
             translation = WordInteraction.chineseDetail(entry)?.components(separatedBy:"\n").prefix(2).joined(separator:"；")
         } else {
