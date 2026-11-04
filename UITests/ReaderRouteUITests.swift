@@ -23,8 +23,12 @@ final class ReaderRouteUITests:XCTestCase {
                     XCTAssertTrue(search.waitForExistence(timeout:5),"search field must be visible in the window")
                 }
                 if label == "自定义手写工具" {
-                    XCTAssertTrue(app.buttons["编辑"].firstMatch.waitForExistence(timeout:5),"custom tools remain editable")
-                    XCTAssertTrue(app.buttons["编辑"].firstMatch.isHittable)
+                    let edit = app.buttons["custom-tools-edit"].firstMatch
+                    XCTAssertTrue(edit.waitForExistence(timeout:5),"custom tools remain editable")
+                    XCTAssertTrue(edit.isHittable)
+                    edit.tap()
+                    XCTAssertEqual(edit.label,"完成编辑")
+                    edit.tap()
                 }
                 if label == "知识图谱" {
                     let addText = app.buttons["文本框"].firstMatch
@@ -32,7 +36,11 @@ final class ReaderRouteUITests:XCTestCase {
                     let ready = XCTNSPredicateExpectation(predicate:NSPredicate(format:"enabled == true"),object:addText)
                     XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:10),.completed)
                     addText.tap()
-                    XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout:5),"a new graph text box must be editable")
+                    let editor = app.textViews["graph-node-editor"].firstMatch
+                    XCTAssertTrue(editor.waitForExistence(timeout:5),"a new graph text box must be editable")
+                    editor.tap()
+                    editor.typeText("Graph note")
+                    XCTAssertTrue((editor.value as? String ?? "").contains("Graph note"))
                     app.buttons["图谱操作"].firstMatch.tap()
                     let editSelected = app.buttons["编辑选中文本"].firstMatch
                     XCTAssertTrue(editSelected.waitForExistence(timeout:5),"selected text has an explicit edit action")

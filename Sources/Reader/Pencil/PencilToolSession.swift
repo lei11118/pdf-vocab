@@ -466,6 +466,7 @@ struct PencilToolCustomization: View {
     @Environment(\.readerPanelClose) private var panelClose
     var onActivate: (() -> Void)? = nil
     @State private var name = ""
+    @State private var editMode: EditMode = .inactive
     var body: some View {
         NavigationStack {
             List {
@@ -496,10 +497,26 @@ struct PencilToolCustomization: View {
                         }))
                     }
                 }
-            }.navigationTitle("自定义手写工具").navigationBarTitleDisplayMode(.inline)
+            }
+                .safeAreaInset(edge:.top,spacing:0) {
+                    if panelClose != nil {
+                        HStack {
+                            Text("自定义手写工具").font(.headline)
+                            Spacer()
+                            Button(editMode.isEditing ? "完成编辑" : "编辑") {
+                                withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                            }
+                            .accessibilityIdentifier("custom-tools-edit")
+                        }
+                        .padding(.leading,16).padding(.trailing,56).padding(.vertical,12)
+                        .background(DS.background1)
+                    }
+                }
+                .navigationTitle("自定义手写工具").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement:panelClose == nil ? .topBarTrailing : .topBarLeading) { EditButton() }
+                    ToolbarItem(placement:.topBarTrailing) { if panelClose == nil { EditButton() } }
                 }
         }
+        .environment(\.editMode,$editMode)
     }
 }

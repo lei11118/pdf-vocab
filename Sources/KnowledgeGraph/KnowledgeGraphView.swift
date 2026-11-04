@@ -298,7 +298,9 @@ struct KnowledgeGraphView: View {
             if editing == node.id {
                 TextEditor(text: Binding(get: { binding(node.id).wrappedValue.text }, set: { text in
                     var n = binding(node.id).wrappedValue; n.text = text; binding(node.id).wrappedValue = n
-                })).padding(5).onAppear { model.checkpoint() }
+                }))
+                .accessibilityIdentifier("graph-node-editor")
+                .padding(5).onAppear { model.checkpoint() }
             } else {
                 WordInteractionLayer(text: node.text, onEdit: { model.checkpoint(); editing = node.id })
             }
