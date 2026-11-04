@@ -5,15 +5,21 @@ final class ReaderRouteUITests:XCTestCase {
     func testWorkspaceNavigationAtPortraitAndLandscapeWidths() {
         let app = XCUIApplication()
         app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
-        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.orientation = .portrait
         app.launch()
         XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 15))
         for (orientation,name) in [(UIDeviceOrientation.landscapeLeft,"workspace-landscape"),(.portrait,"workspace-portrait")] {
             XCUIDevice.shared.orientation = orientation
             let predicate = NSPredicate { _,_ in
-                orientation == .portrait ? app.frame.height > app.frame.width : app.frame.width > app.frame.height
+                let frame = app.frame
+                let size = app.screenshot().image.size
+                let expectedDirection = orientation == .portrait
+                    ? frame.height > frame.width && size.height > size.width
+                    : frame.width > frame.height && size.width > size.height
+                let add = app.buttons["添加文件夹或 PDF"]
+                return expectedDirection && add.isHittable && frame.contains(add.frame)
             }
-            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:app)],timeout:5),.completed)
+            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:app)],timeout:10),.completed)
             XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 5))
             let snapshot = XCTAttachment(screenshot: app.screenshot())
             snapshot.name = name; snapshot.lifetime = .keepAlways; add(snapshot)
