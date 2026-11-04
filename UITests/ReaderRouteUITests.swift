@@ -59,6 +59,18 @@ final class ReaderRouteUITests:XCTestCase {
             screen.name = "reader-return-screen"; screen.lifetime = .keepAlways; add(screen)
         }
         XCTAssertEqual(result,.completed,"Explicit back must return to the document library after navigation settles")
+        let graphEntry = app.buttons.containing(.staticText,identifier:"知识图谱").firstMatch
+        if !graphEntry.isHittable { app.scrollViews.firstMatch.swipeDown() }
+        XCTAssertTrue(graphEntry.waitForExistence(timeout:10))
+        graphEntry.tap()
+        XCTAssertTrue(app.staticTexts["主知识图谱"].waitForExistence(timeout:10))
+        let book = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout:10),"the master graph must contain the imported book")
+        book.tap()
+        XCTAssertTrue(app.staticTexts["知识图谱"].waitForExistence(timeout:10),"the book graph opens full screen")
+        app.buttons["完成"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["主知识图谱"].waitForExistence(timeout:10),"closing the book graph returns to the master graph")
+        app.buttons["完成"].firstMatch.tap()
     }
     func testReaderChromeToolAndWindowControlsStayInDocument() {
         let app = XCUIApplication()
