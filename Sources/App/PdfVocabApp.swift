@@ -90,6 +90,12 @@ struct PDFReaderWindowRequest: Codable, Hashable {
     var id = UUID()
     var docSha: String
     var page: Int
+    func documentStartingAtRequestedPage(_ document: DocumentRecord) -> DocumentRecord {
+        var result = document
+        result.lastPage = min(max(page, 0), max(0, document.pageCount-1))
+        result.pageX = 0; result.pageY = 0; result.zoomAuto = true
+        return result
+    }
 }
 
 private struct PDFReaderWindow: View {
@@ -99,7 +105,7 @@ private struct PDFReaderWindow: View {
     var body: some View {
         NavigationStack {
             if let doc = try? store.document(sha256: request.docSha) {
-                ReaderView(doc: doc, store: store, jumpTarget: VocabJumpTarget(docSha: doc.sha256, docTitle: doc.title, page: request.page, term: "", rectsJSON: nil))
+                ReaderView(doc: request.documentStartingAtRequestedPage(doc), store: store)
                     .environment(\.readerPanelClose, { dismissWindow(id: PDFReaderWindowRequest.sceneID, value: request) })
             } else {
                 ContentUnavailableView("文档不可用", systemImage: "doc.questionmark", description: Text("文档可能已删除，请返回书库重新打开。"))

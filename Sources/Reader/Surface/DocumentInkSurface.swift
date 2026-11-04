@@ -22,6 +22,12 @@ final class DocumentInkSurface: UIView {
     private(set) var pageDrawings: [Int: PKDrawing] = [:]
     /// 某页墨迹变化 → 落库
     var onPageInkChanged: ((Int, PKDrawing) -> Void)?
+    var onPageInkDelta: ((Int, PKDrawing, PKDrawing) -> Void)?
+    private var inputActive = false
+    private var pendingReload = false
+    private var toolBefore: [Int:PKDrawing]?
+    private var history: [(before:[Int:PKDrawing],after:[Int:PKDrawing])] = []
+    private var future: [(before:[Int:PKDrawing],after:[Int:PKDrawing])] = []
     /// 懒加载某页墨迹(从库里读)
     var pageDrawingProvider: ((Int) -> PKDrawing?)?
 
@@ -186,6 +192,7 @@ final class DocumentInkSurface: UIView {
 
     private func archive(_ drawing: PKDrawing) -> Bool {
         guard !windowPages.isEmpty else { return false }
+        let before = pageDrawings
         // 每个页面先清空,再由这次的完整绘制重建(切割是幂等的)
         for entry in windowPages { pageDrawings[entry.index] = PKDrawing() }
 
@@ -223,7 +230,12 @@ final class DocumentInkSurface: UIView {
             }
             flush()   // 收尾:最后一段也要落页
         }
-        for page in changedPages { if let d = pageDrawings[page] { onPageInkChanged?(page, d) } }
+        for page in changedPages {
+            if let d = pageDrawings[page] {
+                onPageInkDelta?(page,before[page] ?? PKDrawing(),d)
+                onPageInkChanged?(page,d)
+            }
+        }
         return !changedPages.isEmpty
     }
 
@@ -236,10 +248,33 @@ final class DocumentInkSurface: UIView {
 
     func setRulerActive(_ active: Bool) { canvas.isRulerActive = active }
 
-    var canUndo: Bool { canvas.undoManager?.canUndo == true }
-    var canRedo: Bool { canvas.undoManager?.canRedo == true }
-    func undo() { if canvas.undoManager?.canUndo == true { canvas.undoManager?.undo() } }
-    func redo() { if canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() } }
+    var canUndo: Bool { !history.isEmpty }
+    var canRedo: Bool { !future.isEmpty }
+    func undo() {
+        guard !inputActive,let entry = history.popLast() else { return }
+        applyHistory(from:entry.after,to:entry.before)
+        future.append(entry)
+    }
+    func redo() {
+        guard !inputActive,let entry = future.popLast() else { return }
+        applyHistory(from:entry.before,to:entry.after)
+        history.append(entry)
+    }
+    private func applyHistory(from before:[Int:PKDrawing],to after:[Int:PKDrawing]) {
+        for page in Set(before.keys).union(after.keys) {
+            let old = before[page] ?? PKDrawing(), new = after[page] ?? PKDrawing()
+            if let onPageInkDelta { onPageInkDelta(page,old,new) }
+            else { pageDrawings[page] = NativeInkChanges.applying(from:old,to:new,onto:pageDrawings[page] ?? PKDrawing()) }
+        }
+        if onPageInkDelta != nil { reloadStoredInk() } else { recompose() }
+    }
+    func reloadStoredInk() {
+        guard !inputActive else { pendingReload = true; return }
+        pendingReload = false
+        pageDrawings.removeAll()
+        recompose()
+        canvas.undoManager?.removeAllActions()
+    }
 
     // MARK: - 几何工具
 
@@ -259,6 +294,20 @@ final class DocumentInkSurface: UIView {
 }
 
 extension DocumentInkSurface: PKCanvasViewDelegate {
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        inputActive = true
+        toolBefore = pageDrawings
+    }
+    func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        archive(canvasView.drawing)
+        if let before = toolBefore {
+            history.append((before:before,after:pageDrawings))
+            if history.count > 64 { history.removeFirst() }
+            future.removeAll()
+        }
+        toolBefore = nil; inputActive = false
+        if onPageInkDelta != nil || pendingReload { reloadStoredInk() }
+    }
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !suppressArchive else { return }
         archive(canvasView.drawing)

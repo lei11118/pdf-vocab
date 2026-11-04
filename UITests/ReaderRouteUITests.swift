@@ -10,6 +10,10 @@ final class ReaderRouteUITests:XCTestCase {
         XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 15))
         for (orientation,name) in [(UIDeviceOrientation.landscapeLeft,"workspace-landscape"),(.portrait,"workspace-portrait")] {
             XCUIDevice.shared.orientation = orientation
+            let predicate = NSPredicate { _,_ in
+                orientation == .portrait ? app.frame.height > app.frame.width : app.frame.width > app.frame.height
+            }
+            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:app)],timeout:5),.completed)
             XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 5))
             let snapshot = XCTAttachment(screenshot: app.screenshot())
             snapshot.name = name; snapshot.lifetime = .keepAlways; add(snapshot)

@@ -50,16 +50,23 @@ struct InkPage: Codable, Equatable {
     /// Multiset subtraction also supports legacy strokes without stable IDs.
     static func applyingChanges(from before: InkPage, to after: InkPage, onto latest: InkPage) -> InkPage {
         var removed = before.strokes
-        var added: [InkStroke] = []
-        for stroke in after.strokes {
+        var added: [(Int, InkStroke)] = []
+        for (position, stroke) in after.strokes.enumerated() {
             if let index = removed.firstIndex(of: stroke) { removed.remove(at: index) }
-            else { added.append(stroke) }
+            else { added.append((position, stroke)) }
         }
         var result = latest
         for stroke in removed {
             if let index = result.strokes.firstIndex(of: stroke) { result.strokes.remove(at: index) }
         }
-        result.strokes.append(contentsOf: added)
+        for (position, stroke) in added {
+            // Restore stacking order around surviving local strokes without deleting peer additions.
+            let successors = after.strokes.dropFirst(position+1)
+            if let anchor = successors.first(where: { result.strokes.contains($0) }),
+               let index = result.strokes.firstIndex(of: anchor) {
+                result.strokes.insert(stroke, at: index)
+            } else { result.strokes.append(stroke) }
+        }
         return result
     }
 

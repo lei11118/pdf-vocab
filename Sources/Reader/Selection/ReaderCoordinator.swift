@@ -196,6 +196,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     deinit {
+        if let nativeInkObserver { NotificationCenter.default.removeObserver(nativeInkObserver) }
         autoscrollLink?.invalidate()
         scrollObservers.forEach { $0.invalidate() }
         removeObservers()
@@ -1604,11 +1605,17 @@ final class ReaderCoordinator: NSObject {
     private var inkSurface: DocumentInkSurface?
     /// v0.46.0:自研 Metal 墨迹宿主(设置开关 metalInk)
     private var metalHost: MetalInkHost?
+    private var engineSession: DocumentInkEngineSession?
+    private let nativeEditorID = UUID()
+    private var nativeInkObserver: NSObjectProtocol?
 
     /// v0.40.0:装上文档级单画布,并把历史"每页一画布"的墨迹合并进文档坐标系。
     private func installInkSurface(on view: PDFView, docSha: String) {
+        if surfaceDocSha != docSha { engineSession = nil }
         // v0.46.0:自研 Metal 墨迹(默认关,设置里可开)
-        if UserDefaults.standard.bool(forKey: "metalInk") {
+        let engine = engineSession ?? DocumentInkEngineSession.acquire(docSha:docSha,prefersMetal:UserDefaults.standard.bool(forKey:"metalInk"),containsMetal:{ self.inkStore?.containsMetalPages(docSha:docSha) ?? false })
+        engineSession = engine
+        if engine.metal {
             // v0.47.0:复用同一个宿主 —— 重进文档/重装时若每次 new 一个,
             // pdfView 上会叠出第二块画布(两套墨迹、两份落库)。
             let host = metalHost ?? MetalInkHost()
@@ -1634,14 +1641,19 @@ final class ReaderCoordinator: NSObject {
             guard let self, let store = self.inkStore,
                   let record = store.drawing(docSha: docSha, page: page),
                   let saved = try? PKDrawing(data: record.data) else { return nil }
-            return saved
+            var result = saved
+            if record.scale != 1 { result.transform(using:CGAffineTransform(scaleX:1/max(1,record.scale),y:1/max(1,record.scale))) }
+            return result
         }
         // 抬笔切割后按页落库
-        surface.onPageInkChanged = { [weak self] page, drawing in
-            self?.inkStore?.save(docSha: docSha, page: page,
-                                 data: drawing.dataRepresentation(),
-                                 scale: Double(DocumentInkSurface.scale))
-            DiagLog.log("surface: saved page \(page) strokes=\(drawing.strokes.count)")
+        surface.onPageInkDelta = { [weak self] page, before, after in
+            guard let self else { return }
+            _ = self.inkStore?.mergeNative(docSha:docSha,page:page,before:before,after:after,source:self.nativeEditorID)
+        }
+        if let nativeInkObserver { NotificationCenter.default.removeObserver(nativeInkObserver) }
+        nativeInkObserver = NotificationCenter.default.addObserver(forName:PencilInkStore.didChange,object:nil,queue:.main) { [weak self,weak surface] note in
+            guard let self,note.object as? String == docSha,note.userInfo?["source"] as? String != self.nativeEditorID.uuidString else { return }
+            surface?.reloadStoredInk()
         }
         surface.refreshWindow()
         DiagLog.log("surface: enabled (per-page ink)")

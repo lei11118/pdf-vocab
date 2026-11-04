@@ -3,10 +3,47 @@ import UIKit
 import PDFKit
 import MetalKit
 import SwiftUI
+import PencilKit
 @testable import PdfVocab
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testInkUndoRestoresOriginalStackingOrderAroundPeerAdditions() {
+        func stroke(_ x: Double) -> InkStroke {
+            InkStroke(kind:.pen,r:0,g:0,b:0,a:1,points:[InkPoint(x:x,y:10,width:2)])
+        }
+        let a = stroke(1), b = stroke(2), peer = stroke(3), moved = stroke(4)
+        let original = InkPage(strokes:[a,b])
+        let erased = InkPage(strokes:[b])
+        XCTAssertEqual(InkPage.applyingChanges(from:erased,to:original,onto:InkPage(strokes:[b,peer])).strokes,[a,b,peer])
+        XCTAssertEqual(InkPage.applyingChanges(from:original,to:InkPage(strokes:[moved,b]),onto:InkPage(strokes:[a,b,peer])).strokes,[moved,b,peer])
+    }
+
+    func testNativeInkMergesStaleEditsAndUndoWithoutLosingPeerOrMasks() throws {
+        let store = PencilInkStore(db:try XCTUnwrap(AppDatabase.shared))
+        let sha = "native-windows-"+UUID().uuidString
+        defer { store.delete(docSha:sha,page:0) }
+        func stroke(_ x:CGFloat) -> PKStroke {
+            let points = [CGFloat(10),CGFloat(30)].map { y in
+                PKStrokePoint(location:CGPoint(x:x,y:y),timeOffset:Double(y)/100,size:CGSize(width:3,height:3),opacity:1,force:1,azimuth:0,altitude:.pi/2)
+            }
+            return PKStroke(ink:PKInk(.pen,color:.black),path:PKStrokePath(controlPoints:points,creationDate:Date()),mask:UIBezierPath(rect:CGRect(x:0,y:0,width:100,height:100)))
+        }
+        let a = stroke(10), b = stroke(20)
+        XCTAssertTrue(store.mergeNative(docSha:sha,page:0,before:PKDrawing(),after:PKDrawing(strokes:[a]),source:UUID()))
+        XCTAssertTrue(store.mergeNative(docSha:sha,page:0,before:PKDrawing(),after:PKDrawing(strokes:[b]),source:UUID()))
+        let record = try XCTUnwrap(store.drawing(docSha:sha,page:0))
+        let both = try PKDrawing(data:record.data)
+        XCTAssertEqual(both.strokes.count,2)
+        XCTAssertTrue(NativeInkChanges.equal(both.strokes[0],a))
+        XCTAssertTrue(NativeInkChanges.equal(both.strokes[1],b))
+        XCTAssertTrue(store.mergeNative(docSha:sha,page:0,before:PKDrawing(strokes:[a]),after:PKDrawing(),source:UUID()))
+        let saved = try PKDrawing(data:XCTUnwrap(store.drawing(docSha:sha,page:0)).data)
+        XCTAssertEqual(saved.strokes.count,1)
+        XCTAssertTrue(NativeInkChanges.equal(saved.strokes[0],b))
+        let restored = NativeInkChanges.applying(from:PKDrawing(strokes:[b]),to:both,onto:saved)
+        XCTAssertTrue(NativeInkChanges.equal(restored.strokes[0],a))
+    }
     func testDocumentWindowsShareGraphSessionButDifferentBooksStayIndependent() throws {
         let db = try XCTUnwrap(AppDatabase.shared)
         let id = "window-graph-" + UUID().uuidString

@@ -59,6 +59,33 @@ struct PencilInkStore: Sendable {
     }
 
     /// Find linked fragments without decoding every ink page in memory. Results
+    func containsMetalPages(docSha: String) -> Bool {
+        ((try? db.dbQueue.read { db in
+            try Int.fetchOne(db,sql:"SELECT COUNT(*) FROM pencil_ink WHERE docSha=? AND substr(CAST(data AS TEXT),1,1)='{'",arguments:[docSha])
+        }) ?? 0) > 0
+    }
+
+    func mergeNative(docSha: String, page: Int, before: PKDrawing, after: PKDrawing, source: UUID) -> Bool {
+        let saved = (try? db.dbQueue.write { db -> Bool in
+            let row = try Row.fetchOne(db,sql:"SELECT data,scale FROM pencil_ink WHERE docSha=? AND page=?",arguments:[docSha,page])
+            var latest = PKDrawing()
+            if let data: Data = row?["data"] {
+                // Engine sessions prevent mixed-format edits. Never overwrite an incompatible page.
+                guard let drawing = try? PKDrawing(data:data) else { return false }
+                latest = drawing
+                let scale: Double = row?["scale"] ?? 1
+                if scale != 1 { latest.transform(using:CGAffineTransform(scaleX:1/max(1,scale),y:1/max(1,scale))) }
+            }
+            let merged = NativeInkChanges.applying(from:before,to:after,onto:latest)
+            try db.execute(sql:"INSERT INTO pencil_ink (docSha,page,data,scale,updatedAt) VALUES (?,?,?,1,?) ON CONFLICT(docSha,page) DO UPDATE SET data=excluded.data,scale=1,updatedAt=excluded.updatedAt",arguments:[docSha,page,merged.dataRepresentation(),Date()])
+            return true
+        }) ?? false
+        if saved { NotificationCenter.default.post(name:Self.didChange,object:docSha,userInfo:["source":source.uuidString]) }
+        else { DiagLog.log("ink persistence: native merge failed page=\(page)") }
+        return saved
+    }
+
+    /// Find linked fragments without decoding every ink page in memory. Results
     /// are validated by the caller after decoding; binary legacy drawings have no IDs.
     func pages(containing ids:Set<UUID>,docSha:String)->[Int] {
         guard !ids.isEmpty else { return [] }
