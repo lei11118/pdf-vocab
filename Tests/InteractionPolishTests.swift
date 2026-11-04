@@ -7,6 +7,12 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testHoverKeepsPartsOfSpeechAndAllChineseSenses() {
+        let entry = DictEntry(word:"function",phonetic:"test",translation:"【通用】\nn. 函数；功能\nvi. 运转\n【医学】\nn. 生理功能",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+        XCTAssertEqual(WordInteraction.hoverDetail(entry),"n. 函数；功能\nvi. 运转\nn. 生理功能")
+        XCTAssertFalse((WordInteraction.hoverDetail(entry) ?? "").contains("English definition"))
+    }
+
     func testHoverIncludesEveryChineseSenseButNoEnglishDefinitionOrPhonetic() {
         let senses = (0..<120).map { "n. 中文释义\($0)" }.joined(separator:"\n")
         let entry = DictEntry(word:"term",phonetic:"test",translation:"【通用】\n\(senses)\n【医学】\n医学含义",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)

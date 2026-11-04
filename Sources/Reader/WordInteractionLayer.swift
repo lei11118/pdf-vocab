@@ -56,7 +56,19 @@ struct WordPreview {
 enum WordInteraction {
     static func detail(_ term: String) -> String? {
         guard case .found(let entry) = DictionaryService.lookup(term) else { return nil }
-        return chineseDetail(entry)
+        return hoverDetail(entry)
+    }
+    static func hoverDetail(_ entry: DictEntry) -> String? {
+        guard let translation = entry.translation else { return nil }
+        let lines = translation.components(separatedBy:.newlines).compactMap { raw -> String? in
+            var line = raw.trimmingCharacters(in:.whitespacesAndNewlines)
+            if line.hasPrefix("【"),let end = line.firstIndex(of:"】") {
+                line = String(line[line.index(after:end)...]).trimmingCharacters(in:.whitespaces)
+            }
+            let hasChinese = line.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) || (0xF900...0xFAFF).contains($0.value) || (0x20000...0x3134F).contains($0.value) }
+            return hasChinese ? line : nil
+        }
+        return lines.isEmpty ? nil : lines.joined(separator:"\n")
     }
     /// Hover presents all Chinese senses from the enabled dictionaries, without
     /// dictionary headings, pronunciation or the separate English definitions.
