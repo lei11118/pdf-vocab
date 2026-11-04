@@ -11,6 +11,7 @@ struct ReaderView: View {
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
 
     @State private var pdfLoadFailed = false
+    @State private var inkSaveFailed = false
     @State private var pdfLoadAttempt = 0
     @State private var currentPage: Int
     @State private var resolvedURL: URL?
@@ -140,6 +141,15 @@ struct ReaderView: View {
 
     private var sceneContent: some View {
         sheetContent
+            .onReceive(NotificationCenter.default.publisher(for:PencilInkStore.didFail)) { note in
+                if note.object as? String == doc.sha256 { inkSaveFailed = true }
+            }
+            .alert("笔迹暂未保存",isPresented:$inkSaveFailed) {
+                Button("重试保存") { readerHandle.coordinator?.retrySavingInk() }
+                Button("稍后",role:.cancel) {}
+            } message: {
+                Text("当前笔迹保留在此窗口中。请保持窗口打开，稍后重试保存。")
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
                     saveProgressNow()

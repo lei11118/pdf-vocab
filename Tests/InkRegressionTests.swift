@@ -248,4 +248,36 @@ final class InkRegressionTests: XCTestCase {
         surface.canvasViewDrawingDidChange(surface.canvas)
         XCTAssertEqual(saved[0]?.strokes.count, 0)
     }
+
+    func testNativeSaveFailureRetainsVisibleStrokeAndRetriesOriginalDelta() throws {
+        let view = PDFView(frame:CGRect(x:0,y:0,width:600,height:600))
+        let document = PDFDocument()
+        let image = UIGraphicsImageRenderer(size:CGSize(width:400,height:500)).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x:0,y:0,width:400,height:500))
+        }
+        let page = try XCTUnwrap(PDFPage(image:image))
+        document.insert(page,at:0); view.document = document; view.layoutDocumentView()
+        let surface = DocumentInkSurface(); surface.attach(to:view); surface.refreshWindow()
+        var saved = PKDrawing()
+        surface.pageDrawingProvider = { _ in saved }
+        var acceptsSave = false
+        surface.onPageInkDelta = { _,before,after in
+            guard acceptsSave else { return false }
+            saved = NativeInkChanges.applying(from:before,to:after,onto:saved)
+            return true
+        }
+        let location = surface.canvas.convert(view.convert(CGPoint(x:100,y:300),from:page),from:view)
+        let points = [CGFloat(0),CGFloat(20)].map { dx in
+            PKStrokePoint(location:CGPoint(x:location.x+dx,y:location.y),timeOffset:Double(dx)/100,size:CGSize(width:3,height:3),opacity:1,force:1,azimuth:0,altitude:.pi/2)
+        }
+        surface.canvasViewDidBeginUsingTool(surface.canvas)
+        surface.canvas.drawing = PKDrawing(strokes:[PKStroke(ink:PKInk(.pen,color:.black),path:PKStrokePath(controlPoints:points,creationDate:Date()))])
+        surface.canvasViewDrawingDidChange(surface.canvas)
+        surface.canvasViewDidEndUsingTool(surface.canvas)
+        XCTAssertEqual(saved.strokes.count,0)
+        XCTAssertEqual(surface.canvas.drawing.strokes.count,1,"failed save must not replace local ink with the old database drawing")
+        acceptsSave = true; surface.retrySavingInk()
+        XCTAssertEqual(saved.strokes.count,1,"retry must include the original unsaved stroke")
+        XCTAssertEqual(surface.canvas.drawing.strokes.count,1)
+    }
 }

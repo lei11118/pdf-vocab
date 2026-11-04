@@ -1647,8 +1647,8 @@ final class ReaderCoordinator: NSObject {
         }
         // 抬笔切割后按页落库
         surface.onPageInkDelta = { [weak self] page, before, after in
-            guard let self else { return }
-            _ = self.inkStore?.mergeNative(docSha:docSha,page:page,before:before,after:after,source:self.nativeEditorID)
+            guard let self else { return false }
+            return self.inkStore?.mergeNative(docSha:docSha,page:page,before:before,after:after,source:self.nativeEditorID) ?? false
         }
         if let nativeInkObserver { NotificationCenter.default.removeObserver(nativeInkObserver) }
         nativeInkObserver = NotificationCenter.default.addObserver(forName:PencilInkStore.didChange,object:nil,queue:.main) { [weak self,weak surface] note in
@@ -2348,6 +2348,10 @@ final class ReaderCoordinator: NSObject {
               let index = pdfView.document?.index(for: page) else { return }
         let cleared = overlayProvider?.clearInk(pageIndex: index) ?? false
         DiagLog.log("pencil: clear page \(index) -> \(cleared ? 1 : 0)")
+    }
+    func retrySavingInk() {
+        metalHost?.retrySavingInk()
+        inkSurface?.retrySavingInk()
     }
 
     // MARK: - 拖选计算(纯点坐标 + 词粒度)

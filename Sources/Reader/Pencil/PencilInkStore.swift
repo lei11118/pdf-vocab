@@ -13,6 +13,7 @@ struct InkDrawingRecord: Sendable {
 /// Pencil 手写标记数据层(v0.9.0,M4):按 (docSha, page) 存 PKDrawing 二进制;**不改动原 PDF**。
 struct PencilInkStore: Sendable {
     static let didChange = Notification.Name("PencilInkStore.didChange")
+    static let didFail = Notification.Name("PencilInkStore.didFail")
     let db: AppDatabase
 
     func drawing(docSha: String, page: Int) -> InkDrawingRecord? {
@@ -55,6 +56,10 @@ struct PencilInkStore: Sendable {
             return merged
         }
         if result != nil { NotificationCenter.default.post(name: Self.didChange, object: docSha, userInfo: ["source": source?.uuidString ?? ""]) }
+        else {
+            DiagLog.log("ink persistence: merge failed page=\(page)")
+            NotificationCenter.default.post(name:Self.didFail,object:docSha)
+        }
         return result
     }
 
@@ -81,7 +86,10 @@ struct PencilInkStore: Sendable {
             return true
         }) ?? false
         if saved { NotificationCenter.default.post(name:Self.didChange,object:docSha,userInfo:["source":source.uuidString]) }
-        else { DiagLog.log("ink persistence: native merge failed page=\(page)") }
+        else {
+            DiagLog.log("ink persistence: native merge failed page=\(page)")
+            NotificationCenter.default.post(name:Self.didFail,object:docSha)
+        }
         return saved
     }
 

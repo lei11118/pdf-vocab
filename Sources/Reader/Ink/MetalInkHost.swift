@@ -15,6 +15,7 @@ final class MetalInkHost: UIView {
     private var inputActive = false
     private var pendingPeerRefresh = false
     private var savedPages: [Int: InkPage] = [:]
+    private var failedPages = Set<Int>()
     private var boxes: [Int: CGRect] = [:]
     private var mappings: [Int: CGAffineTransform] = [:]
     private var observations: [NSKeyValueObservation] = []
@@ -69,7 +70,7 @@ final class MetalInkHost: UIView {
     func attach(to pdfView: PDFView, store: PencilInkStore?, docSha: String) {
         if self.docSha != docSha {
             finishErase(); canvas.handleCancelled(); clearInkSelection()
-            pages.removeAll(); savedPages.removeAll(); undoStack.removeAll(); redoStack.removeAll()
+            pages.removeAll(); savedPages.removeAll(); failedPages.removeAll(); undoStack.removeAll(); redoStack.removeAll()
             boxes.removeAll();mappings.removeAll();canvas.renderItems=[];needsInkRefresh=true
         }
         if self.pdfView !== pdfView, let pencilGrab { self.pdfView?.removeGestureRecognizer(pencilGrab); self.pencilGrab = nil }
@@ -124,7 +125,7 @@ final class MetalInkHost: UIView {
     }
 
     private func refreshPeerInkIfIdle() {
-        guard pendingPeerRefresh, !inputActive, !transforming, eraseBefore.isEmpty else { return }
+        guard pendingPeerRefresh, !inputActive, !transforming, eraseBefore.isEmpty, failedPages.isEmpty else { return }
         pendingPeerRefresh = false
         clearInkSelection()
         pages.removeAll(); savedPages.removeAll()
@@ -413,10 +414,12 @@ final class MetalInkHost: UIView {
             let after = pages[index] ?? InkPage()
             if let merged = store?.merge(docSha: docSha,page: index,before: savedPages[index] ?? InkPage(),after: after,source: editorID) {
                 pages[index] = merged; savedPages[index] = merged
-            }
+                failedPages.remove(index)
+            } else { failedPages.insert(index) }
         }
         refresh()
     }
+    func retrySavingInk() { if !failedPages.isEmpty { persist(failedPages) } }
     func detach() {
         finishErase();canvas.handleCancelled();clearInkSelection()
         drawingEnabled=false;canvas.isDrawingEnabled=false
@@ -429,7 +432,7 @@ final class MetalInkHost: UIView {
     deinit { if let inkObserver { NotificationCenter.default.removeObserver(inkObserver) }; if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }
     private func trimPageCache() {
         guard pages.count > 8, transformBefore.isEmpty, eraseBefore.isEmpty else { return }
-        pages = pages.filter { boxes[$0.key] != nil || selected[$0.key] != nil }
+        pages = pages.filter { boxes[$0.key] != nil || selected[$0.key] != nil || failedPages.contains($0.key) }
         savedPages = savedPages.filter { pages[$0.key] != nil }
     }
     func clearInkSelection() {

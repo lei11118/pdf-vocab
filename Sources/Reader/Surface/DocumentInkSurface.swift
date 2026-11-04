@@ -22,7 +22,8 @@ final class DocumentInkSurface: UIView {
     private(set) var pageDrawings: [Int: PKDrawing] = [:]
     /// 某页墨迹变化 → 落库
     var onPageInkChanged: ((Int, PKDrawing) -> Void)?
-    var onPageInkDelta: ((Int, PKDrawing, PKDrawing) -> Void)?
+    var onPageInkDelta: ((Int, PKDrawing, PKDrawing) -> Bool)?
+    private var unsavedBefore: [Int:PKDrawing] = [:]
     private var inputActive = false
     private var pendingReload = false
     private var toolBefore: [Int:PKDrawing]?
@@ -232,7 +233,7 @@ final class DocumentInkSurface: UIView {
         }
         for page in changedPages {
             if let d = pageDrawings[page] {
-                onPageInkDelta?(page,before[page] ?? PKDrawing(),d)
+                persistChange(page:page,before:before[page] ?? PKDrawing(),after:d)
                 onPageInkChanged?(page,d)
             }
         }
@@ -263,17 +264,33 @@ final class DocumentInkSurface: UIView {
     private func applyHistory(from before:[Int:PKDrawing],to after:[Int:PKDrawing]) {
         for page in Set(before.keys).union(after.keys) {
             let old = before[page] ?? PKDrawing(), new = after[page] ?? PKDrawing()
-            if let onPageInkDelta { onPageInkDelta(page,old,new) }
-            else { pageDrawings[page] = NativeInkChanges.applying(from:old,to:new,onto:pageDrawings[page] ?? PKDrawing()) }
+            let current = pageDrawings[page] ?? PKDrawing()
+            let target = NativeInkChanges.applying(from:old,to:new,onto:current)
+            pageDrawings[page] = target
+            persistChange(page:page,before:current,after:target)
         }
-        if onPageInkDelta != nil { reloadStoredInk() } else { recompose() }
+        if onPageInkDelta != nil && unsavedBefore.isEmpty { reloadStoredInk() } else { recompose() }
+    }
+    private func persistChange(page:Int,before:PKDrawing,after:PKDrawing) {
+        guard let onPageInkDelta else { return }
+        let baseline = unsavedBefore[page] ?? before
+        if onPageInkDelta(page,baseline,after) { unsavedBefore.removeValue(forKey:page) }
+        else { unsavedBefore[page] = baseline }
     }
     func reloadStoredInk() {
-        guard !inputActive else { pendingReload = true; return }
+        guard !inputActive, unsavedBefore.isEmpty else { pendingReload = true; return }
         pendingReload = false
         pageDrawings.removeAll()
         recompose()
         canvas.undoManager?.removeAllActions()
+    }
+    func retrySavingInk() {
+        for page in Array(unsavedBefore.keys) {
+            if let before = unsavedBefore[page],let after = pageDrawings[page] {
+                persistChange(page:page,before:before,after:after)
+            }
+        }
+        if unsavedBefore.isEmpty { reloadStoredInk() }
     }
 
     // MARK: - 几何工具
