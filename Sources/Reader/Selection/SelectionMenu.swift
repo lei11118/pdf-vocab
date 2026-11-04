@@ -20,6 +20,7 @@ final class SelectionMenuController: NSObject {
     var onRemoveHighlight: (() -> Void)?
     /// 当前选词的收录状态(收录与否 + 现有高亮色),菜单构建时取一次
     var vocabStateProvider: (() -> (collected: Bool, colorName: String?))?
+    var customActions: (() -> [UIMenuElement])?
 
     private(set) var isPresented = false
     private var toolbar: UIVisualEffectView?
@@ -155,6 +156,7 @@ final class SelectionMenuController: NSObject {
 
 extension SelectionMenuController {
     private func menuActions(at sourcePoint:CGPoint) -> UIMenu {
+        if let customActions { return UIMenu(children:customActions()) }
 
         let copy = UIAction(title: "复制", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
             let value = self?.currentText() ?? ""

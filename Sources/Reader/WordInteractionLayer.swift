@@ -126,9 +126,11 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     private var hoverIndex: Int?
     private let interactionSession = WordInteractionSession()
     private var subscription: AnyCancellable?
+    private let selectionMenu = SelectionMenuController()
     var onEdit: (() -> Void)?
     override init(frame: CGRect) {
         super.init(frame: frame)
+        selectionMenu.install(on:self)
         label.numberOfLines = 0; label.font = .systemFont(ofSize: 18)
         label.textColor = .label; picture.contentMode = .scaleToFill
         addSubview(picture); addSubview(label)
@@ -153,10 +155,11 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         }
         let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
         let double = UITapGestureRecognizer(target: self, action: #selector(edit(_:))); double.numberOfTapsRequired = 2
+        tap.delegate = self; double.delegate = self
         tap.require(toFail: double)
         addGestureRecognizer(tap); addGestureRecognizer(double)
         let press = UILongPressGestureRecognizer(target: self, action: #selector(press(_:)))
-        press.minimumPressDuration = 0.4; addGestureRecognizer(press)
+        press.delegate = self; press.minimumPressDuration = 0.4; addGestureRecognizer(press)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(drag(_:)))
         pan.delegate = self; addGestureRecognizer(pan)
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
@@ -165,7 +168,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { interactionSession.clear(); bubble.removeFromSuperview() }
+        if window == nil { interactionSession.clear(); bubble.removeFromSuperview(); selectionMenu.dismiss() }
     }
     required init?(coder: NSCoder) { fatalError() }
     func configure(text: String, image: UIImage?, words: [GraphWord], enabled: Bool) {
@@ -183,6 +186,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         label.frame = rect
         words = image == nil ? textWords(rect: rect) : supplied
         redraw()
+        selectionMenu.updatePosition(animated:false)
     }
     private func textWords(rect: CGRect) -> [GraphWord] {
         guard rect.width > 0, rect.height > 0, !text.isEmpty else { return [] }
@@ -218,8 +222,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         highlight.path = path.cgPath
     }
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
-        guard let index = hit(gesture.location(in: self)) else { selection = nil; redraw(); bubble.isHidden = true; return }
-        selection = index...index; redraw(); translate(words[index].text, at: gesture.location(in: self))
+        selection = nil; redraw(); interactionSession.clear(); selectionMenu.dismiss()
     }
     @objc private func edit(_ gesture: UITapGestureRecognizer) { if image == nil { onEdit?() } }
     @objc private func press(_ gesture: UILongPressGestureRecognizer) {
@@ -229,6 +232,9 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer is UIPanGestureRecognizer else { return true }
         return hit(gestureRecognizer.location(in: self)) != nil
+    }
+    func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldReceive touch:UITouch) -> Bool {
+        !selectionMenu.containsToolbar(touch.view)
     }
     @objc private func drag(_ gesture: UIPanGestureRecognizer) {
         if gesture.state == .began { start = hit(gesture.location(in: self)) }
@@ -256,25 +262,25 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
     }
     private func showMenu(at point: CGPoint) {
         guard !selectedText.isEmpty else { return }
-        becomeFirstResponder()
         let menu = UIMenu(children: [
             UIAction(title: "复制", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in UIPasteboard.general.string = self?.selectedText },
             UIAction(title: "翻译", image: UIImage(systemName: "character.bubble")) { [weak self] _ in guard let self else { return }; self.translate(self.selectedText, at: point) },
             UIAction(title: "朗读", image: UIImage(systemName: "speaker.wave.2")) { [weak self] _ in if let self { WordInteraction.speak(self.selectedText) } }
         ])
-        menuValue = menu
-        if editInteraction == nil {
-            let interaction = UIEditMenuInteraction(delegate: self); addInteraction(interaction); editInteraction = interaction
+        selectionMenu.customActions = { menu.children }
+        selectionMenu.targetRectProvider = { [weak self] _ in
+            guard let self,let selection = self.selection else { return nil }
+            return selection.reduce(CGRect.null) { rect,index in
+                guard self.words.indices.contains(index) else { return rect }
+                let box = self.words[index].rect
+                return rect.union(CGRect(x:box.minX*self.bounds.width,y:box.minY*self.bounds.height,
+                    width:box.width*self.bounds.width,height:box.height*self.bounds.height))
+            }
         }
-        editInteraction?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        selectionMenu.present(at:point)
     }
-    private var menuValue: UIMenu?
-    private var editInteraction: UIEditMenuInteraction?
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .ended else { return }
         interactionSession.squeeze()
     }
-}
-extension WordInteractionView: UIEditMenuInteractionDelegate {
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? { menuValue }
 }

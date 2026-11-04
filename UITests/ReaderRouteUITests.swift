@@ -22,7 +22,8 @@ final class ReaderRouteUITests:XCTestCase {
         let capsule = app.staticTexts["function 函数"].firstMatch
         XCTAssertTrue(capsule.exists)
         let capsuleBefore = capsule.frame
-        capsule.press(forDuration:0.1,thenDragTo:root.withOffset(CGVector(dx:capsuleBefore.midX+40,dy:capsuleBefore.midY+80)))
+        root.withOffset(CGVector(dx:capsuleBefore.midX,dy:capsuleBefore.midY)).press(forDuration:0.1,
+            thenDragTo:root.withOffset(CGVector(dx:capsuleBefore.midX+40,dy:capsuleBefore.midY+80)))
         XCTAssertGreaterThan(capsule.frame.midY,capsuleBefore.midY+50)
         XCTAssertTrue(bar.exists)
         let tool = app.buttons["荧光笔"].firstMatch

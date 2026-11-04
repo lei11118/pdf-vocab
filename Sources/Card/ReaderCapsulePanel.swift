@@ -40,7 +40,7 @@ struct ReaderCapsulePanel<Content:View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose,windowID:title,allowsCompact:false) {
-            ReaderPanelContent(content:content().environment(\.readerPanelClose,onClose))
+            ReaderPanelContent(content:content().environment(\.readerPanelClose,onClose).tint(DS.accent))
         } compact: {
             EmptyView()
         }
