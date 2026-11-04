@@ -1,0 +1,157 @@
+{
+    "schemaVersion":  2,
+    "generatedAt":  "2026-11-04T08:35:21.3944925Z",
+    "title":  "Design System: 跃文 · Research Atlas",
+    "extensions":  {
+                       "typographyMeta":  {
+                                              "display3":  {
+                                                               "displayName":  "System serif display",
+                                                               "purpose":  "SwiftUI largeTitle, serif, bold; Dynamic Type, no fixed font size."
+                                                           },
+                                              "body":  {
+                                                           "displayName":  "System body",
+                                                           "purpose":  "SwiftUI semantic body; native iOS text layout."
+                                                       }
+                                          },
+                       "shadows":  [
+                                       {
+                                           "name":  "floating-tool",
+                                           "value":  "SwiftUI shadow(color: DS.reliefDark.opacity(0.23), radius: 12, x: 0, y: 5)",
+                                           "purpose":  "Floating tools, native pt units; dynamic light/dark shadow color."
+                                       },
+                                       {
+                                           "name":  "hover-definition",
+                                           "value":  "SwiftUI shadow(color: .black.opacity(0.12), radius: 12, y: 5)",
+                                           "purpose":  "Content-sized word hover bubble."
+                                       }
+                                   ],
+                       "motion":  [
+                                      {
+                                          "name":  "fast",
+                                          "value":  "0.16s",
+                                          "purpose":  "Short state feedback."
+                                      },
+                                      {
+                                          "name":  "base",
+                                          "value":  "0.24s",
+                                          "purpose":  "General duration."
+                                      },
+                                      {
+                                          "name":  "slow",
+                                          "value":  "0.34s",
+                                          "purpose":  "Page transition duration."
+                                      },
+                                      {
+                                          "name":  "spring",
+                                          "value":  "SwiftUI response: 0.30, dampingFraction: 0.86",
+                                          "purpose":  "Native spring."
+                                      },
+                                      {
+                                          "name":  "quickSpring",
+                                          "value":  "SwiftUI response: 0.22, dampingFraction: 0.90",
+                                          "purpose":  "Control feedback; spatial transforms respect Reduce Motion."
+                                      }
+                                  ],
+                       "breakpoints":  [
+                                           {
+                                               "name":  "page-margin",
+                                               "value":  "600pt"
+                                           }
+                                       ]
+                   },
+    "components":  [
+                       {
+                           "name":  "Primary Button",
+                           "kind":  "button",
+                           "refersTo":  "button-primary",
+                           "description":  "Light-mode native DSPillButtonStyle translation; web preview does not validate UIKit input.",
+                           "html":  "\u003cbutton class=\"ds-primary\"\u003eRead\u003c/button\u003e",
+                           "css":  ".ds-primary{background:#245C4A;color:#FFFFFF;border:0;border-radius:18px;padding:0 24px;min-height:48px;font-family:system-ui;font-weight:600;box-shadow:0 5px 12px rgb(194 196 183 / 23%)}.ds-primary:hover{opacity:.95}.ds-primary:focus-visible{outline:2px solid #245C4A;outline-offset:3px}.ds-primary:active{opacity:.9}"
+                       },
+                       {
+                           "name":  "Secondary Button",
+                           "kind":  "button",
+                           "refersTo":  "button-secondary",
+                           "description":  "Secondary control surface.",
+                           "html":  "\u003cbutton class=\"ds-secondary\"\u003eExport\u003c/button\u003e",
+                           "css":  ".ds-secondary{background:#F3F0E9;color:#203D34;border:0;border-radius:18px;padding:0 24px;min-height:48px;font-family:system-ui;font-weight:600;box-shadow:0 5px 12px rgb(194 196 183 / 23%)}.ds-secondary:hover{opacity:.95}.ds-secondary:focus-visible{outline:2px solid #245C4A}.ds-secondary:active{outline:1px solid rgb(80 99 91 / 20%)}"
+                       },
+                       {
+                           "name":  "Search Field",
+                           "kind":  "input",
+                           "refersTo":  "search-field",
+                           "description":  "Native DSSearchField visual translation, not a native focus test.",
+                           "html":  "\u003cinput class=\"ds-search\" aria-label=\"Search\" placeholder=\"Search\"\u003e",
+                           "css":  ".ds-search{background:#F3F0E9;color:#203D34;border:1px solid rgb(80 99 91 / 20%);border-radius:14px;padding:0 16px;min-height:50px;font:inherit;font-family:system-ui}.ds-search::placeholder{color:#626D64}.ds-search:hover{border-color:#50635B}.ds-search:focus-visible{outline:1px solid rgb(36 92 74 / 60%)}"
+                       },
+                       {
+                           "name":  "Selected Chip",
+                           "kind":  "chip",
+                           "refersTo":  "chip-selected",
+                           "description":  "30pt visual chip within a minimum 44pt action target.",
+                           "html":  "\u003cbutton class=\"ds-chip-hit\"\u003e\u003cspan class=\"ds-chip\"\u003eAll\u003c/span\u003e\u003c/button\u003e",
+                           "css":  ".ds-chip-hit{border:0;background:transparent;min-width:44px;min-height:44px;padding:0}.ds-chip{display:inline-flex;align-items:center;min-height:30px;padding:0 12px;border-radius:999px;background:#DFEAE3;color:#245C4A;font-family:system-ui;font-size:.8rem;font-weight:500}.ds-chip-hit:hover{opacity:.95}.ds-chip-hit:focus-visible{outline:2px solid #245C4A}.ds-chip-hit:active{opacity:.9}"
+                       },
+                       {
+                           "name":  "Paper Card",
+                           "kind":  "card",
+                           "refersTo":  "paper-card",
+                           "description":  "Flat native content surface. Sample text only.",
+                           "html":  "\u003carticle class=\"ds-paper\"\u003e\u003cstrong class=\"ds-word\"\u003eatlas\u003c/strong\u003e\u003cp class=\"ds-definition\"\u003eA collection of maps.\u003c/p\u003e\u003c/article\u003e",
+                           "css":  ".ds-paper{background:#FFFDF8;color:#203D34;border-radius:20px;padding:16px}.ds-word{font-family:ui-serif,serif;font-weight:700}.ds-definition{font-family:system-ui;color:#50635B;margin:8px 0 0}"
+                       },
+                       {
+                           "name":  "Adaptive Page Heading",
+                           "kind":  "nav",
+                           "description":  "DSPageHeading hierarchy and rule; actual navigation remains native.",
+                           "html":  "\u003cnav class=\"ds-heading\" aria-label=\"Page heading\"\u003e\u003cstrong class=\"ds-title\"\u003eLibrary\u003c/strong\u003e\u003cbutton class=\"ds-action\"\u003eAdd\u003c/button\u003e\u003c/nav\u003e",
+                           "css":  ".ds-heading{display:flex;flex-wrap:wrap;gap:24px;align-items:center;padding-bottom:16px;border-bottom:1px solid rgb(36 92 74 / 22%);color:#203D34}.ds-title{font-family:ui-serif,serif;font-weight:700}.ds-action{margin-left:auto;background:#F3F0E9;color:#203D34;border:0;border-radius:18px;min-height:44px;padding:0 16px;font-family:system-ui}.ds-action:hover{opacity:.95}.ds-action:focus-visible{outline:2px solid #245C4A}.ds-action:active{opacity:.9}"
+                       },
+                       {
+                           "name":  "Word Hover Bubble",
+                           "kind":  "custom",
+                           "description":  "Native WordBubbleContent visual translation; actual dimensions depend on native font measurement and word anchor.",
+                           "html":  "\u003caside class=\"ds-hover\"\u003e\u003cstrong\u003eatlas\u003c/strong\u003e\u003cdiv class=\"ds-hover-detail\"\u003eA collection of maps.\u003c/div\u003e\u003c/aside\u003e",
+                           "css":  ".ds-hover{display:inline-flex;flex-direction:column;gap:8px;padding:12px;border-radius:16px;background:#FFFDF8;color:#203D34;box-shadow:0 5px 12px rgb(0 0 0 / 12%);font-family:system-ui}.ds-hover-detail{color:#50635B;max-height:12em;overflow:auto;font-size:.8rem}"
+                       }
+                   ],
+    "narrative":  {
+                      "northStar":  "研究图册",
+                      "donts":  [
+                                    "**Don\u0027t** 恢复旧版双向全界面新拟态、蓝紫主色或构成主义约束。",
+                                    "**Don\u0027t** 让选区编辑栏的外部遮罩阻断浮窗和弧形盘拖动。",
+                                    "**Don\u0027t** 用固定字号、固定长气泡或单击自动选词破坏当前交互约定。",
+                                    "**Don\u0027t** 把 sidecar 的 HTML/CSS 转译预览当作原生渲染或硬件验证证据。"
+                                ],
+                      "keyCharacteristics":  [
+                                                 "暖纸与墨绿建立内容层级。",
+                                                 "衬线学习内容与系统操作文字分工。",
+                                                 "内容面安静，浮动工具保留有限深度。",
+                                                 "窗口、选区与笔具可同时操作。"
+                                             ],
+                      "dos":  [
+                                  "**Do** 从 `DesignSystem.swift` 的语义令牌生成新页面，并同时检查明暗色与 Dynamic Type。",
+                                  "**Do** 保留真实书名、词条、出处、用户笔迹、图谱与所有已有业务入口。",
+                                  "**Do** 用实际 SwiftUI 截图检查窄窗、长中文和选中状态，用真实 iPad 验证触控与 Pencil。",
+                                  "**Do** 把代码检查、截图证据和真机验证分别记录，未验证项明确保留。"
+                              ],
+                      "overview":  "以田野研究图册的层次、纸面和留白组织真实文档与词汇。暖纸底、墨绿重点、系统衬线词条形成稳定的阅读秩序；操作区使用原生语义字体和 SF Symbols。首页继续阅读为主区，词汇与图谱提供可操作的次级入口；具体页面构图见 `docs/ui-068-direction.md`，不把单页构图强制用于所有页面。\n\n这是 iPad 原生 SwiftUI / UIKit 系统，按代码提取并记录，不依赖网页框架、外部字体或 AI 概念图。令牌来源为 `Sources/App/DesignSystem.swift`；交互补充来源为窗口、选区、悬浮释义与图谱组件。当前文档描述实现和设计约束，不宣称验证已通过。`.impeccable/review/first` 中的首轮截图属于此前 `prior9c1d` 状态，不能证明本轮视觉结果；新版截图和真机触控、Pencil 手感、帧率仍需单独验收。",
+                      "rules":  [
+                                    {
+                                        "section":  "colors",
+                                        "body":  "现有笔色、高亮、封面与图谱内容颜色仍保留各自语义；全局改色不得把用户内容重新染成品牌色。frontmatter 聚焦复用界面令牌，并非穷举源码所有内容色。",
+                                        "name":  "The Content Color Rule"
+                                    },
+                                    {
+                                        "section":  "typography",
+                                        "body":  "字号和行高由系统语义文本样式与 Dynamic Type 决定，不把默认字号冻结成视觉令牌。frontmatter 省略固定 `fontSize` / `lineHeight` 是有意选择。页头在阅读浮窗中降为 `title2`，正文允许多行；图标尺寸不等于正文字号。",
+                                        "name":  "The Semantic Type Rule"
+                                    },
+                                    {
+                                        "section":  "elevation",
+                                        "body":  "内容卡保持平静，浮层才承担主要深度；不为每个嵌套图标叠加双向阴影。按压组件仍保留源码已有的局部轮廓与缩放反馈。",
+                                        "name":  "The Quiet Surface Rule"
+                                    }
+                                ]
+                  }
+}

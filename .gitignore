@@ -28,3 +28,8 @@ dist/
 
 # Reproducible lexical source downloads
 tools/lexical-cache/
+
+# Local native UI evidence and skill runtime state (design.json is versioned).
+.impeccable/review/
+.impeccable/questions/
+.codex-068-review-*/
