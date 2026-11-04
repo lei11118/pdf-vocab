@@ -72,7 +72,18 @@ struct LibraryView: View {
                 .frame(maxWidth: DS.Layout.contentMaxWidth)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.m)
-                .background(DS.background1)
+                .background {
+                    Rectangle()
+                        .fill(.regularMaterial)
+                        .overlay(DS.background1.opacity(0.28))
+                        .ignoresSafeArea(edges: .top)
+                }
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(DS.foreground1.opacity(0.08))
+                        .frame(height: 1)
+                        .allowsHitTesting(false)
+                }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: DocumentRecord.self) { doc in
