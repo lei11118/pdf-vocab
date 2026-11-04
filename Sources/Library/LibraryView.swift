@@ -72,10 +72,18 @@ struct LibraryView: View {
                 .frame(maxWidth: DS.Layout.contentMaxWidth)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.m)
+                // The content keeps its reading measure; the material spans the window.
+                .frame(maxWidth: .infinity)
                 .background {
                     Rectangle()
-                        .fill(.regularMaterial)
-                        .overlay(DS.background1.opacity(0.28))
+                        .fill(.thinMaterial)
+                        .overlay {
+                            LinearGradient(
+                                colors: [DS.background1.opacity(0.20), DS.background1.opacity(0.06)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
                         .ignoresSafeArea(edges: .top)
                 }
                 .overlay(alignment: .bottom) {
