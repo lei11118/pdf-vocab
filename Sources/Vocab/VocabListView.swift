@@ -793,7 +793,7 @@ struct VocabListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { contextWord = nil }
+                    if panelClose == nil { Button("关闭") { contextWord = nil } }
                 }
             }
         }

@@ -463,6 +463,7 @@ struct PencilArcItem: Identifiable {
 
 struct PencilToolCustomization: View {
     @ObservedObject var session: PencilToolSession
+    @Environment(\.readerPanelClose) private var panelClose
     var onActivate: (() -> Void)? = nil
     @State private var name = ""
     var body: some View {
@@ -496,7 +497,9 @@ struct PencilToolCustomization: View {
                     }
                 }
             }.navigationTitle("自定义手写工具").navigationBarTitleDisplayMode(.inline)
-                .toolbar { EditButton() }
+                .toolbar {
+                    ToolbarItem(placement:panelClose == nil ? .topBarTrailing : .topBarLeading) { EditButton() }
+                }
         }
     }
 }

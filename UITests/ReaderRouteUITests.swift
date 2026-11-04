@@ -22,6 +22,10 @@ final class ReaderRouteUITests:XCTestCase {
                     let search = app.textFields["在文档中搜索"].firstMatch
                     XCTAssertTrue(search.waitForExistence(timeout:5),"search field must be visible in the window")
                 }
+                if label == "自定义手写工具" {
+                    XCTAssertTrue(app.buttons["编辑"].firstMatch.waitForExistence(timeout:5),"custom tools remain editable")
+                    XCTAssertTrue(app.buttons["编辑"].firstMatch.isHittable)
+                }
                 if label == "知识图谱" {
                     let addText = app.buttons["文本框"].firstMatch
                     XCTAssertTrue(addText.waitForExistence(timeout:5),"graph must have an edit entry")
