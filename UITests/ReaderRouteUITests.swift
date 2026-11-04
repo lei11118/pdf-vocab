@@ -1,6 +1,21 @@
 import XCTest
+import UIKit
 
 final class ReaderRouteUITests:XCTestCase {
+    func testWorkspaceNavigationAtPortraitAndLandscapeWidths() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launch()
+        XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 15))
+        for (orientation,name) in [(UIDeviceOrientation.landscapeLeft,"workspace-landscape"),(.portrait,"workspace-portrait")] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 5))
+            let snapshot = XCTAttachment(screenshot: app.screenshot())
+            snapshot.name = name; snapshot.lifetime = .keepAlways; add(snapshot)
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
     func testResizeAcrossCapsuleThresholdAndMoveArcWithSelectionBarOpen() {
         let app = XCUIApplication()
         app.launchArguments = ["--gesture-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]

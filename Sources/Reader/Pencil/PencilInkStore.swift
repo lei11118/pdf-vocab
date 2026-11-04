@@ -54,7 +54,7 @@ struct PencilInkStore: Sendable {
             try db.execute(sql: "INSERT INTO pencil_ink (docSha,page,data,scale,updatedAt) VALUES (?,?,?,1,?) ON CONFLICT(docSha,page) DO UPDATE SET data=excluded.data,scale=1,updatedAt=excluded.updatedAt", arguments: [docSha,page,merged.data(),Date()])
             return merged
         }
-        if result != nil { NotificationCenter.default.post(name: Self.didChange, object: docSha, userInfo: ["source": source as Any]) }
+        if result != nil { NotificationCenter.default.post(name: Self.didChange, object: docSha, userInfo: ["source": source?.uuidString ?? ""]) }
         return result
     }
 

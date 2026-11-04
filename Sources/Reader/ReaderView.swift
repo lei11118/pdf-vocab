@@ -394,6 +394,11 @@ struct ReaderView: View {
                 }
 
                 Menu {
+                    if supportsMultipleWindows {
+                        Button {
+                            openWindow(id: PDFReaderWindowRequest.sceneID, value: PDFReaderWindowRequest(docSha: doc.sha256, page: currentPage))
+                        } label: { Label("在新窗口打开当前 PDF", systemImage: "macwindow.badge.plus") }
+                    }
                     Button("自定义手写工具") { showToolCustomization = true }
                     Button("全文搜索") { showSearch = true }
                     Button("目录与书签") { showOutline = true }

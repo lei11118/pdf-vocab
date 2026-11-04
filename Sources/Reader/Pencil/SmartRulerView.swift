@@ -18,6 +18,9 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     var angleDegrees:Double { Double(angle)*180 / .pi }
     var rulerLength:CGFloat { hypot(bounds.width,bounds.height)*2 }
     var isOn=false { didSet { isHidden = !isOn;setNeedsDisplay() } }
+    private(set) var measuredLength: CGFloat?
+    private var measurementPoint: CGPoint?
+    private var measurementRevision = 0
     private var dragOrigin=CGPoint.zero
     private var turnOrigin=CGPoint.zero
     private var turnPivot=CGPoint.zero
@@ -86,8 +89,25 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
         guard abs(abs(distance)-half)<=18 else { return nil }
         let normal=CGPoint(x:-sin(angle),y:cos(angle)),direction=CGPoint(x:cos(angle),y:sin(angle))
         let origin=CGPoint(x:rulerPosition.x+normal.x*half*(distance<0 ? -1:1),y:rulerPosition.y+normal.y*half*(distance<0 ? -1:1))
-        return { p in let t=(p.x-origin.x)*direction.x+(p.y-origin.y)*direction.y
-            return CGPoint(x:origin.x+t*direction.x,y:origin.y+t*direction.y) }
+        let start = (point.x-origin.x)*direction.x+(point.y-origin.y)*direction.y
+        let scale = poseScale
+        measurementRevision += 1
+        return { [weak self] p in
+            let t=(p.x-origin.x)*direction.x+(p.y-origin.y)*direction.y
+            let projected = CGPoint(x:origin.x+t*direction.x,y:origin.y+t*direction.y)
+            self?.measuredLength = abs(t-start)/scale
+            self?.measurementPoint = CGPoint(x:projected.x-normal.x*(distance<0 ? -24:24),y:projected.y-normal.y*(distance<0 ? -24:24))
+            self?.setNeedsDisplay()
+            return projected
+        }
+    }
+    func finishMeasurement() {
+        measurementRevision += 1
+        let revision = measurementRevision
+        DispatchQueue.main.asyncAfter(deadline: .now()+0.8) { [weak self] in
+            guard let self, self.measurementRevision == revision else { return }
+            self.measuredLength = nil; self.measurementPoint = nil; self.setNeedsDisplay()
+        }
     }
     override func point(inside point:CGPoint,with event:UIEvent?)->Bool {
         isOn && bounds.contains(point) && abs(signedDistance(point))<=halfHeight+6
@@ -137,7 +157,22 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
             if tick%5==0 { (String(tick*10) as NSString).draw(at:CGPoint(x:x+2,y:-half+17),withAttributes:[.font:UIFont.monospacedDigitSystemFont(ofSize:9,weight:.medium),.foregroundColor:UIColor.secondaryLabel]) }
             tick+=1
         }
-        (angleLabel as NSString).draw(at:CGPoint(x:-22,y:-7),withAttributes:[.font:UIFont.monospacedDigitSystemFont(ofSize:13,weight:.semibold),.foregroundColor:UIColor.systemBlue])
         ctx.restoreGState()
+        // Labels stay upright and readable; the ruler's document pose is unchanged.
+        drawBadge(angleLabel, at: rulerPosition, circular: true)
+        if let measuredLength, let measurementPoint {
+            drawBadge(String(format: "%.0f pt", measuredLength), at: measurementPoint, circular: false)
+        }
+    }
+    private func drawBadge(_ text: String, at point: CGPoint, circular: Bool) {
+        let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: UIColor.label]
+        let size = (text as NSString).size(withAttributes: attrs)
+        let width = circular ? max(42,size.width+16) : size.width+16
+        let height: CGFloat = circular ? 42 : 28
+        let center = CGPoint(x: min(max(point.x,width/2+4),bounds.width-width/2-4), y: min(max(point.y,height/2+4),bounds.height-height/2-4))
+        let rect = CGRect(x:center.x-width/2,y:center.y-height/2,width:width,height:height)
+        UIColor.secondarySystemBackground.withAlphaComponent(0.96).setFill()
+        UIBezierPath(roundedRect:rect,cornerRadius:height/2).fill()
+        (text as NSString).draw(at:CGPoint(x:rect.midX-size.width/2,y:rect.midY-size.height/2),withAttributes:attrs)
     }
 }

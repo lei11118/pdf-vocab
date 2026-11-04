@@ -54,6 +54,7 @@ final class MetalInkHost: UIView {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     /// Ruler geometry is defined in viewport coordinates.
+    var strokeProjectionDidEnd: (() -> Void)?
     var strokeProjector: ((CGPoint) -> ((CGPoint) -> CGPoint)?)?
     var isDrawingEnabled: Bool {
         get { drawingEnabled }
@@ -106,7 +107,7 @@ final class MetalInkHost: UIView {
         if inkObserver == nil {
             inkObserver = NotificationCenter.default.addObserver(forName: PencilInkStore.didChange, object: nil, queue: .main) { [weak self] note in
                 guard let self, note.object as? String == self.docSha,
-                      note.userInfo?["source"] as? UUID != self.editorID else { return }
+                      note.userInfo?["source"] as? String != self.editorID.uuidString else { return }
                 self.pendingPeerRefresh = true
                 self.refreshPeerInkIfIdle()
             }
@@ -169,9 +170,10 @@ final class MetalInkHost: UIView {
                 if let touch = touches.first(where: { $0.type == .pencil }) { self.erase(at: touch.location(in: self.canvas)) }
                 self.finishErase()
             } else { self.canvas.handleEnded(touches, event: event) }
+            self.strokeProjectionDidEnd?()
             self.inputActive = false; self.refreshPeerInkIfIdle()
         }
-        grab.onCancelled = { [weak self] in self?.laser.clear();self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled(); self?.inputActive = false; self?.refreshPeerInkIfIdle() }
+        grab.onCancelled = { [weak self] in self?.laser.clear();self?.cancelEdit(); self?.finishErase(); self?.canvas.handleCancelled(); self?.strokeProjectionDidEnd?(); self?.inputActive = false; self?.refreshPeerInkIfIdle() }
         pdf.addGestureRecognizer(grab); pencilGrab = grab
     }
 
@@ -428,6 +430,7 @@ final class MetalInkHost: UIView {
     private func trimPageCache() {
         guard pages.count > 8, transformBefore.isEmpty, eraseBefore.isEmpty else { return }
         pages = pages.filter { boxes[$0.key] != nil || selected[$0.key] != nil }
+        savedPages = savedPages.filter { pages[$0.key] != nil }
     }
     func clearInkSelection() {
         if transforming { endInkTransform(cancelled:true) }

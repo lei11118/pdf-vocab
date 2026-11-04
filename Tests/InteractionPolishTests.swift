@@ -7,6 +7,20 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testRulerMeasuresAlongEdgeWithoutMovingDocumentPose() throws {
+        let host = UIView(frame: CGRect(x: 0,y: 0,width: 500,height: 500))
+        let ruler = SmartRulerView(length: 500,host: host)
+        host.addSubview(ruler)
+        ruler.isOn = true
+        ruler.setPose(position: CGPoint(x: 250,y: 250),angle: 0)
+        let project = try XCTUnwrap(ruler.projector(startingAt: CGPoint(x: 100,y: 210)))
+        XCTAssertEqual(project(CGPoint(x: 220,y: 203)),CGPoint(x: 220,y: 210))
+        XCTAssertEqual(try XCTUnwrap(ruler.measuredLength),120,accuracy: 0.01)
+        XCTAssertEqual(ruler.rulerPosition,CGPoint(x: 250,y: 250))
+        XCTAssertEqual(ruler.angle,0)
+        XCTAssertEqual(ruler.poseScale,1)
+        XCTAssertNil(ruler.projector(startingAt: CGPoint(x: 100,y: 100)))
+    }
     func testIndependentPDFWindowRequestsKeepPageAndHaveUniqueIdentity() throws {
         let first = PDFReaderWindowRequest(docSha: "document", page: 42)
         let second = PDFReaderWindowRequest(docSha: "document", page: 42)

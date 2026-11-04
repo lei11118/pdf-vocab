@@ -41,16 +41,24 @@ struct LibraryView: View {
                 DS.background1.ignoresSafeArea()
 
                 GeometryReader { geometry in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: DS.Space.xl) {
-                            if query.isEmpty { learningDesk }
-                            bookshelfContent
+                    HStack(spacing: 0) {
+                        if geometry.size.width >= 900 {
+                            workspaceSidebar
+                                .frame(width: 224)
+                                .background(DS.background4)
+                            Divider()
                         }
-                        .padding(DS.Layout.margin(for: geometry.size.width))
-                        .frame(maxWidth: DS.Layout.contentMaxWidth)
-                        .frame(maxWidth: .infinity)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 28) {
+                                if query.isEmpty { learningDesk }
+                                bookshelfContent
+                            }
+                            .padding(DS.Layout.margin(for: geometry.size.width))
+                            .frame(maxWidth: DS.Layout.contentMaxWidth)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .scrollIndicators(.hidden)
                     }
-                    .scrollIndicators(.hidden)
                     .onAppear { viewportWidth = geometry.size.width }
                     .onChange(of: geometry.size.width) { _, width in viewportWidth = width }
                 }
@@ -187,7 +195,14 @@ struct LibraryView: View {
     // MARK: - v0.16.0 Library Home
 
     private var libraryHeader: some View {
-        DSPageHeading(title: "跃文", eyebrow: "READ · NOTE", subtitle: "把英文读成自己的") {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("跃文").font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DS.foreground1)
+                Text("书页、词汇与想法，在这里相遇")
+                    .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
+            }
+            Spacer(minLength: 8)
             HStack(spacing: DS.Space.xs) {
                 Text(Date.now, format: .dateTime.month(.abbreviated).day())
                     .font(DS.Fonts.caption2).foregroundStyle(DS.foreground3)
@@ -211,7 +226,7 @@ struct LibraryView: View {
 
     private var learningDesk: some View {
         Group {
-            if viewportWidth >= 760,let recent = resumeDocument {
+            if viewportWidth >= 760 && viewportWidth < 900,let recent = resumeDocument {
                 HStack(alignment:.top,spacing:24) {
                     VStack(alignment:.leading,spacing:12) { DSSectionHeader(title:"接着读"); resumeCard(recent) }
                         .frame(maxWidth:.infinity)
@@ -220,7 +235,7 @@ struct LibraryView: View {
             } else {
                 VStack(alignment:.leading,spacing:24) {
                     if let recent = resumeDocument { DSSectionHeader(title:"接着读"); resumeCard(recent) }
-                    deskActions
+                    if viewportWidth < 900 { deskActions }
                 }
             }
         }
@@ -258,7 +273,7 @@ struct LibraryView: View {
     private var bookshelfContent: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
             shelfHeading
-            folderStrip
+            if viewportWidth < 900 { folderStrip }
             if !documents.isEmpty { searchField }
             if documents.isEmpty { emptyState }
             else if filteredDocuments.isEmpty && query.isEmpty {
@@ -357,7 +372,7 @@ struct LibraryView: View {
     private var shelfHeading: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(query.isEmpty ? "工作区" : "搜索结果").font(DS.Fonts.title1)
+                Text(query.isEmpty ? (selectedFolder.flatMap { id in folders.first { $0.id == id }?.name } ?? (unfiledOnly ? "未归档" : "全部文档")) : "搜索结果").font(DS.Fonts.title1)
                 Text("\(filteredDocuments.count) 本文档").font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
             }
             Spacer()
@@ -383,6 +398,64 @@ struct LibraryView: View {
                 .foregroundStyle(DS.foreground3)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Stable navigation stays outside the document scroll on a full-width iPad.
+    private var workspaceSidebar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    sidebarRow("全部文档", icon: "books.vertical", selected: selectedFolder == nil && !unfiledOnly, count: documents.count) {
+                        selectedFolder = nil; unfiledOnly = false
+                    }
+                    sidebarRow("未归档", icon: "tray", selected: unfiledOnly) {
+                        selectedFolder = nil; unfiledOnly = true
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("学习空间").font(DS.Fonts.caption).foregroundStyle(DS.foreground2).padding(.horizontal, 12)
+                    sidebarRow("生词本", icon: "text.book.closed", count: vocabCount) { showVocab = true }
+                    sidebarRow("知识图谱", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("文件夹").font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
+                        Spacer()
+                        Button { editingFolder = nil; showFolderEditor = true } label: {
+                            Image(systemName: "folder.badge.plus").frame(width: 44, height: 44)
+                        }.accessibilityLabel("新建文件夹")
+                    }.padding(.leading, 12)
+                    ForEach(folders) { folder in
+                        sidebarRow(folder.name, icon: folder.icon, selected: selectedFolder == folder.id) {
+                            selectedFolder = folder.id; unfiledOnly = false
+                        }
+                        .contextMenu {
+                            Button("修改名称与图标", systemImage: "pencil") { editingFolder = folder; showFolderEditor = true }
+                            Button("删除文件夹", systemImage: "trash", role: .destructive) { pendingFolderDelete = folder }
+                        }
+                    }
+                }
+            }.padding(16)
+        }.scrollIndicators(.hidden)
+    }
+
+    private func sidebarRow(_ title: String, icon: String, selected: Bool = false, count: Int? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).frame(width: 22)
+                Text(title).multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                if let count { Text(count.formatted()).font(DS.Fonts.caption).monospacedDigit() }
+            }
+            .font(DS.Fonts.subhead)
+            .foregroundStyle(selected ? DS.onAccent : DS.foreground1)
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .frame(minHeight: 48)
+            .background(selected ? DS.accent : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var folderStrip: some View {

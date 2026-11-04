@@ -1682,12 +1682,12 @@ final class ReaderCoordinator: NSObject {
             self?.rulerOverlay?.projector(startingAt: point)
         }
 
+        metalHost?.strokeProjectionDidEnd = { [weak self] in self?.rulerOverlay?.finishMeasurement() }
         let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
         DiagLog.log("pencil: apply ink=\(Self.inkSummary(tool)) kind=\(session.kind.rawValue) w=\(String(format: "%.1f", session.width)) ruler=\(session.rulerActive ? 1 : 0) err=\(session.eraserWhole ? 1 : 0) took=\(ms)ms")
     }
 
-    /// v0.35.0:显示/隐藏屏幕固定尺子。只在书写模式里显示;位置永远是视口中线,
-    /// 滚动/缩放都不动,关闭再打开也不改位置(它没有位置状态)。
+    /// 只在书写模式显示；开启时居中，之后保持文档坐标中的位置与角度。
     private func setRulerOverlayVisible(_ on: Bool) {
         guard let ruler = rulerOverlay else { return }
         ruler.bindDocument(pdfView?.documentView)

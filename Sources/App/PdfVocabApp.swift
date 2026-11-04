@@ -102,7 +102,7 @@ private struct PDFReaderWindow: View {
                 ReaderView(doc: doc, store: store, jumpTarget: VocabJumpTarget(docSha: doc.sha256, docTitle: doc.title, page: request.page, term: "", rectsJSON: nil))
                     .environment(\.readerPanelClose, { dismissWindow(id: PDFReaderWindowRequest.sceneID, value: request) })
             } else {
-                ContentUnavailableView("?????", systemImage: "doc.questionmark", description: Text("??????????????????"))
+                ContentUnavailableView("文档不可用", systemImage: "doc.questionmark", description: Text("文档可能已删除，请返回书库重新打开。"))
             }
         }
     }
