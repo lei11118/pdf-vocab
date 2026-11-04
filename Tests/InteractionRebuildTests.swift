@@ -38,6 +38,28 @@ final class InteractionRebuildTests: XCTestCase {
             }
         }
     }
+    func testMoreThanTwelveToolsRemainDistinctAndReachable() {
+        for width:CGFloat in [834,1194] {
+            let bounds = CGSize(width:width,height:900)
+            XCTAssertGreaterThanOrEqual(ToolArcConfig.visibleToolCapacity(in:bounds),32)
+            for left in [false,true] {
+                for count in [13,20,32] {
+                    let geometry = ToolArcGeometry(anchor:CGPoint(x:width/2,y:450),bounds:bounds,count:count,leftHanded:left)
+                    var previous:CGPoint?
+                    for index in 0..<count {
+                        let point = geometry.position(index,count:count,upper:false)
+                        XCTAssertEqual(geometry.index(at:point,count:count,upper:false),index)
+                        XCTAssertGreaterThanOrEqual(point.x,ToolArcConfig.diameter/2)
+                        XCTAssertLessThanOrEqual(point.x,width-ToolArcConfig.diameter/2)
+                        XCTAssertGreaterThanOrEqual(point.y,ToolArcConfig.diameter/2)
+                        XCTAssertLessThanOrEqual(point.y,bounds.height-ToolArcConfig.diameter/2)
+                        if let previous { XCTAssertGreaterThan(hypot(point.x-previous.x,point.y-previous.y),ToolArcConfig.diameter) }
+                        previous = point
+                    }
+                }
+            }
+        }
+    }
     func testFullDefinitionNeverDropsLateSources() {
         let definitions = (1...100).map { "【source\($0)】meaning\($0)" }.joined(separator:"\n")
         let e = DictEntry(word:"test",phonetic:"test",translation:definitions,definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)

@@ -15,6 +15,24 @@ enum ToolArcConfig {
     static let hoverDelay: UInt64 = 200_000_000
     static let animation = 0.24
     static let safeMargin: CGFloat = 28
+    static let maximumHalfSweep: CGFloat = .pi - 0.35
+    static func maximumRadius(in bounds:CGSize) -> CGFloat {
+        max(50,(min(bounds.width,bounds.height)-2*safeMargin-2*gap)/2)
+    }
+    /// Limit only when a complete, non-overlapping arc would no longer fit.
+    static func visibleToolCapacity(in bounds:CGSize) -> Int {
+        let available = maximumRadius(in:bounds) * maximumHalfSweep
+        var count = 0
+        while count < 256 {
+            let next = count + 1
+            let start = max(0,(next-min(4,next))/2)
+            let middle = CGFloat(start * 2 + min(4,next) - 1)/2
+            let extent = max(middle,CGFloat(next-1)-middle) * (diameter+4) + diameter/2
+            if extent > available { break }
+            count = next
+        }
+        return max(1,count)
+    }
 }
 
 struct ToolArcGeometry {
@@ -25,7 +43,11 @@ struct ToolArcGeometry {
     var upperCount = 7
     // Tangent/chord tilt is measured from the screen horizontal, as requested.
     var mid: CGFloat { -ToolArcConfig.tilt }
-    var radius: CGFloat { ToolArcConfig.effectiveRadius(in:bounds) }
+    var radius: CGFloat {
+        let extent = max(toolMid,CGFloat(max(count-1,0))-toolMid)*pitch + ToolArcConfig.diameter/2
+        let required = extent/ToolArcConfig.maximumHalfSweep
+        return min(ToolArcConfig.maximumRadius(in:bounds),max(ToolArcConfig.effectiveRadius(in:bounds),required))
+    }
     var center: CGPoint {
         let distance = radius * cos(ToolArcConfig.sweep / 2)
         return CGPoint(x: anchor.x - sin(mid) * distance * (leftHanded ? -1 : 1), y: anchor.y + cos(mid) * distance)

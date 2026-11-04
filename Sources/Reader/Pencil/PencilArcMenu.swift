@@ -22,9 +22,7 @@ struct PencilArcMenu: View {
     @State private var appeared = false
     @State private var customizing = false
     @State private var showActions = true
-    private var capacity: Int {
-        12
-    }
+    private var capacity: Int { ToolArcConfig.visibleToolCapacity(in:bounds) }
     private var tools: [PencilArcItem] { Array(session.arcItems.prefix(capacity)) }
     private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded, upperCount:upper.count) }
     private var upper: [(String, String)] {

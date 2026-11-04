@@ -490,6 +490,16 @@ struct PencilToolCustomization: View {
                         }
                     }.onDelete(perform:session.deletePresets).onMove(perform:session.movePresets)
                 }
+                if onActivate != nil {
+                    Section("选择内置工具") {
+                        ForEach(session.visibleKinds) { kind in
+                            Button {
+                                session.activate(PencilArcItem(id:kind.rawValue,kind:kind,name:kind.label,preset:nil))
+                                onActivate?()
+                            } label: { Label(kind.label,systemImage:kind.systemImage) }
+                        }
+                    }
+                }
                 Section("工具盘显示") {
                     ForEach(PencilToolKind.allCases) { kind in
                         Toggle(kind.label,isOn:Binding(get:{!session.hiddenSet.contains(kind.rawValue)},set:{show in
