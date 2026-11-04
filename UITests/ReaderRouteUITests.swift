@@ -33,6 +33,10 @@ final class ReaderRouteUITests:XCTestCase {
                     XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:10),.completed)
                     addText.tap()
                     XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout:5),"a new graph text box must be editable")
+                    app.buttons["图谱操作"].firstMatch.tap()
+                    let editSelected = app.buttons["编辑选中文本"].firstMatch
+                    XCTAssertTrue(editSelected.waitForExistence(timeout:5),"selected text has an explicit edit action")
+                    editSelected.tap()
                 }
                 close.tap()
                 XCTAssertTrue(app.buttons["更多"].waitForExistence(timeout:5),"must remain in document after \(label), writing=\(writing)")

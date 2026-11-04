@@ -92,6 +92,7 @@ struct KnowledgeGraphView: View {
                     Divider()
                     Button { add(.text) } label: { Label("文本框", systemImage: "text.badge.plus") }
                     Button { add(.ink) } label: { Label("标记框", systemImage: "pencil.tip.crop.circle.badge.plus") }
+                    Button("编辑选中文本") { editSelectedText() }.disabled(!canEditSelectedText)
                     Divider()
                     Button { model.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
                     Button { model.redo() } label: { Label("重做", systemImage: "arrow.uturn.forward") }.disabled(model.redoStack.isEmpty)
@@ -106,21 +107,25 @@ struct KnowledgeGraphView: View {
             .toolbar(panelClose == nil ? .visible : .hidden, for:.navigationBar)
             .safeAreaInset(edge:.top,spacing:0) {
                 if panelClose != nil {
+                    ScrollView(.horizontal,showsIndicators:false) {
                     HStack(spacing:8) {
-                        Button { add(.text) } label: { Label("文本框",systemImage:"text.badge.plus") }.disabled(!model.loaded)
-                        Button { add(.ink) } label: { Label("标记框",systemImage:"pencil.tip.crop.circle.badge.plus") }.disabled(!model.loaded)
+                        Button { add(.text) } label: { Label("文本框",systemImage:"text.badge.plus").lineLimit(1).fixedSize() }.disabled(!model.loaded)
+                        Button { add(.ink) } label: { Label("标记框",systemImage:"pencil.tip.crop.circle.badge.plus").lineLimit(1).fixedSize() }.disabled(!model.loaded)
                         Menu {
                             Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动",systemImage:"hand.draw") }
+                            Button("编辑选中文本") { editSelectedText() }.disabled(!canEditSelectedText)
                             Button("撤销") { model.undo() }.disabled(model.undoStack.isEmpty)
                             Button("重做") { model.redo() }.disabled(model.redoStack.isEmpty)
                             Button("适应画面") { withAnimation(.smooth(duration:0.24)) { fit() } }
                             Button("删除",role:.destructive) { deleteSelection() }.disabled(!canDeleteSelection)
                         } label: { Image(systemName:"ellipsis.circle").frame(width:32,height:36) }
                         .accessibilityLabel("图谱操作")
-                        Spacer(minLength:0)
                     }
+                    .fixedSize(horizontal:true,vertical:false)
+                    .font(.caption.weight(.medium))
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    }
                     .padding(.leading,16).padding(.trailing,48).padding(.vertical,8)
                     .background(DS.background1)
                 }
@@ -154,6 +159,13 @@ struct KnowledgeGraphView: View {
     private var canDeleteSelection: Bool {
         guard let selected else { return false }
         return !model.graph.nodes.contains { $0.id == selected && $0.kind == .document }
+    }
+    private var canEditSelectedText: Bool {
+        model.graph.nodes.contains { $0.id == selected && $0.kind == .text }
+    }
+    private func editSelectedText() {
+        guard canEditSelectedText, let selected else { return }
+        model.checkpoint(); editing = selected
     }
     private func deleteSelection() {
         guard canDeleteSelection, let selected else { return }
