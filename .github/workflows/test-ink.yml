@@ -2,6 +2,11 @@ name: test-ink
 on:
   workflow_dispatch:
     inputs:
+      gesture_only:
+        description: "Run only the continuous floating-window gesture regression"
+        type: boolean
+        required: false
+        default: false
       snapshot_run_id:
         description: "Export UI attachments from an existing test run without repeating tests"
         required: false
@@ -37,7 +42,12 @@ jobs:
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if "iPad" in d["name"]))')
           echo "SIMULATOR_UDID=$DEVICE" >> "$GITHUB_ENV"
-          xcodebuild test -project PdfVocab.xcodeproj -scheme PdfVocab -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath build/InkTests.xcresult CODE_SIGNING_ALLOWED=NO
+          TEST_ARGS=()
+          if [ "${{ inputs.gesture_only }}" = "true" ]; then
+            xcodebuild -help 2>&1 | sed -n '/only-testing/p'
+            TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndMoveArcWithSelectionBarOpen)
+          fi
+          xcodebuild test -project PdfVocab.xcodeproj -scheme PdfVocab -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath build/InkTests.xcresult "${TEST_ARGS[@]}" CODE_SIGNING_ALLOWED=NO
       - uses: actions/upload-artifact@v4
         if: always()
         with:

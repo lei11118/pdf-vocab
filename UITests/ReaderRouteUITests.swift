@@ -24,12 +24,15 @@ final class ReaderRouteUITests:XCTestCase {
             let from = root.withOffset(CGVector(dx:frame.midX,dy:frame.midY))
             from.press(forDuration:0.1,thenDragTo:from.withOffset(CGVector(dx:0,dy:delta)),withVelocity:.slow,thenHoldForDuration:0.1)
         }
-        resizeVertically(42) // 96 -> 138pt, just below the layout threshold.
+        resizeVertically(34) // 96 -> 130pt, below the layout threshold.
         let belowThreshold = grip.frame
-        resizeVertically(4) // 138 -> 142pt: must not cause an 80pt width step.
-        XCTAssertLessThan(abs(grip.frame.midX-belowThreshold.midX),5,"narrow capsule must cross the threshold without a width jump")
+        // Use a real 20pt pan rather than a 4pt nudge that could remain below
+        // UIKit's recognition slop; assert vertical movement actually happened.
+        resizeVertically(20)
+        XCTAssertGreaterThan(grip.frame.midY-belowThreshold.midY,14)
+        XCTAssertLessThan(abs(grip.frame.midX-belowThreshold.midX),18,"narrow capsule must cross the threshold without a width jump")
         XCTAssertTrue(bar.exists)
-        resizeVertically(-46)
+        resizeVertically(-54)
         let capsule = app.staticTexts["function 函数"].firstMatch
         XCTAssertTrue(capsule.exists)
         let capsuleBefore = capsule.frame
