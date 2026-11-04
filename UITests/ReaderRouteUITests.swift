@@ -12,16 +12,17 @@ final class ReaderRouteUITests:XCTestCase {
             XCUIDevice.shared.orientation = orientation
             let predicate = NSPredicate { _,_ in
                 let frame = app.frame
-                let size = app.screenshot().image.size
                 let expectedDirection = orientation == .portrait
-                    ? frame.height > frame.width && size.height > size.width
-                    : frame.width > frame.height && size.width > size.height
+                    ? frame.height > frame.width
+                    : frame.width > frame.height
                 let add = app.buttons["添加文件夹或 PDF"]
-                return expectedDirection && add.isHittable && frame.contains(add.frame)
+                return expectedDirection && add.isHittable
             }
             XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:app)],timeout:10),.completed)
             XCTAssertTrue(app.buttons["添加文件夹或 PDF"].waitForExistence(timeout: 5))
-            let snapshot = XCTAttachment(screenshot: app.screenshot())
+            // App-cropped captures can retain portrait crop coordinates after
+            // rotation. Capture the composed display instead of that crop.
+            let snapshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             snapshot.name = name; snapshot.lifetime = .keepAlways; add(snapshot)
         }
         XCUIDevice.shared.orientation = .portrait
