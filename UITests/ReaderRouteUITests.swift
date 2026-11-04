@@ -101,9 +101,29 @@ final class ReaderRouteUITests:XCTestCase {
         app.buttons["撤销"].tap(); app.buttons["重做"].tap()
         app.buttons["回到阅读模式"].tap()
         app.buttons["更多"].tap(); app.cells.buttons["设置"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["关闭窗口"].firstMatch.waitForExistence(timeout:5))
+        let close = app.buttons["关闭窗口"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["小胶囊模式"].exists)
-        app.buttons["关闭窗口"].firstMatch.tap()
+        func moveFromEdge(_ edge:String, dx:CGFloat, dy:CGFloat) {
+            let before = close.frame
+            let right = before.maxX, top = before.minY
+            let point:CGPoint
+            switch edge {
+            case "top": point = CGPoint(x:right-280,y:top+8)
+            case "bottom": point = CGPoint(x:right-280,y:top+592)
+            case "left": point = CGPoint(x:right-552,y:top+300)
+            default: point = CGPoint(x:right-8,y:top+300)
+            }
+            let start = app.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:point.x,dy:point.y))
+            let finish = start.withOffset(CGVector(dx:dx,dy:dy))
+            start.press(forDuration:0.1,thenDragTo:finish)
+            XCTAssertGreaterThan(abs(close.frame.minX-before.minX),10,"\(edge) edge should move the window")
+        }
+        moveFromEdge("top",dx:-40,dy:30)
+        moveFromEdge("left",dx:20,dy:0)
+        moveFromEdge("right",dx:-20,dy:0)
+        moveFromEdge("bottom",dx:20,dy:0)
+        close.tap()
         XCTAssertTrue(app.buttons["更多"].exists)
     }
 
