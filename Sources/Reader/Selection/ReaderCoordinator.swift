@@ -450,14 +450,8 @@ final class ReaderCoordinator: NSObject {
         provider.flowAxis = view.displayDirection == .horizontal ? .horizontal : .vertical
         // v0.25.0:删除「擦完自动回到上一支笔」—— 用户明确要求选中橡皮(整笔)后要一直保持,
         // 擦完一笔仍留在橡皮上;要换笔自己点。这里不再挂钩任何「手势结束即换工具」的逻辑。
-        // v0.40.0:文档级单画布 —— 整份文档只有 1 块 PKCanvasView,跨页一笔就是一笔。
-        // 旧路径(每页一块画布)保留在设置里,出问题可一键切回,不用等新包。
-        let useSurface = UserDefaults.standard.object(forKey: "documentInkSurface") as? Bool ?? true
-        if useSurface {
-            installInkSurface(on: view, docSha: docSha)
-        } else {
-            view.pageOverlayViewProvider = provider
-        }
+        // One writing owner per reader. Legacy per-page overlays bypass change merging.
+        installInkSurface(on: view, docSha: docSha)
         // v0.30.0:干墨层接手后立刻撤湿墨预览(同一段墨不重复画)
         provider.onInkCommitted = { [weak self] in self?.clearWetAfterCommit() }
         // v0.25.1:新 provider 的橡皮/激光/形状配置默认全是"关",必须把当前会话状态推一次,
@@ -1611,6 +1605,7 @@ final class ReaderCoordinator: NSObject {
 
     /// v0.40.0:装上文档级单画布,并把历史"每页一画布"的墨迹合并进文档坐标系。
     private func installInkSurface(on view: PDFView, docSha: String) {
+        view.pageOverlayViewProvider = nil
         if surfaceDocSha != docSha { engineSession = nil }
         // v0.46.0:自研 Metal 墨迹(默认关,设置里可开)
         let engine = engineSession ?? DocumentInkEngineSession.acquire(docSha:docSha,prefersMetal:UserDefaults.standard.bool(forKey:"metalInk"),containsMetal:{ self.inkStore?.containsMetalPages(docSha:docSha) ?? false })
