@@ -142,6 +142,17 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertLessThanOrEqual(narrow.height,80)
     }
 
+    func testNarrowCapsuleWidthIsContinuousAcrossLayoutThreshold() {
+        XCTAssertEqual(ReaderWindowGeometry.minimumWidth(height:96,allowsCompact:true),180)
+        XCTAssertEqual(ReaderWindowGeometry.minimumWidth(height:220,allowsCompact:true),260)
+        let before = ReaderWindowGeometry.minimumWidth(height:139.9,allowsCompact:true)
+        let after = ReaderWindowGeometry.minimumWidth(height:140.1,allowsCompact:true)
+        XCTAssertLessThan(after-before,0.2)
+        for height in stride(from:CGFloat(64),through:500,by:1) {
+            XCTAssertEqual(ReaderWindowGeometry.minimumWidth(height:height,allowsCompact:false),260)
+        }
+    }
+
     func testGridTracksNegativePanAndKeepsBoundedDensity() {
         for zoom in [CGFloat(0.01),0.1,1,4,40] {
             let spacing = GraphGridLayout.spacing(zoom:zoom)

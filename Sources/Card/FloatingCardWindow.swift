@@ -2,6 +2,16 @@ import SwiftUI
 import Foundation
 import UIKit
 
+enum ReaderWindowGeometry {
+    static func minimumWidth(height:CGFloat,allowsCompact:Bool) -> CGFloat {
+        guard allowsCompact else { return 260 }
+        // A narrow capsule must not jump by 80pt when its content switches at
+        // 140pt. Broaden the reading measure continuously as height increases.
+        let progress = min(1,max(0,(height-96)/124))
+        return 180+80*progress
+    }
+}
+
 /// 选区词卡可沿边拖动、从右下角缩放，并可缩成胶囊。
 /// 移动和缩放使用全局坐标，窗口位置与大小分别持久化。
 struct FloatingCardWindow: View {
@@ -267,7 +277,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         let maxW = max(minSize.width, bounds.width - 16)
         let maxH = max(minSize.height, bounds.height - 16)
         return CGSize(
-            width: min(max(value.width, allowsCompact && value.height < compactThreshold ? minSize.width : 260), maxW),
+            width:min(max(value.width,ReaderWindowGeometry.minimumWidth(height:value.height,allowsCompact:allowsCompact)),maxW),
             height: min(max(value.height, minSize.height), maxH)
         )
     }

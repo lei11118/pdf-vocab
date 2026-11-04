@@ -47,7 +47,7 @@ struct PdfVocabApp: App {
 private struct ReaderGestureAuditView:View {
     @StateObject private var session = PencilToolSession()
     init() {
-        for (key,value) in ["X":48.0,"Y":200.0,"W":300.0,"H":96.0] {
+        for (key,value) in ["X":48.0,"Y":200.0,"W":200.0,"H":96.0] {
             UserDefaults.standard.set(value,forKey:"readerWindow.gesture-audit."+key)
         }
     }
