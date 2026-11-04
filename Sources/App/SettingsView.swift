@@ -110,7 +110,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { closePanel() }
+                    if panelClose == nil { Button("完成") { closePanel() } }
                 }
             }
             .sheet(isPresented: $showRestorePicker) {

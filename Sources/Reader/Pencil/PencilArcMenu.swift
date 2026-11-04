@@ -21,15 +21,14 @@ struct PencilArcMenu: View {
     @State private var reset: Task<Void, Never>?
     @State private var appeared = false
     @State private var customizing = false
-    @State private var toolStart = 0
     @State private var showActions = true
     private var capacity: Int {
         12
     }
-    private var tools: [PencilArcItem] { Array(session.arcItems.dropFirst(toolStart).prefix(capacity)) }
+    private var tools: [PencilArcItem] { Array(session.arcItems.prefix(capacity)) }
     private var geometry: ToolArcGeometry { ToolArcGeometry(anchor: anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded, upperCount:upper.count) }
     private var upper: [(String, String)] {
-        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("chevron.backward", "上一组工具"), ("chevron.forward", "下一组工具"), ("slider.horizontal.3", "自定义工具")]
+        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("slider.horizontal.3", "自定义工具")]
     }
     private var visibleIndices: Range<Int> {
         let base = geometry.initialRange
@@ -77,7 +76,9 @@ struct PencilArcMenu: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: leftExtent)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: rightExtent)
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
-        .readerPanel(isPresented:$customizing,title:"自定义手写工具") { PencilToolCustomization(session:session) }
+        .readerPanel(isPresented:$customizing,title:"自定义手写工具") {
+            PencilToolCustomization(session:session,onActivate:{ customizing = false; onSelect(); onDismiss() })
+        }
         .onChange(of: bounds) { _, _ in onDismiss() }
         .onAppear { withAnimation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82)) { appeared = true } }
         .onDisappear { reset?.cancel() }
@@ -122,15 +123,11 @@ struct PencilArcMenu: View {
         return max(0,(fullTrackHalf-left)/(fullTrackHalf*2))...min(1,(fullTrackHalf+right)/(fullTrackHalf*2))
     }
     private func enabled(_ index: Int) -> Bool {
-        if index == upper.count-3 { return toolStart > 0 }
-        if index == upper.count-2 { return toolStart+capacity < session.arcItems.count }
         return !marking || index > 1 || (index == 0 ? canUndo : canRedo)
     }
     private func activateUpper(_ index: Int) {
         if index == upper.count-1 { customizing = true; return }
         guard enabled(index) else { return }
-        if index == upper.count-3 { toolStart = max(0,toolStart-capacity); leftExtent = 0; rightExtent = 0; return }
-        if index == upper.count-2 { toolStart += capacity; leftExtent = 0; rightExtent = 0; return }
         if !marking || index == 2 { onDismiss(); onScreenshot() }
         else if index == 0 { onUndo() }
         else if index == 1 { onRedo() }

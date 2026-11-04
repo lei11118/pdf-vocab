@@ -13,15 +13,13 @@ struct ReaderView: View {
     @State private var currentPage: Int
     @State private var resolvedURL: URL?
     @State private var optimizing = false
-    @State private var translateText = ""
-    @State private var showTranslate = false
+    @State private var translationRequest: SentenceTranslationRequest?
     @State private var showPageJump = false
     @State private var cardContent: ReaderCardContent?
     @State private var readerHandle = ReaderHandle()
     @State private var saveTask: Task<Void, Never>?
     @State private var showSettings = false
     @State private var showToolCustomization = false
-    @State private var showToolStyle = false
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
@@ -161,9 +159,6 @@ struct ReaderView: View {
 
     private var sheetContent: some View {
         primarySheetContent
-            .readerPanel(isPresented:$showToolStyle,title:"颜色与笔宽") {
-                ScrollView { PencilPaletteView(session:pencilTools,onUndo:{},onRedo:{}).stylePanel.frame(maxWidth:.infinity) }
-            }
             .readerPanel(isPresented:$showToolCustomization,title:"自定义手写工具") { PencilToolCustomization(session:pencilTools) }
             .readerPanel(isPresented: $showAnalyze, title: "词频分析") {
                 if let resolvedURL {
@@ -221,7 +216,7 @@ struct ReaderView: View {
 
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
-        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization || showTranslate || showToolStyle
+        showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -482,8 +477,7 @@ struct ReaderView: View {
                 onDockDragChanged: { translation in handleDockDrag(translation) },
                 onDockDragEnded: { endDockDrag() },
                 onDockReset: { resetDock() },
-                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) },
-                onShowStyle: { showToolStyle = true }
+                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) }
             )
             .background(
                 DockSizeReader { size in
@@ -613,7 +607,8 @@ struct ReaderView: View {
                  occurrenceCount: vs.occurrenceCount(forLemma: key))
             },
             excludedSenses: { key in vs.excludedSenseIndices(forLemma: key) },
-            setSense: { key, idx, keep in vs.setSenseSelection(forLemma: key, idx: idx, keep: keep) }
+            setSense: { key, idx, keep in vs.setSenseSelection(forLemma: key, idx: idx, keep: keep) },
+            collect: { key, surface in readerHandle.coordinator?.collectWord(key:key,surface:surface) ?? false }
         )
     }
 
@@ -636,14 +631,10 @@ struct ReaderView: View {
                 bounds: geo.size,
                 onClose: { cardContent = nil },
                 onSelectWord: { word in
-                    cardContent = .word(word)
                     autoSpeak(word)
                 },
                 vocab: cardVocab,
-                onTranslate: { text in
-                    translateText = text
-                    showTranslate = true
-                }
+                translationRequest:translationRequest
             )
         }
         // v0.11.0(M4-B):Pencil 悬停迷你释义气泡(不拦截触摸)
@@ -840,12 +831,15 @@ struct ReaderView: View {
                         // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
                         guard let info, !info.text.isEmpty else {
                             cardContent = nil
+                            translationRequest = nil
                             return
                         }
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
+                            if cardContent != .word(info.primaryTerm) { translationRequest = nil }
                             cardContent = .word(info.primaryTerm)
                             autoSpeak(info.primaryTerm)
                         } else {
+                            if cardContent != .sentence(info.text,info.wordCount) { translationRequest = nil }
                             cardContent = .sentence(info.text, info.wordCount)
                         }
                     },
@@ -856,8 +850,13 @@ struct ReaderView: View {
                         saveProgressNow()
                     },
                     onTranslate: { text in
-                        translateText = text
-                        showTranslate = true
+                        let count = WordPicker.countWords(in:text)
+                        if SelectionGeometry.isSingleWordText(text) {
+                            cardContent = .word(text)
+                        } else {
+                            cardContent = .sentence(text,count)
+                            translationRequest = SentenceTranslationRequest(text:text)
+                        }
                     }
                 )
                 .id(pdfLoadAttempt)
@@ -919,7 +918,6 @@ struct ReaderView: View {
             guard let resolvedURL else { return }
             await runOCROnce(url:resolvedURL)
         }
-        .readerPanel(isPresented:$showTranslate,title:"句子翻译") { ReaderSentenceTranslationView(text:translateText).id(translateText) }
     }
 
     // MARK: - 阅读位置保存(尾随防抖 2s + 切后台/退出强制保存)
@@ -987,7 +985,7 @@ private struct PageJumpSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { closePanel() }
+                    if panelClose == nil { Button("完成") { closePanel() } }
                 }
             }
             .onDisappear { loader.invalidate() }

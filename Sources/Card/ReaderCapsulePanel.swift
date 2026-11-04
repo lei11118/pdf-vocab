@@ -39,15 +39,10 @@ struct ReaderCapsulePanel<Content:View>: View {
     let onClose: () -> Void
     @ViewBuilder let content: () -> Content
     var body: some View {
-        ReaderWindowSurface(bounds:bounds,onClose:onClose,windowID:title) {
+        ReaderWindowSurface(bounds:bounds,onClose:onClose,windowID:title,allowsCompact:false) {
             ReaderPanelContent(content:content().environment(\.readerPanelClose,onClose))
         } compact: {
-            HStack {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(DS.foreground1).lineLimit(1)
-                Spacer()
-                Button(action:onClose) { Image(systemName:"xmark.circle.fill").frame(width:44,height:44) }
-                    .buttonStyle(.plain).accessibilityLabel("关闭窗口")
-            }.padding(.leading,16).padding(.trailing,52)
+            EmptyView()
         }
     }
 }

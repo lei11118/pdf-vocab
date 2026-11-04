@@ -49,13 +49,15 @@ struct GraphScreenshot: Codable, Equatable {
     var ocrStatus = "pending"
 }
 struct KnowledgeNode: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable { case text, screenshot, ink }
+    enum Kind: String, Codable { case text, screenshot, ink, document }
     var id = UUID().uuidString
     var graphId: String
     var kind: Kind
     var frame: CGRect
     var zIndex = 0
     var text = ""
+    /// Only master-graph book nodes have a target; old graph payloads omit it.
+    var sourceDocumentId: String?
     var screenshot: GraphScreenshot?
     var drawingData = Data()
     var isNew = true
@@ -73,6 +75,7 @@ struct KnowledgeEdge: Codable, Identifiable, Equatable {
     var createdAt = Date()
 }
 struct KnowledgeGraph: Codable, Equatable {
+    static let libraryID = "__library_knowledge_graph_v1__"
     var id: String
     var docId: String
     var offset = CGPoint(x: 80, y: 80)
@@ -82,6 +85,20 @@ struct KnowledgeGraph: Codable, Equatable {
     var migrationVersion = 0
     var createdAt = Date()
     var updatedAt = Date()
+
+    @discardableResult mutating func syncDocuments(_ documents: [DocumentRecord]) -> Bool {
+        var known = Set(nodes.compactMap(\.sourceDocumentId))
+        var index = known.count
+        var changed = false
+        for document in documents where known.insert(document.sha256).inserted {
+            let frame = CGRect(x:(index % 4) * 340,y:(index / 4) * 240,width:300,height:200)
+            nodes.append(KnowledgeNode(graphId:id,kind:.document,frame:frame,
+                                       zIndex:(nodes.map(\.zIndex).max() ?? -1)+1,
+                                       text:document.title,sourceDocumentId:document.sha256,isNew:false))
+            index += 1; changed = true
+        }
+        return changed
+    }
 
     mutating func delete(_ id: String) {
         nodes.removeAll { $0.id == id }

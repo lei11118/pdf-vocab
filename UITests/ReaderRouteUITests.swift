@@ -17,6 +17,19 @@ final class ReaderRouteUITests:XCTestCase {
                 action.tap()
                 let close = app.buttons["关闭窗口"].firstMatch
                 XCTAssertTrue(close.waitForExistence(timeout:10),"window: \(label)")
+                XCTAssertFalse(app.buttons["小胶囊模式"].exists,"function windows stay expanded")
+                if label == "全文搜索" {
+                    let search = app.textFields["在文档中搜索"].firstMatch
+                    XCTAssertTrue(search.waitForExistence(timeout:5),"search field must be visible in the window")
+                }
+                if label == "知识图谱" {
+                    let addText = app.buttons["文本框"].firstMatch
+                    XCTAssertTrue(addText.waitForExistence(timeout:5),"graph must have an edit entry")
+                    let ready = XCTNSPredicateExpectation(predicate:NSPredicate(format:"enabled == true"),object:addText)
+                    XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:10),.completed)
+                    addText.tap()
+                    XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout:5),"a new graph text box must be editable")
+                }
                 close.tap()
                 XCTAssertTrue(app.buttons["更多"].waitForExistence(timeout:5),"must remain in document after \(label), writing=\(writing)")
             }
@@ -59,6 +72,13 @@ final class ReaderRouteUITests:XCTestCase {
         }
         app.buttons["标记模式"].tap()
         let palette = app.scrollViews.containing(.button,identifier:"钢笔").firstMatch
+        let pen = app.buttons["钢笔"].firstMatch
+        for _ in 0..<4 where !pen.isHittable { palette.swipeLeft() }
+        pen.tap()
+        if app.buttons["收起笔刷选项"].exists { app.buttons["收起笔刷选项"].tap() }
+        pen.tap()
+        XCTAssertTrue(app.buttons["收起笔刷选项"].waitForExistence(timeout:5),"second tap shows inline settings")
+        app.buttons["收起笔刷选项"].tap()
         for label in ["钢笔","毛笔","铅笔","荧光笔","蜡笔","套索","形状","激光笔","橡皮"] {
             let tool = app.buttons[label].firstMatch
             for _ in 0..<4 where !tool.isHittable { palette.swipeLeft() }
@@ -73,10 +93,8 @@ final class ReaderRouteUITests:XCTestCase {
         app.buttons["撤销"].tap(); app.buttons["重做"].tap()
         app.buttons["回到阅读模式"].tap()
         app.buttons["更多"].tap(); app.cells.buttons["设置"].firstMatch.tap()
-        let compact = app.buttons["小胶囊模式"].firstMatch
-        XCTAssertTrue(compact.waitForExistence(timeout:5)); compact.tap()
-        app.staticTexts["设置"].firstMatch.doubleTap()
-        XCTAssertTrue(app.buttons["小胶囊模式"].firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["关闭窗口"].firstMatch.waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["小胶囊模式"].exists)
         app.buttons["关闭窗口"].firstMatch.tap()
         XCTAssertTrue(app.buttons["更多"].exists)
     }

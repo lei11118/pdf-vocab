@@ -463,6 +463,7 @@ struct PencilArcItem: Identifiable {
 
 struct PencilToolCustomization: View {
     @ObservedObject var session: PencilToolSession
+    var onActivate: (() -> Void)? = nil
     @State private var name = ""
     var body: some View {
         NavigationStack {
@@ -479,7 +480,10 @@ struct PencilToolCustomization: View {
                 }
                 Section("自定义工具（包含颜色、宽度与工具参数）") {
                     ForEach(session.presets) { preset in
-                        Button { session.activate(PencilArcItem(id:preset.id,kind:preset.state.kind,name:preset.name,preset:preset)) } label: {
+                        Button {
+                            session.activate(PencilArcItem(id:preset.id,kind:preset.state.kind,name:preset.name,preset:preset))
+                            onActivate?()
+                        } label: {
                             Label(preset.name,systemImage:preset.state.kind.systemImage)
                         }
                     }.onDelete(perform:session.deletePresets).onMove(perform:session.movePresets)

@@ -16,14 +16,35 @@ struct FloatingCardWindow: View {
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
-    var onTranslate: ((String) -> Void)? = nil
+    var translationRequest: SentenceTranslationRequest? = nil
+    @StateObject private var sentenceTranslation = SentenceTranslationState()
     var body: some View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose) {
-            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,onTranslate:onTranslate)
+            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab)
                 .environment(\.readerPanelClose, onClose)
+                .environmentObject(sentenceTranslation)
         } compact: {
-            CompactCardView(content:content,onClose:onClose)
+            CompactCardView(content:content,onClose:onClose,sentenceTranslation:sentenceTranslation.displayText)
         }
+        .background {
+            if let request = sentenceTranslation.currentRequest {
+                if #available(iOS 18.0, *) {
+                    SentenceTranslationTask(text:request.text,onResult:{ sentenceTranslation.finish($0, request:request) },
+                                            onError:{ sentenceTranslation.fail($0, request:request) })
+                        .id(request.id)
+                }
+            }
+        }
+        .onAppear { applyTranslationRequest(translationRequest) }
+        .onChange(of:translationRequest) { _, request in applyTranslationRequest(request) }
+        .onChange(of:content) { _, _ in
+            sentenceTranslation.reset()
+            applyTranslationRequest(translationRequest)
+        }
+    }
+    private func applyTranslationRequest(_ request: SentenceTranslationRequest?) {
+        guard let request, case .sentence(let text, _) = content, text == request.text else { return }
+        sentenceTranslation.start(request)
     }
 }
 
@@ -32,6 +53,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     let bounds: CGSize
     let onClose: () -> Void
     var windowID = "word"
+    var allowsCompact = true
     @ViewBuilder var expanded: () -> Expanded
     @ViewBuilder var compact: () -> Compact
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -54,14 +76,14 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     private var storedH: Double { stored("H") }
 
     /// 最小尺寸(可缩成胶囊)
-    private let minSize = CGSize(width: 180, height: 64)
+    private var minSize: CGSize { CGSize(width: 180, height: allowsCompact ? 64 : 220) }
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
     private var defaultSize: CGSize {
         windowID == "word" ? CGSize(width: 320, height: 430) : CGSize(width: 560, height: 600)
     }
 
-    private var isCompact: Bool { size.height < compactThreshold }
+    private var isCompact: Bool { allowsCompact && size.height < compactThreshold }
     /// 形状(v0.6.5):迷你态=真胶囊(半径=高/2);完整态=圆角矩形(30);120–160pt 之间连续过渡。
     private var cornerRadius: CGFloat {
         let capsule = size.height / 2
@@ -77,6 +99,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         // v0.8.0:整窗触摸判定 = 窗口形状——形状之外一律不拦截(交给下层 PDF),杜绝"摸到窗口外的空气也能拖动"
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay { edgeDragAreas }
         .overlay {
             // v0.6.7:白色缩放手柄 = 窗口右下边缘的一段弧(半径随圆角连续变化,始终贴合)
             CornerGripArc(cornerRadius: cornerRadius)
@@ -89,12 +112,24 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .bottomTrailing) { resizeHitArea }
+        .overlay(alignment: .topTrailing) {
+            Button(action:onClose) {
+                Image(systemName:"xmark")
+                    .font(.system(size:16, weight:.medium))
+                    .foregroundStyle(DS.foreground2)
+                    .frame(width:44,height:44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭窗口")
+            .padding(.trailing,isCompact ? gripZone : 0)
+        }
         .background(DSReliefSurface(radius: cornerRadius))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: currentPosition.x, y: currentPosition.y)
         .onAppear {
-            if storedW >= minSize.width, storedH >= minSize.height {
-                size = CGSize(width: storedW, height: storedH)
+            if storedW >= minSize.width, storedH >= 0 {
+                size = CGSize(width: storedW, height: max(storedH, minSize.height))
             } else {
                 size = defaultSize
             }
@@ -116,33 +151,24 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     // MARK: - 完整词卡
 
     private var fullBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                dragStrip
-                Button { toggleCompact() } label: { Image(systemName:"minus").frame(width:44,height:44) }
-                    .buttonStyle(.plain).accessibilityLabel("小胶囊模式")
-                Button(action:onClose) { Image(systemName:"xmark").frame(width:44,height:44) }
-                    .buttonStyle(.plain).accessibilityLabel("关闭窗口")
-            }
-            .frame(width: size.width, height: 44)
-            Divider()
-            expanded()
-                .frame(width: size.width)
-                .frame(maxHeight: .infinity)
-        }
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        expanded().frame(width:size.width,height:size.height,alignment:.topLeading)
     }
 
-    private var dragStrip: some View {
-        ZStack {
-            Capsule()
-                .fill(Color.secondary.opacity(0.35))
-                .frame(width: 36, height: 5)
+    private var edgeDragAreas: some View {
+        let edge: CGFloat = 16
+        return ZStack {
+            VStack(spacing:0) {
+                Color.clear.frame(height:edge).contentShape(Rectangle()).gesture(moveGesture)
+                Spacer(minLength:0)
+                Color.clear.frame(height:edge).contentShape(Rectangle()).gesture(moveGesture)
+            }
+            HStack(spacing:0) {
+                Color.clear.frame(width:edge).contentShape(Rectangle()).gesture(moveGesture)
+                Spacer(minLength:0)
+                Color.clear.frame(width:edge).contentShape(Rectangle()).gesture(moveGesture)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 44)
-        .contentShape(Rectangle())
-        .gesture(moveGesture)
+        .accessibilityHidden(true)
     }
 
     // MARK: - 胶囊迷你(单词 + 声音 + 翻译,横着排)
@@ -152,9 +178,6 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(alignment:.top) {
-                Color.clear.frame(height:12).contentShape(Rectangle()).gesture(moveGesture)
-            }
             .onTapGesture(count: 2) { toggleCompact() }
     }
 

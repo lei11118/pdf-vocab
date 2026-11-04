@@ -23,11 +23,7 @@ struct WordBubbleContent: View {
     let detail: String
     var body: some View {
         VStack(alignment:.leading,spacing:8) {
-            HStack(alignment:.firstTextBaseline) {
-                Text(term).font(.subheadline.weight(.semibold))
-                Button { WordInteraction.speak(term) } label: { Image(systemName:"speaker.wave.2.fill") }
-                    .accessibilityLabel("朗读")
-            }
+            Text(term).font(.subheadline.weight(.semibold))
             DefinitionScrollText(text:detail).frame(maxWidth:.infinity,maxHeight:.infinity)
         }.padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))

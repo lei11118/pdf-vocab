@@ -99,7 +99,7 @@ struct AnkiExportSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { closePanel() }
+                    if panelClose == nil { Button("关闭") { closePanel() } }
                 }
             }
             .sheet(item: $shareItem) { item in

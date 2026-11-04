@@ -22,6 +22,7 @@ struct VocabListView: View {
     var docStore: DocumentStore? = nil
     var onClose: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readerPanelClose) private var panelClose
 
     enum Filter: Equatable {
         case all
@@ -212,11 +213,14 @@ struct VocabListView: View {
                 DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", foreground: DS.accent,
                              background: DS.accentContainer, accessibility: "知识图谱") { showGraph = true }
                 moreMenu
-                DSIconButton(systemImage: "xmark", iconSize: 14, background: DS.background2,
-                             accessibility: "关闭生词本") {
-                    if let onClose { onClose() } else { dismiss() }
+                if panelClose == nil {
+                    DSIconButton(systemImage: "xmark", iconSize: 14, background: DS.background2,
+                                 accessibility: "关闭生词本") {
+                        if let onClose { onClose() } else { dismiss() }
+                    }
                 }
             }
+            .padding(.trailing,panelClose == nil ? 0 : 44)
         }
     }
 

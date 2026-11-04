@@ -15,6 +15,7 @@ struct CardVocabBridge {
     var excludedSenses: ((String) -> Set<Int>)? = nil
     /// v0.13.0:切换义项勾选(key + 行号 + 是否保留);「卡片只保留需要的义项」
     var setSense: ((String, Int, Bool) -> Void)? = nil
+    var collect: ((String, String) -> Bool)? = nil
 }
 
 /// 侧边词卡容器(单词卡 / 整句卡)
@@ -23,8 +24,7 @@ struct WordCardPanel: View {
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
-    /// v0.13.0:整句卡「翻译」
-    var onTranslate: ((String) -> Void)? = nil
+    @State private var selectedSentenceWord: String?
 
     var body: some View {
         Group {
@@ -32,9 +32,29 @@ struct WordCardPanel: View {
             case .word(let term):
                 WordCardView(term: term, onClose: onClose, vocab: vocab)
             case .sentence(let text, let count):
-                SentenceCardView(text: text, wordCount: count, onClose: onClose, onSelectWord: onSelectWord, onTranslate: onTranslate)
+                ZStack(alignment:.topLeading) {
+                    SentenceCardView(text:text,wordCount:count,onClose:onClose) { word in
+                        selectedSentenceWord = word
+                        onSelectWord(word)
+                    }
+                    .opacity(selectedSentenceWord == nil ? 1 : 0)
+                    .allowsHitTesting(selectedSentenceWord == nil)
+                    .accessibilityHidden(selectedSentenceWord != nil)
+                    if let word = selectedSentenceWord {
+                        VStack(spacing:0) {
+                            HStack {
+                                Button { selectedSentenceWord = nil } label: {
+                                    Label("返回句子",systemImage:"chevron.left")
+                                }.buttonStyle(.plain)
+                                Spacer()
+                            }.padding(.horizontal,16).padding(.top,16).padding(.trailing,44)
+                            WordCardView(term:word,onClose:onClose,vocab:vocab).id(word)
+                        }
+                    }
+                }
             }
         }
+        .onChange(of:content) { _, _ in selectedSentenceWord = nil }
     }
 }
 
@@ -70,6 +90,7 @@ struct WordCardView: View {
                 Spacer()
                 if panelClose == nil { closeButton(onClose) }
             }
+            .padding(.trailing,panelClose == nil ? 0 : 44)
 
             switch state {
             case .loading:
@@ -142,11 +163,23 @@ struct WordCardView: View {
                 } else {
                     Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
-                    Text("未收录 · 选中后点编辑栏「加入生词本」")
+                    Text("未收录")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                if !vocabCollected, let collect = vocab.collect {
+                    Button {
+                        if collect(vocabKey,term) {
+                            let updated = vocab.query(vocabKey)
+                            vocabCollected = updated.collected
+                            vocabCount = updated.occurrenceCount
+                            excludedSenses = vocab.excludedSenses?(vocabKey) ?? []
+                        }
+                    } label: { Label("加入生词本",systemImage:"plus.circle") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
         }
     }
@@ -285,30 +318,27 @@ struct WordCardView: View {
 
 struct SentenceCardView: View {
     @Environment(\.readerPanelClose) private var panelClose
+    @EnvironmentObject private var translation: SentenceTranslationState
     let text: String
     let wordCount: Int
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
-    /// v0.13.0:整句翻译(透传自阅读页,弹系统翻译面板)
-    var onTranslate: ((String) -> Void)? = nil
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("整句 · \(wordCount) 个词")
                     .font(.headline)
                 Spacer()
-                if let onTranslate {
-                    Button {
-                        onTranslate(text)
-                    } label: {
-                        Label("翻译", systemImage: "character.book.closed")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button {
+                    translation.start(SentenceTranslationRequest(text:text))
+                } label: {
+                    Label("翻译", systemImage: "character.book.closed")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 if panelClose == nil { closeButton(onClose) }
             }
+            .padding(.trailing,panelClose == nil ? 0 : 44)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -317,6 +347,13 @@ struct SentenceCardView: View {
                         .foregroundStyle(DS.foreground1)
                         .lineSpacing(5)
                         .textSelection(.enabled)
+
+                    if let translated = translation.displayText {
+                        Text(translated)
+                            .font(DS.Fonts.wordBody)
+                            .foregroundStyle(DS.foreground1)
+                            .textSelection(.enabled)
+                    }
 
                     let words = WordPicker.lexicalWords(in: text)
                     if !words.isEmpty {
@@ -406,6 +443,7 @@ struct WrapLayout: Layout {
 struct CompactCardView: View {
     let content: ReaderCardContent
     let onClose: () -> Void
+    var sentenceTranslation: String? = nil
 
     @State private var translation: String?
 
@@ -413,17 +451,8 @@ struct CompactCardView: View {
         switch content {
         case .word(let term):
             return term
-        case .sentence:
-            return "选区翻译"
-        }
-    }
-
-    private var speakText: String {
-        switch content {
-        case .word(let term):
-            return term
-        case .sentence:
-            return "选区翻译"
+        case .sentence(let text, _):
+            return text
         }
     }
 
@@ -435,22 +464,14 @@ struct CompactCardView: View {
     }
 
     var body: some View {
-        HStack(spacing:8) {
-            VStack(alignment:.leading,spacing:2) {
-                HStack(spacing:6) {
-                    Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Button { SpeechService.shared.speak(speakText,language:SpeechService.usVoice) } label: {
-                        Image(systemName:"speaker.wave.2.fill").font(.footnote)
-                    }.buttonStyle(.plain).accessibilityLabel("发音")
-                    Spacer(minLength:0)
-                }
-                DefinitionScrollText(text:translation ?? "")
-                    .frame(maxWidth:.infinity,maxHeight:.infinity)
+        VStack(alignment:.leading,spacing:2) {
+            Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
+            if let value = sentenceTranslation ?? translation, !value.isEmpty {
+                Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Button(action:onClose) { Image(systemName:"xmark.circle.fill").foregroundStyle(.secondary) }
-                .buttonStyle(.plain).frame(width:44,height:44).accessibilityLabel("关闭")
         }
-        .padding(.vertical,8).padding(.leading,16).padding(.trailing,52)
+        .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading)
+        .padding(.vertical,8).padding(.leading,16).padding(.trailing,92)
         .task(id:displayText) { await loadTranslation() }
     }
 
@@ -463,7 +484,7 @@ struct CompactCardView: View {
             DictionaryService.lookup(term)
         }.value
         if case .found(let entry) = outcome {
-            translation = entry.translation?.components(separatedBy:"\n").filter { !$0.isEmpty && !$0.hasPrefix("【") }.prefix(2).joined(separator:"；")
+            translation = WordInteraction.chineseDetail(entry)?.components(separatedBy:"\n").prefix(2).joined(separator:"；")
         } else {
             translation = nil
         }

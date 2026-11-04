@@ -7,6 +7,61 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testHoverIncludesEveryChineseSenseButNoEnglishDefinitionOrPhonetic() {
+        let senses = (0..<120).map { "n. 中文释义\($0)" }.joined(separator:"\n")
+        let entry = DictEntry(word:"term",phonetic:"test",translation:"【通用】\n\(senses)\n【医学】\n医学含义",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+        let detail = WordInteraction.chineseDetail(entry) ?? ""
+        XCTAssertTrue(detail.contains("中文释义0"))
+        XCTAssertTrue(detail.contains("中文释义119"))
+        XCTAssertTrue(detail.contains("医学含义"))
+        XCTAssertFalse(detail.contains("【通用】"))
+        XCTAssertFalse(detail.contains("English definition"))
+        XCTAssertFalse(detail.contains("test"))
+        XCTAssertFalse(detail.contains("n. "))
+        XCTAssertEqual(detail.components(separatedBy:"\n").count,121)
+    }
+
+    func testMasterGraphKeepsBookNodesPositionsAndLegacyData() throws {
+        func document(_ sha:String,_ title:String) -> DocumentRecord {
+            DocumentRecord(sha256:sha,title:title,fileName:sha+".pdf",pageCount:1,hasTextLayer:true,
+                           importedAt:Date(),lastPage:0,pageX:0,pageY:0,zoom:1,zoomAuto:true)
+        }
+        let a = document("a","Book A"), b = document("b","Book B")
+        var graph = KnowledgeGraph(id:KnowledgeGraph.libraryID,docId:KnowledgeGraph.libraryID)
+        XCTAssertTrue(graph.syncDocuments([a,b]))
+        XCTAssertFalse(graph.syncDocuments([a,b]))
+        XCTAssertEqual(graph.nodes.count,2)
+        let firstID = graph.nodes[0].id
+        graph.nodes[0].frame.origin = CGPoint(x:900,y:200)
+        graph.connect(from:firstID,anchor:.right,to:graph.nodes[1].id,target:.left)
+        XCTAssertTrue(graph.syncDocuments([b,document("c","Book C")]))
+        XCTAssertEqual(graph.nodes.count,3) // A missing book is preserved and can reappear.
+        XCTAssertEqual(graph.nodes[0].id,firstID)
+        XCTAssertEqual(graph.nodes[0].frame.origin,CGPoint(x:900,y:200))
+        XCTAssertEqual(graph.edges.count,1)
+        XCTAssertEqual(try JSONDecoder().decode(KnowledgeGraph.self,from:JSONEncoder().encode(graph)),graph)
+
+        let oldNode = KnowledgeNode(graphId:"old",kind:.text,frame:CGRect(x:1,y:2,width:3,height:4),text:"legacy")
+        let oldData = try JSONEncoder().encode(oldNode)
+        let decoded = try JSONDecoder().decode(KnowledgeNode.self,from:oldData)
+        XCTAssertEqual(decoded.text,"legacy")
+        XCTAssertNil(decoded.sourceDocumentId)
+    }
+
+    func testSentenceTranslationRejectsStaleResults() {
+        guard #available(iOS 18.0, *) else { return }
+        let state = SentenceTranslationState()
+        let first = SentenceTranslationRequest(text:"First sentence")
+        let second = SentenceTranslationRequest(text:"Second sentence")
+        state.start(first); state.start(second)
+        state.finish("旧结果",request:first)
+        XCTAssertNil(state.result)
+        state.finish("新结果",request:second)
+        XCTAssertEqual(state.displayText,"新结果")
+        state.reset()
+        XCTAssertNil(state.displayText)
+    }
+
     func testLinkedTextLongPressSelectsAndSingleTapNavigates() throws {
         let url = try XCTUnwrap(Bundle(for:GlyphSelectionTests.self).url(forResource:"OpenStax-selection",withExtension:"pdf"))
         let document = try XCTUnwrap(PDFDocument(url:url))
@@ -395,6 +450,11 @@ final class InteractionPolishTests:XCTestCase {
         let second = KnowledgeNode(graphId:graphReview.graph.id,kind:.text,frame:CGRect(x:340,y:200,width:290,height:210),text:"Integral\n积分\nConnect ideas by dragging a side anchor.")
         graphReview.graph.nodes = [first,second]
         graphReview.graph.connect(from:first.id,anchor:.right,to:second.id,target:.top)
+        let sentenceState = SentenceTranslationState()
+        if #available(iOS 18.0, *) {
+            let request = SentenceTranslationRequest(text:"Every word connects to another idea.")
+            sentenceState.start(request); sentenceState.finish("每个单词都与另一个概念相联系。",request:request)
+        }
         let cases: [(String, CGSize, AnyView)] = [
             ("palette-marker-expanded", CGSize(width: 360, height: 420), AnyView(PencilPaletteView(session: markerReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("palette-brush-expanded", CGSize(width: 320, height: 420), AnyView(PencilPaletteView(session: brushReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
@@ -406,11 +466,14 @@ final class InteractionPolishTests:XCTestCase {
             ("library-narrow", CGSize(width: 320, height: 900), AnyView(LibraryView(store: docs))),
             ("word-window", CGSize(width: 834, height: 900), AnyView(FloatingCardWindow(content:.word("function"),bounds:CGSize(width:834,height:900),onClose:{},onSelectWord:{_ in}))),
             ("word-capsule", CGSize(width: 360, height: 96), AnyView(CompactCardView(content:.word("function"),onClose:{}).background(DS.background3))),
+            ("sentence-capsule",CGSize(width:480,height:96),AnyView(CompactCardView(content:.sentence("Every word connects to another idea.",6),onClose:{},sentenceTranslation:"每个单词都与另一个概念相联系。").background(DS.background3))),
+            ("sentence-card",CGSize(width:480,height:600),AnyView(WordCardPanel(content:.sentence("Every word connects to another idea.",6),onClose:{},onSelectWord:{_ in}).environmentObject(sentenceState).environment(\.readerPanelClose,{}))),
             ("function-window", CGSize(width: 834, height: 900), AnyView(ReaderCapsulePanel(title:"设置",bounds:CGSize(width:834,height:900),onClose:{}) { SettingsView(db:db) })),
             ("export-window-narrow",CGSize(width:320,height:700),AnyView(AnkiExportSheet(store:store,words:store.listWords()))),
             ("translation-window",CGSize(width:320,height:600),AnyView(ReaderSentenceTranslationView(text:"Every word connects to another idea.",cached:"每个单词都与另一个概念相联系。"))),
             ("search-window-narrow",CGSize(width:320,height:600),AnyView(ReaderSearchSheet(url:try docs.pdfURL(for:record),docSha:record.sha256,docTitle:record.title,ocrStore:OCRStore(db:db)))),
-            ("graph-window-narrow", CGSize(width: 300, height: 650), AnyView(KnowledgeGraphView(model:graphReview,tools:PencilToolSession(),vocab:store))),
+            ("graph-window-narrow", CGSize(width: 300, height: 650), AnyView(KnowledgeGraphView(model:graphReview,tools:PencilToolSession(),vocab:store).environment(\.readerPanelClose,{}))),
+            ("master-graph-ipad",CGSize(width:834,height:1194),AnyView(KnowledgeGraphLibrary(store:docs))),
             ("vocab-dark", CGSize(width: 834, height: 1194), AnyView(VocabListView(store: store).preferredColorScheme(.dark))),
             ("library-split", CGSize(width: 480, height: 900), AnyView(LibraryView(store: docs))),
             ("vocab-large-type", CGSize(width: 480, height: 1100), AnyView(VocabListView(store: store).dynamicTypeSize(.xxxLarge))),

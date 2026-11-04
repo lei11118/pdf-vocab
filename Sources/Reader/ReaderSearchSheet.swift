@@ -67,6 +67,12 @@ struct ReaderSearchSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(DS.background1)
+            .safeAreaInset(edge:.top,spacing:0) {
+                DSSearchField(placeholder:"在文档中搜索",text:$query)
+                    .padding(.horizontal,16)
+                    .padding(.vertical,8)
+                    .background(DS.background1)
+            }
             .overlay {
                 if !searching, hits.isEmpty, note == nil {
                     if query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
@@ -79,16 +85,16 @@ struct ReaderSearchSheet: View {
             }
             .navigationTitle("全文搜索")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "在文档中搜索")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { closePanel() }
+                    if panelClose == nil { Button("完成") { closePanel() } }
                 }
             }
             .task(id: query) {
                 let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
                 hits = []
                 note = nil
+                searching = false
                 guard q.count >= 2 else { return }
                 // 450ms 防抖
                 try? await Task.sleep(nanoseconds: 450_000_000)

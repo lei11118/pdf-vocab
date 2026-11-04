@@ -6,6 +6,8 @@ struct KnowledgeGraphView: View {
     @ObservedObject var tools: PencilToolSession
     let vocab: VocabStore
     var onSource: ((GraphScreenshot) -> Void)?
+    var libraryDocuments: [DocumentRecord]?
+    var onOpenDocument: ((String) -> Void)?
     @Environment(\.readerPanelClose) private var panelClose
     @Environment(\.dismiss) private var dismiss
     private func closePanel() { if let panelClose { panelClose() } else { dismiss() } }
@@ -21,7 +23,6 @@ struct KnowledgeGraphView: View {
     @State private var connection: (String, GraphAnchor, CGPoint)?
     @State private var viewport: CGSize = .zero
     @State private var moveMode = false
-    @State private var showToolStyle = false
     @GestureState private var nodeGestureActive = false
     @GestureState private var panActive = false
     @GestureState private var zoomActive = false
@@ -30,12 +31,15 @@ struct KnowledgeGraphView: View {
         return model.graph.nodes.sorted { $0.zIndex > $1.zIndex }.first { $0.id != connection.0 && $0.frame.contains(connection.2) }?.id
     }
 
-    init(docId: String, db: AppDatabase, tools: PencilToolSession, onSource: ((GraphScreenshot) -> Void)? = nil) {
+    init(docId: String, db: AppDatabase, tools: PencilToolSession, onSource: ((GraphScreenshot) -> Void)? = nil,
+         libraryDocuments: [DocumentRecord]? = nil, onOpenDocument: ((String) -> Void)? = nil) {
         _model = StateObject(wrappedValue: KnowledgeGraphStore(docId: docId, db: db))
         self.tools = tools; vocab = VocabStore(db: db); self.onSource = onSource
+        self.libraryDocuments = libraryDocuments; self.onOpenDocument = onOpenDocument
     }
     init(model: KnowledgeGraphStore, tools: PencilToolSession, vocab: VocabStore, onSource: ((GraphScreenshot) -> Void)? = nil) {
         _model = StateObject(wrappedValue: model); self.tools = tools; self.vocab = vocab; self.onSource = onSource
+        libraryDocuments = nil; onOpenDocument = nil
     }
     var body: some View {
         NavigationStack {
@@ -78,10 +82,10 @@ struct KnowledgeGraphView: View {
                 .onAppear { viewport = geo.size }
                 .onChange(of: geo.size) { _, size in viewport = size }
             }
-            .navigationTitle("知识图谱")
+            .navigationTitle(libraryDocuments == nil ? "知识图谱" : "主知识图谱")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("完成") { model.save(immediate: true); closePanel() } }
+                ToolbarItem(placement: .topBarLeading) { if panelClose == nil { Button("完成") { model.save(immediate: true); closePanel() } } }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                     Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动", systemImage: moveMode ? "text.cursor" : "hand.draw") }
@@ -94,28 +98,49 @@ struct KnowledgeGraphView: View {
                     Button { withAnimation(.smooth(duration:0.24)) { fit() } } label: { Label("适应画面", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button(role: .destructive) {
                         if let selected { model.checkpoint(); model.graph.delete(selected); self.selected = nil; model.save() }
-                    } label: { Label("删除", systemImage: "trash") }.disabled(selected == nil)
+                    } label: { Label("删除", systemImage: "trash") }.disabled(!canDeleteSelection)
                     } label: { Label("图谱操作", systemImage: "ellipsis.circle") }
                     .accessibilityLabel("图谱操作")
+                }
+            }
+            .toolbar(panelClose == nil ? .visible : .hidden, for:.navigationBar)
+            .safeAreaInset(edge:.top,spacing:0) {
+                if panelClose != nil {
+                    HStack(spacing:8) {
+                        Button { add(.text) } label: { Label("文本框",systemImage:"text.badge.plus") }.disabled(!model.loaded)
+                        Button { add(.ink) } label: { Label("标记框",systemImage:"pencil.tip.crop.circle.badge.plus") }.disabled(!model.loaded)
+                        Menu {
+                            Button { moveMode.toggle(); editing = nil } label: { Label(moveMode ? "阅读节点" : "选择/移动",systemImage:"hand.draw") }
+                            Button("撤销") { model.undo() }.disabled(model.undoStack.isEmpty)
+                            Button("重做") { model.redo() }.disabled(model.redoStack.isEmpty)
+                            Button("适应画面") { withAnimation(.smooth(duration:0.24)) { fit() } }
+                            Button("删除",role:.destructive) { deleteSelection() }.disabled(!canDeleteSelection)
+                        } label: { Image(systemName:"ellipsis.circle").frame(width:32,height:36) }
+                        .accessibilityLabel("图谱操作")
+                        Spacer(minLength:0)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.leading,16).padding(.trailing,48).padding(.vertical,8)
+                    .background(DS.background1)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 if let node = model.graph.nodes.first(where: { $0.id == selected }), node.kind == .ink {
                     ScrollView(.horizontal) {
-                        PencilPaletteView(session: tools, onUndo: { model.undo() }, onRedo: { model.redo() }, onExitWriting: { selected = nil },onShowStyle:{showToolStyle = true})
-                    }.frame(height: 90)
+                        PencilPaletteView(session: tools, onUndo: { model.undo() }, onRedo: { model.redo() }, onExitWriting: { selected = nil })
+                    }
                 }
-            }
-            .readerPanel(isPresented:$showToolStyle,title:"图谱颜色与笔宽") {
-                ScrollView { PencilPaletteView(session:tools,onUndo:{},onRedo:{}).stylePanel.frame(maxWidth:.infinity) }
             }
             .task {
                 await model.load()
-                await model.migrate(words: vocab.listWords(), vocab: vocab)
+                if let libraryDocuments { syncDocuments(libraryDocuments) }
+                else { await model.migrate(words: vocab.listWords(), vocab: vocab) }
                 for index in model.graph.nodes.indices { model.graph.nodes[index].isNew = false }
                 model.save()
                 await resumePendingTextRecognition()
             }
+            .onChange(of:libraryDocuments) { _, docs in if let docs { syncDocuments(docs) } }
             .onChange(of: phase) { _, phase in if phase != .active { model.save(immediate: true) } }
             .onChange(of:panActive) { _,active in if !active { panOrigin = nil; model.save() } }
             .onChange(of:zoomActive) { _,active in if !active { zoomOrigin = nil; zoomOffsetOrigin = nil; model.save() } }
@@ -125,6 +150,18 @@ struct KnowledgeGraphView: View {
                 Button("好") { model.error = nil }
             } message: { Text(model.error ?? "") }
         }
+    }
+    private var canDeleteSelection: Bool {
+        guard let selected else { return false }
+        return !model.graph.nodes.contains { $0.id == selected && $0.kind == .document }
+    }
+    private func deleteSelection() {
+        guard canDeleteSelection, let selected else { return }
+        model.checkpoint(); model.graph.delete(selected); self.selected = nil; model.save()
+    }
+    private func syncDocuments(_ documents:[DocumentRecord]) {
+        guard model.loaded else { return }
+        if model.graph.syncDocuments(documents) { model.save() }
     }
     private func displayed(_ node: KnowledgeNode) -> KnowledgeNode {
         var result = node
@@ -185,11 +222,12 @@ struct KnowledgeGraphView: View {
     private func nodeView(_ node: KnowledgeNode) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Image(systemName: node.kind == .ink ? "pencil.tip" : node.kind == .text ? "text.alignleft" : "photo")
-                Text(node.isNew ? "新" : node.kind == .text ? "文本" : node.kind == .ink ? "标记" : "截图").font(.caption)
+                Image(systemName: node.kind == .ink ? "pencil.tip" : node.kind == .text ? "text.alignleft" : node.kind == .document ? "book.closed" : "photo")
+                Text(node.isNew ? "新" : node.kind == .text ? "文本" : node.kind == .ink ? "标记" : node.kind == .document ? "文档图谱" : "截图").font(.caption)
                 Spacer()
                 if let shot = node.screenshot, onSource != nil { Button("来源") { model.save(immediate: true); closePanel(); onSource?(shot) }.font(.caption) }
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
+                else if node.kind == .text { Button("编辑") { selected = node.id; model.checkpoint(); editing = node.id }.font(.caption) }
             }
             .padding(.horizontal,7).frame(height:GraphConfig.headerHeight).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
@@ -222,11 +260,29 @@ struct KnowledgeGraphView: View {
         .contextMenu {
             Button("置于顶层") { model.checkpoint(); var n = node; n.zIndex = (model.graph.nodes.map(\.zIndex).max() ?? 0)+1; binding(node.id).wrappedValue = n }
             Button("置于底层") { model.checkpoint(); var n = node; n.zIndex = (model.graph.nodes.map(\.zIndex).min() ?? 0)-1; binding(node.id).wrappedValue = n }
-            Button("删除", role: .destructive) { model.checkpoint(); model.graph.delete(node.id); model.save() }
+            if node.kind != .document {
+                Button("删除", role: .destructive) { model.checkpoint(); model.graph.delete(node.id); model.save() }
+            }
         }
     }
     @ViewBuilder private func content(_ node: KnowledgeNode) -> some View {
-        if node.kind == .text {
+        if node.kind == .document {
+            let document = libraryDocuments?.first { $0.sha256 == node.sourceDocumentId }
+            Button {
+                if let id = node.sourceDocumentId { model.save(immediate:true); onOpenDocument?(id) }
+            } label: {
+                VStack(alignment:.leading,spacing:10) {
+                    Image(systemName:"book.closed.fill").font(.title2).foregroundStyle(DS.accent)
+                    Text(document?.title ?? node.text).font(.headline).multilineTextAlignment(.leading).lineLimit(3)
+                    Label(document == nil ? "文档不可用" : "打开知识图谱",systemImage:"arrow.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading).padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(document == nil || onOpenDocument == nil)
+        } else if node.kind == .text {
             if editing == node.id {
                 TextEditor(text: Binding(get: { binding(node.id).wrappedValue.text }, set: { text in
                     var n = binding(node.id).wrappedValue; n.text = text; binding(node.id).wrappedValue = n
