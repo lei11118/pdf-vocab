@@ -1140,13 +1140,6 @@ final class ReaderCoordinator: NSObject {
                 view.openLink(link)
                 return
             }
-            // v0.7.0:命中「永久加亮的词」→ 打开/切换词卡(优先于菜单切换)
-            if let hit = permHitRects.first(where: { $0.page === page && $0.rect.contains(pagePoint) }) {
-                DiagLog.log("tap: vocab word 「\(hit.term)」 → card")
-                clearTempOnly()
-                onVocabWordTap?(hit.term)
-                return
-            }
             // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
             let onSelection = rects.contains { $0.page === page && $0.rect.contains(pagePoint) }
             if onSelection {
@@ -1157,7 +1150,6 @@ final class ReaderCoordinator: NSObject {
                 return
             }
         }
-        if selectText(at: point, source: "tap") { return }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
         guard !rects.isEmpty || menu.isPresented else { return }
         DiagLog.log("tap: clear all (menu+selection together)")
@@ -2503,6 +2495,7 @@ final class ReaderCoordinator: NSObject {
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if menu.containsToolbar(touch.view) { return false }
         // A drawing Pencil (including laser) cannot enter any selection path.
         if markMode && touch.type == .pencil { return false }
         if markMode && toolSession?.kind == .laser { return false }

@@ -143,8 +143,9 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
             guard let window = self.window else { return }
             if self.bubble.superview !== window { window.addSubview(self.bubble) }
             let source = self.convert(preview.point, to: window)
-            let width = min(340,window.bounds.width-16)
-            let height = min(300,max(0,source.y-window.safeAreaInsets.top-12))
+            let fit = HoverBubbleLayout.size(term:preview.term,detail:preview.detail,maximumWidth:window.bounds.width-16,
+                maximumHeight:min(420,max(0,source.y-window.safeAreaInsets.top-12)))
+            let width = fit.width, height = fit.height
             guard height >= 36 else { self.bubble.isHidden = true; return }
             self.bubble.frame = CGRect(x:min(max(8,source.x-width/2),window.bounds.width-width-8),y:source.y-height-8,width:width,height:height)
             self.bubbleHost.view.frame = self.bubble.bounds

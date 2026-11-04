@@ -1,6 +1,38 @@
 import XCTest
 
 final class ReaderRouteUITests:XCTestCase {
+    func testResizeAcrossCapsuleThresholdAndMoveArcWithSelectionBarOpen() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--gesture-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
+        app.launch()
+        let bar = app.otherElements["selection-edit-bar"].firstMatch
+        let grip = app.otherElements["window-resize-grip"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout:10))
+        XCTAssertTrue(grip.waitForExistence(timeout:10))
+        let root = app.coordinate(withNormalizedOffset:.zero)
+        let before = grip.frame
+        let start = root.withOffset(CGVector(dx:before.midX,dy:before.midY))
+        start.press(forDuration:0.15,thenDragTo:start.withOffset(CGVector(dx:100,dy:280)),withVelocity:.slow,thenHoldForDuration:0.2)
+        XCTAssertGreaterThan(grip.frame.midY-before.midY,240,"resize continues past the compact/card threshold")
+        XCTAssertTrue(bar.exists,"selection toolbar stays visible while resizing")
+        let large = grip.frame
+        let shrink = root.withOffset(CGVector(dx:large.midX,dy:large.midY))
+        shrink.press(forDuration:0.1,thenDragTo:shrink.withOffset(CGVector(dx:-100,dy:-280)),withVelocity:.slow,thenHoldForDuration:0.1)
+        XCTAssertLessThan(grip.frame.midY,large.midY-240)
+        let capsule = app.staticTexts["function 函数"].firstMatch
+        XCTAssertTrue(capsule.exists)
+        let capsuleBefore = capsule.frame
+        capsule.press(forDuration:0.1,thenDragTo:root.withOffset(CGVector(dx:capsuleBefore.midX+40,dy:capsuleBefore.midY+80)))
+        XCTAssertGreaterThan(capsule.frame.midY,capsuleBefore.midY+50)
+        XCTAssertTrue(bar.exists)
+        let tool = app.buttons["荧光笔"].firstMatch
+        XCTAssertTrue(tool.exists)
+        let toolBefore = tool.frame
+        root.withOffset(CGVector(dx:toolBefore.midX,dy:toolBefore.midY)).press(forDuration:0.1,
+            thenDragTo:root.withOffset(CGVector(dx:toolBefore.midX-80,dy:toolBefore.midY-60)))
+        XCTAssertGreaterThan(toolBefore.midX-tool.frame.midX,50)
+        XCTAssertTrue(bar.exists,"the arc moves without dismissing the selection bar")
+    }
     func testReaderFunctionsStayInDocumentInBothModes() {
         let app = XCUIApplication()
         app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]

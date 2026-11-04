@@ -46,6 +46,7 @@ struct KnowledgeGraphView: View {
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     DS.background1.ignoresSafeArea()
+                        .overlay { GraphGridBackground(offset:model.graph.offset,zoom:model.graph.zoom).allowsHitTesting(false) }
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance:2,coordinateSpace:.global).updating($panActive) { _,active,_ in active = true }.onChanged { value in
                             guard zoomOrigin == nil else { return }
@@ -241,7 +242,8 @@ struct KnowledgeGraphView: View {
                 if editing == node.id { Button("完成") { editing = nil }.font(.caption) }
                 else if node.kind == .text { Button("编辑") { selected = node.id; model.checkpoint(); editing = node.id }.font(.caption) }
             }
-            .padding(.horizontal,7).frame(height:GraphConfig.headerHeight).background(Color.secondary.opacity(0.08)).contentShape(Rectangle())
+            .foregroundStyle(DS.foreground2)
+            .padding(.horizontal,10).frame(height:GraphConfig.headerHeight).background(DS.accentContainer.opacity(0.65)).contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global).updating($nodeGestureActive) { _,active,_ in active = true }.onChanged { value in
                 guard zoomOrigin == nil else { return }
                 selected = node.id; editing = nil
@@ -252,7 +254,7 @@ struct KnowledgeGraphView: View {
             }.onEnded { _ in finishManipulation() })
             content(node)
         }
-        .background(Color(uiColor: .systemBackground))
+        .background(DS.background2)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected == node.id || connectionTarget == node.id ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected == node.id || connectionTarget == node.id ? 2 : 1))
         .overlay { if selected == node.id { handles(node) } }

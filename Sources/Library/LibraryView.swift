@@ -210,21 +210,27 @@ struct LibraryView: View {
     }
 
     private var learningDesk: some View {
-        VStack(alignment: .leading, spacing: DS.Space.l) {
-            if let recent = resumeDocument {
-                DSSectionHeader(title: "接着读")
-                resumeCard(recent)
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: DS.Space.l) {
-                    deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
-                    deskAction(title: "知识图谱", detail: "截图、笔记与手动连线", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+        Group {
+            if viewportWidth >= 760,let recent = resumeDocument {
+                HStack(alignment:.top,spacing:24) {
+                    VStack(alignment:.leading,spacing:12) { DSSectionHeader(title:"接着读"); resumeCard(recent) }
+                        .frame(maxWidth:.infinity)
+                    deskActions.frame(width:280).padding(.top,42)
                 }
-                VStack(spacing: DS.Space.l) {
-                    deskAction(title: "词汇收藏", detail: "\(vocabCount) 个生词", icon: "text.book.closed") { showVocab = true }
-                    deskAction(title: "知识图谱", detail: "截图、笔记与手动连线", icon: "point.3.connected.trianglepath.dotted") { showGraph = true }
+            } else {
+                VStack(alignment:.leading,spacing:24) {
+                    if let recent = resumeDocument { DSSectionHeader(title:"接着读"); resumeCard(recent) }
+                    deskActions
                 }
             }
+        }
+    }
+
+    private var deskActions:some View {
+        VStack(spacing:0) {
+            deskAction(title:"词汇收藏",detail:"\(vocabCount) 个生词",icon:"text.book.closed") { showVocab = true }
+            Divider().padding(.leading,64)
+            deskAction(title:"知识图谱",detail:"连接阅读中的想法",icon:"point.3.connected.trianglepath.dotted") { showGraph = true }
         }
     }
 
@@ -244,7 +250,7 @@ struct LibraryView: View {
             }
             .padding(DS.Space.m)
             .frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
-            .background(DS.background2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color.clear)
         }
         .buttonStyle(DSPressableButtonStyle())
     }
@@ -307,11 +313,12 @@ struct LibraryView: View {
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Text(doc.title)
                         .font(DS.Fonts.title2)
-                        .foregroundStyle(DS.foreground1)
+                        .foregroundStyle(DS.onHero)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
 
-                    DocumentMetaLine(doc: doc)
+                    Text("\(doc.pageCount) 页 · PDF 文档")
+                        .font(DS.Fonts.caption).foregroundStyle(DS.onHero.opacity(0.8))
 
                     Spacer(minLength: DS.Space.xs)
 
@@ -321,12 +328,12 @@ struct LibraryView: View {
                                 value: Double(min(doc.lastPage + 1, doc.pageCount)),
                                 total: Double(max(doc.pageCount, 1))
                             )
-                            .tint(DS.accent)
+                            .tint(DS.onHero)
                             .frame(maxWidth: 120)
                         }
                         Text(doc.lastPage > 0 ? "第 \(min(doc.lastPage + 1, doc.pageCount)) 页" : "打开文档")
                             .font(DS.Fonts.caption2)
-                            .foregroundStyle(DS.foreground3)
+                            .foregroundStyle(DS.onHero.opacity(0.8))
                     }
                 }
 
@@ -334,12 +341,12 @@ struct LibraryView: View {
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(DS.accent)
+                    .foregroundStyle(DS.onHero)
                     .frame(width: 24, height: 44)
             }
             .padding(DS.Space.l)
-            .frame(minHeight: 156)
-            .background(DSReliefSurface(radius: 30))
+            .frame(minHeight: 184)
+            .background(DS.hero,in:RoundedRectangle(cornerRadius:20))
 
             .contentShape(Rectangle())
         }

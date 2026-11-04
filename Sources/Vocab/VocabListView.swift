@@ -1034,7 +1034,7 @@ private struct VocabCardView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(DS.accent)
                         .frame(width: 44, height: 44)
-                        .background(DSReliefSurface(radius: 18, inset: true))
+                        .background(DS.accentContainer,in:Circle())
                 }
                 .buttonStyle(DSPressableButtonStyle())
                 .accessibilityLabel("发音")
@@ -1057,12 +1057,12 @@ private struct VocabCardView: View {
             }
 
             Spacer(minLength: DS.Space.x2s)
-
+            Divider().overlay(DS.accent.opacity(0.10))
             footer
         }
         .padding(DS.Space.m)
-        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 132, alignment: .topLeading)
-        .background(selected ? DS.accentContainer : DS.background2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 148, alignment: .topLeading)
+        .background(selected ? DS.accentContainer : DS.background2, in: RoundedRectangle(cornerRadius:14,style:.continuous))
         .overlay(alignment: .topTrailing) {
             if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accent).padding(8) }
         }

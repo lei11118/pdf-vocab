@@ -80,7 +80,7 @@ struct WordCardView: View {
 
     var body: some View {
         ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 Text(term)
                     .font(DS.Fonts.wordTitle)

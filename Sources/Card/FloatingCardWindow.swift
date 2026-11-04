@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import UIKit
 
 /// 选区词卡可沿边拖动、从右下角缩放，并可缩成胶囊。
 /// 移动和缩放使用全局坐标，窗口位置与大小分别持久化。
@@ -56,7 +57,6 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     @State private var resizeBase: CGSize?
     @State private var sizeBeforeCompact: CGSize?
     @GestureState private var moving = false
-    @GestureState private var resizing = false
     private func storageKey(_ axis: String) -> String {
         windowID == "word" ? "readerCard" + axis : "readerWindow." + windowID + "." + axis
     }
@@ -86,7 +86,10 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     }
 
     var body: some View {
-        Group { if isCompact { compactBody } else { fullBody } }
+        ZStack {
+            fullBody.opacity(isCompact ? 0 : 1).allowsHitTesting(!isCompact).accessibilityHidden(isCompact)
+            compactBody.opacity(isCompact ? 1 : 0).allowsHitTesting(isCompact).accessibilityHidden(!isCompact)
+        }
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -132,7 +135,6 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             }
         }
         .onChange(of:moving) { _,active in if !active { moveBase = nil; persist() } }
-        .onChange(of:resizing) { _,active in if !active { resizeBase = nil; persist() } }
         .onChange(of: bounds) { _, _ in
             size = clampedSize(size)
             if let p = position {
@@ -172,6 +174,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             // v0.6.9:触摸判定 = 胶囊形状本身(每时每刻随圆角变化,形状之外不拦截触摸)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .onTapGesture(count: 2) { toggleCompact() }
+            .simultaneousGesture(moveGesture)
     }
 
     private var moveGesture: some Gesture {
@@ -200,38 +203,27 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     /// 手指与 Pencil 都容易抓住;`highPriorityGesture` 保证它优先于"拖动窗口"手势,
     /// 拖小白条不会再误触发移动、松手也不会瞬移。
     private var resizeHitArea: some View {
-        Color.clear
+        WindowResizeGrip(onChanged: { translation in
+            if resizeBase == nil { resizeBase = size }
+            guard let base = resizeBase else { return }
+            // Keep the top-left fixed while the grip follows the pointer. Moving
+            // the window to fit the enlarged size changes the drag's own origin.
+            let origin = position ?? currentPosition
+            let candidate = clampedSize(CGSize(width:base.width+translation.width,height:base.height+translation.height))
+            var transaction = Transaction(); transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                size = CGSize(width:min(candidate.width,max(minSize.width,bounds.width-origin.x-8)),
+                              height:min(candidate.height,max(minSize.height,bounds.height-origin.y-8)))
+            }
+        }, onEnded: {
+            resizeBase = nil; persist()
+        })
             .frame(width: gripZone, height: gripZone)
-            .contentShape(Rectangle())
-            .highPriorityGesture(resizeDragGesture)
+            .accessibilityLabel("调整窗口大小")
     }
 
     /// 缩放拖拽(v0.10.0):以**手势开始时的尺寸**为基准 + 手势**总位移**(translation)计算——
     /// 严禁逐帧增量累加,坐标系重置/事件冒泡都不会再产生"瞬移"。
-    private var resizeDragGesture: some Gesture {
-        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-            .updating($resizing) { _,state,_ in state = true }
-            .onChanged { value in
-                if resizeBase == nil {
-                    resizeBase = size
-                    DiagLog.log("card: resize begin \(Int(size.width))x\(Int(size.height))")
-                }
-                guard let base = resizeBase else { return }
-                size = clampedSize(CGSize(
-                    width: base.width + value.translation.width,
-                    height: base.height + value.translation.height
-                ))
-                if let p = position {
-                    position = clampedPosition(p)
-                }
-            }
-            .onEnded { _ in
-                resizeBase = nil
-                persist()
-                DiagLog.log("card: resize end \(Int(size.width))x\(Int(size.height))")
-            }
-    }
-
     private var resizeActive: Bool { resizeBase != nil }
 
     /// 缩放手柄最小热区(≥44×44,人机指南;v0.10.0 Bug 1.1)
@@ -287,6 +279,41 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         UserDefaults.standard.set(Double(currentPosition.y), forKey: storageKey("Y"))
         UserDefaults.standard.set(Double(size.width), forKey: storageKey("W"))
         UserDefaults.standard.set(Double(size.height), forKey: storageKey("H"))
+    }
+}
+
+/// A persistent UIKit recognizer retains the same touch across capsule/card
+/// layout thresholds and when the pointer travels beyond the moving 44pt grip.
+struct WindowResizeGrip: UIViewRepresentable {
+    let onChanged: (CGSize) -> Void
+    let onEnded: () -> Void
+    func makeUIView(context:Context) -> WindowResizeGripView { WindowResizeGripView() }
+    func updateUIView(_ view:WindowResizeGripView,context:Context) {
+        view.onChanged = onChanged; view.onEnded = onEnded
+    }
+}
+final class WindowResizeGripView: UIView {
+    var onChanged: ((CGSize)->Void)?
+    var onEnded: (()->Void)?
+    override init(frame:CGRect) {
+        super.init(frame:frame)
+        backgroundColor = .clear
+        let pan = UIPanGestureRecognizer(target:self,action:#selector(drag(_:)))
+        pan.maximumNumberOfTouches = 1
+        addGestureRecognizer(pan)
+        accessibilityIdentifier = "window-resize-grip"
+        isAccessibilityElement = true
+        accessibilityLabel = "调整窗口大小"
+    }
+    required init?(coder:NSCoder) { fatalError() }
+    @objc private func drag(_ pan:UIPanGestureRecognizer) {
+        let delta = pan.translation(in:window)
+        switch pan.state {
+        case .began,.changed: onChanged?(CGSize(width:delta.x,height:delta.y))
+        case .ended: onChanged?(CGSize(width:delta.x,height:delta.y)); onEnded?()
+        case .cancelled,.failed: onEnded?()
+        default: break
+        }
     }
 }
 

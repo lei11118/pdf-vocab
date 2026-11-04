@@ -104,7 +104,7 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertTrue(view.currentPage === target,"single tap must preserve normal link navigation")
     }
 
-    func testSingleTapCanMoveToAdjacentWordAndSelectPunctuation() throws {
+    func testSingleTapNeverSelectsWordsButDoubleTapStillSelectsPunctuation() throws {
         let bytes = UIGraphicsPDFRenderer(bounds:CGRect(x:0,y:0,width:400,height:300)).pdfData { ctx in
             ctx.beginPage()
             ("word next +" as NSString).draw(at:CGPoint(x:30,y:60),withAttributes:[.font:UIFont.systemFont(ofSize:24)])
@@ -121,10 +121,55 @@ final class InteractionPolishTests:XCTestCase {
         for range in [NSRange(location:0,length:4),NSRange(location:5,length:4),NSRange(location:10,length:1)] {
             let selection = try XCTUnwrap(page.selection(for:range)), rect = selection.bounds(for:page)
             let point = view.convert(CGPoint(x:rect.minX+1,y:rect.midY),from:page)
+            let before = picked.count
             coordinator.perform(NSSelectorFromString("handleTap:"),with:CompletedWordTap(point:point))
+            XCTAssertEqual(picked.count,before,"A short single tap must not create or replace a word selection")
+            coordinator.perform(NSSelectorFromString("handleDoubleTap:"),with:CompletedWordTap(point:point))
+            coordinator.clearTempHighlight()
         }
         XCTAssertEqual(picked,["word","next","+"])
         coordinator.clearTempHighlight()
+    }
+
+    func testHoverSizeFitsActualContentAndCapsLongDefinitions() {
+        let short = HoverBubbleLayout.size(term:"a",detail:"一个",maximumWidth:400,maximumHeight:420)
+        let long = HoverBubbleLayout.size(term:"function",detail:String(repeating:"函数及其所有专业释义。",count:100),maximumWidth:400,maximumHeight:420)
+        XCTAssertLessThan(short.width,long.width)
+        XCTAssertLessThan(short.height,100)
+        XCTAssertEqual(long.height,420)
+        let narrow = HoverBubbleLayout.size(term:"function",detail:"函数",maximumWidth:120,maximumHeight:80)
+        XCTAssertLessThanOrEqual(narrow.width,120)
+        XCTAssertLessThanOrEqual(narrow.height,80)
+    }
+
+    func testGridTracksNegativePanAndKeepsBoundedDensity() {
+        for zoom in [CGFloat(0.01),0.1,1,4,40] {
+            let spacing = GraphGridLayout.spacing(zoom:zoom)
+            XCTAssertGreaterThanOrEqual(spacing,20)
+            XCTAssertLessThanOrEqual(spacing,80)
+            let a = GraphGridLayout.lines(length:1000,offset:-17,spacing:spacing)
+            let b = GraphGridLayout.lines(length:1000,offset:-17+spacing,spacing:spacing)
+            XCTAssertEqual(a,b)
+            XCTAssertLessThanOrEqual(a.count,51)
+            XCTAssertTrue(a.allSatisfy { $0 >= 0 && $0 <= 1000 })
+        }
+    }
+
+    func testSelectionBarDoesNotInstallModalEditInteractionOrCoverOtherViews() throws {
+        let parent = UIView(frame:CGRect(x:0,y:0,width:900,height:900))
+        let host = UIView(frame:parent.bounds); parent.addSubview(host)
+        let menu = SelectionMenuController()
+        menu.textProvider = { "function" }
+        menu.targetRectProvider = { _ in CGRect(x:300,y:300,width:100,height:30) }
+        menu.install(on:host); menu.present(at:CGPoint(x:350,y:300))
+        XCTAssertTrue(menu.isPresented)
+        XCTAssertFalse(host.interactions.contains { $0 is UIEditMenuInteraction })
+        let bar = try XCTUnwrap(host.subviews.first { $0.accessibilityIdentifier == "selection-edit-bar" })
+        XCTAssertFalse(bar.frame.contains(CGPoint(x:50,y:600)))
+        XCTAssertTrue(host.hitTest(CGPoint(x:50,y:600),with:nil) === host)
+        menu.updatePosition(animated:false)
+        XCTAssertTrue(menu.isPresented)
+        menu.dismiss(); XCTAssertNil(bar.superview)
     }
 
     func testWordGeometryAcrossFontsAndSizes() throws {

@@ -1,7 +1,9 @@
 import UIKit
 import PDFKit
+import SwiftUI
 
-/// 编辑菜单封装(UIEditMenuInteraction = 系统原生菜单组件,弹出动画/位置/键盘导航均由系统负责)。
+/// Non-modal selection toolbar. Only its own visible bounds receive touches,
+/// leaving reader windows and the arc palette draggable while it is open.
 /// 菜单项:复制 / 查询(系统词典)/ 翻译(宿主回调,系统翻译面板)/ 搜索网页 / 共享。
 final class SelectionMenuController: NSObject {
 
@@ -20,24 +22,64 @@ final class SelectionMenuController: NSObject {
     var vocabStateProvider: (() -> (collected: Bool, colorName: String?))?
 
     private(set) var isPresented = false
-    private var interaction: UIEditMenuInteraction?
+    private var toolbar: UIVisualEffectView?
+    private var sourcePoint = CGPoint.zero
+    private var preferredArrow: UIEditMenuArrowDirection?
+    func containsToolbar(_ view:UIView?) -> Bool {
+        guard let view,let toolbar else { return false }
+        return view === toolbar || view.isDescendant(of:toolbar)
+    }
 
     func install(on view: UIView) {
         host = view
-        let interaction = UIEditMenuInteraction(delegate: self)
-        view.addInteraction(interaction)
-        self.interaction = interaction
     }
 
     /// 弹出菜单。arrowDirection 为方向提示(v0.6.10):菜单在锚点**上方**时箭头朝下(.down)、
     /// 下方时朝上(.up);nil = 不设置(等价系统默认 .automatic)。
     func present(at point: CGPoint, arrowDirection: UIEditMenuArrowDirection? = nil) {
-        guard let interaction else { return }
-        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: point)
-        if let arrowDirection {
-            configuration.preferredArrowDirection = arrowDirection
+        guard let host else { return }
+        dismiss()
+        sourcePoint = point; preferredArrow = arrowDirection
+        let surface = UIVisualEffectView(effect:UIBlurEffect(style:.systemMaterial))
+        surface.layer.cornerRadius = 16; surface.clipsToBounds = true
+        surface.accessibilityIdentifier = "selection-edit-bar"
+        let scroll = UIScrollView(); scroll.showsHorizontalScrollIndicator = false
+        let row = UIStackView(); row.axis = .horizontal; row.spacing = 2
+        let actions = menuActions(at:point).children
+        // All original actions stay available; nested menus open only when
+        // explicitly requested, never as a touch-blocking presentation shell.
+        for element in actions {
+            let button: UIButton
+            if let action = element as? UIAction {
+                button = UIButton(type:.system,primaryAction:action)
+            } else if let menu = element as? UIMenu {
+                button = UIButton(type:.system)
+                button.setTitle(menu.title,for:.normal)
+                button.menu = menu; button.showsMenuAsPrimaryAction = true
+            } else { continue }
+            button.titleLabel?.font = .preferredFont(forTextStyle:.subheadline)
+            button.tintColor = UIColor(DS.accent)
+            button.setContentHuggingPriority(.required,for:.horizontal)
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant:64).isActive = true
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant:44).isActive = true
+            row.addArrangedSubview(button)
         }
-        interaction.presentEditMenu(with: configuration)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(row); surface.contentView.addSubview(scroll)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo:surface.contentView.leadingAnchor,constant:6),
+            scroll.trailingAnchor.constraint(equalTo:surface.contentView.trailingAnchor,constant:-6),
+            scroll.topAnchor.constraint(equalTo:surface.contentView.topAnchor,constant:4),
+            scroll.bottomAnchor.constraint(equalTo:surface.contentView.bottomAnchor,constant:-4),
+            row.leadingAnchor.constraint(equalTo:scroll.contentLayoutGuide.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo:scroll.contentLayoutGuide.trailingAnchor),
+            row.topAnchor.constraint(equalTo:scroll.contentLayoutGuide.topAnchor),
+            row.bottomAnchor.constraint(equalTo:scroll.contentLayoutGuide.bottomAnchor),
+            row.heightAnchor.constraint(equalTo:scroll.frameLayoutGuide.heightAnchor)
+        ])
+        host.addSubview(surface); toolbar = surface; isPresented = true
+        updatePosition(animated:false)
     }
 
     /// 点选区:已弹出则收起、未弹出则呼出(选区不动)。
@@ -47,7 +89,7 @@ final class SelectionMenuController: NSObject {
 
     func dismiss() {
         guard isPresented else { return }
-        interaction?.dismissMenu()
+        toolbar?.removeFromSuperview(); toolbar = nil
         isPresented = false
     }
 
@@ -55,7 +97,15 @@ final class SelectionMenuController: NSObject {
     /// 系统会重新调用 `editMenuInteraction(_:targetRectFor:)`,把菜单贴回新的包络矩形(v0.6.10)。
     func updatePosition(animated: Bool) {
         guard isPresented else { return }
-        interaction?.updateVisibleMenuPosition(animated: animated)
+        guard let host,let toolbar else { return }
+        let target = targetRectProvider?(sourcePoint) ?? CGRect(origin:sourcePoint,size:.zero)
+        let visible = host.bounds.inset(by:host.safeAreaInsets).insetBy(dx:8,dy:8)
+        let height = max(52,UIFont.preferredFont(forTextStyle:.subheadline).lineHeight+24)
+        let width = min(430,visible.width)
+        let above = target.minY-height-8
+        let y = preferredArrow == .up || above < visible.minY ? target.maxY+8 : above
+        toolbar.frame = CGRect(x:min(max(target.midX-width/2,visible.minX),visible.maxX-width),
+            y:min(max(y,visible.minY),visible.maxY-height),width:width,height:height)
     }
 
     // MARK: - 菜单动作实现
@@ -103,42 +153,8 @@ final class SelectionMenuController: NSObject {
     }
 }
 
-extension SelectionMenuController: UIEditMenuInteractionDelegate {
-
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction,
-        willPresentMenuFor configuration: UIEditMenuConfiguration,
-        animator: UIEditMenuInteractionAnimating
-    ) {
-        isPresented = true
-    }
-
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction,
-        willDismissMenuFor configuration: UIEditMenuConfiguration,
-        animator: UIEditMenuInteractionAnimating
-    ) {
-        isPresented = false
-    }
-
-    /// 菜单定位:以"选区矩形"为基准——系统会把编辑栏放到矩形**上方**(原生行为),
-    /// 而不是像"裸锚点"那样挂在下边(会盖住选区、挡住点词)。
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction,
-        targetRectFor configuration: UIEditMenuConfiguration
-    ) -> CGRect {
-        if let rect = targetRectProvider?(configuration.sourcePoint) {
-            return rect
-        }
-        let p = configuration.sourcePoint
-        return CGRect(x: p.x - 1, y: p.y - 1, width: 2, height: 2)
-    }
-
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction,
-        menuFor configuration: UIEditMenuConfiguration,
-        suggestedActions: [UIMenuElement]
-    ) -> UIMenu? {
+extension SelectionMenuController {
+    private func menuActions(at sourcePoint:CGPoint) -> UIMenu {
 
         let copy = UIAction(title: "复制", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
             let value = self?.currentText() ?? ""
@@ -172,7 +188,7 @@ extension SelectionMenuController: UIEditMenuInteractionDelegate {
 
         let share = UIAction(title: "共享", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
             guard let self else { return }
-            self.presentShare(text: self.currentText(), sourcePoint: configuration.sourcePoint)
+            self.presentShare(text: self.currentText(), sourcePoint: sourcePoint)
         }
 
         // v0.10.0(Task 2.1):「生词本」子菜单——加入 / 高亮(4 色带勾选)/ 取消高亮
