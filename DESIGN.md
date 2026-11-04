@@ -110,7 +110,7 @@ components:
 
 以田野研究图册的层次、纸面和留白组织真实文档与词汇。暖纸底、墨绿重点、系统衬线词条形成稳定的阅读秩序；操作区使用原生语义字体和 SF Symbols。首页继续阅读为主区，词汇与图谱提供可操作的次级入口；具体页面构图见 `docs/ui-068-direction.md`，不把单页构图强制用于所有页面。
 
-这是 iPad 原生 SwiftUI / UIKit 系统，按代码提取并记录，不依赖网页框架、外部字体或 AI 概念图。令牌来源为 `Sources/App/DesignSystem.swift`；交互补充来源为窗口、选区、悬浮释义与图谱组件。当前文档描述实现和设计约束，不宣称验证已通过。`.impeccable/review/first` 中的首轮截图属于此前 `prior9c1d` 状态，不能证明本轮视觉结果；新版截图和真机触控、Pencil 手感、帧率仍需单独验收。
+这是 iPad 原生 SwiftUI / UIKit 系统，按代码提取并记录，不依赖网页框架、外部字体或 AI 概念图。令牌来源为 `Sources/App/DesignSystem.swift`；交互补充来源为窗口、选区、悬浮释义与图谱组件。当前应用源码 `078c07c` 的模拟器视觉证据见 `.impeccable/review/current078` 的 36 张 PNG，便携交付中对应 `UI-review/`，包含短/长悬浮译文与暗色书架。[完整 CI 41804327055](https://github.com/lei11118/pdf-vocab/actions/runs/41804327055) 通过 82 项单元/集成与 3 项 UI 测试，零失败；[专项验证 41804332164](https://github.com/lei11118/pdf-vocab/actions/runs/41804332164) 通过 1 项 UI 测试，零失败；[归档 41804338082](https://github.com/lei11118/pdf-vocab/actions/runs/41804338082) 成功。模拟器截图和 CI 不构成真实 iPad / Pencil 硬件证据；真机触控、Pencil 手感与跟手帧率仍待单独验收。
 
 **Key Characteristics:**
 - 暖纸与墨绿建立内容层级。
@@ -203,7 +203,7 @@ SwiftUI 布局使用 pt；frontmatter 的 `px` 仅为 DESIGN.md 可移植格式�
 
 词卡默认 320×430pt，功能窗默认 560×600pt，均受可用空间约束并保存用户尺寸/位置。可紧凑窗口低于 140pt 高进入胶囊，最小尺寸基线为 180×64pt；最小宽度随高度在 96–220pt 区间连续由 180pt 插值至 260pt，不在 140pt 内容阈值处突变。不允许紧凑的窗口最小高度 220pt。
 
-缩放使用持续存在的 44×44pt UIKit pan 热区，以起始尺寸加总位移计算；拖动期间左上角固定。完整与紧凑内容同时保留身份，通过可见性和命中状态切换。窗口边缘可移动，胶囊双击展开；不能在跨阈值时更换缩放识别器。关闭区为 44pt，外部触摸继续交给阅读区域（右下缩放热区是明确保留的方形热区）。
+缩放使用持续存在的 UIKit 触摸识别器，记录从按下开始的总位移；`WindowResizeRecognizer: UIGestureRecognizer` 在独立 44×44pt 手柄内从按下立即开始，以窗口坐标记录原始触点及后续总位移，再与起始尺寸相加计算，避免 UIPanGestureRecognizer 起始移动阈值遗漏位移。拖动期间左上角固定。完整与紧凑内容同时保留身份，通过可见性和命中状态切换。窗口边缘可移动，胶囊双击展开；不能在跨阈值时更换缩放识别器。关闭区为 44pt，外部触摸继续交给阅读区域（右下缩放热区是明确保留的方形热区）。
 
 ### Selection Toolbar and Arc Palette
 
