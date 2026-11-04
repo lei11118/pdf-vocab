@@ -306,23 +306,45 @@ final class WindowResizeGripView: UIView {
     override init(frame:CGRect) {
         super.init(frame:frame)
         backgroundColor = .clear
-        let pan = UIPanGestureRecognizer(target:self,action:#selector(drag(_:)))
-        pan.maximumNumberOfTouches = 1
+        let pan = WindowResizeRecognizer(target:self,action:#selector(drag(_:)))
         addGestureRecognizer(pan)
         accessibilityIdentifier = "window-resize-grip"
         isAccessibilityElement = true
         accessibilityLabel = "调整窗口大小"
     }
     required init?(coder:NSCoder) { fatalError() }
-    @objc private func drag(_ pan:UIPanGestureRecognizer) {
-        let delta = pan.translation(in:window)
+    @objc private func drag(_ pan:WindowResizeRecognizer) {
+        let delta = pan.translation
         switch pan.state {
-        case .began,.changed: onChanged?(CGSize(width:delta.x,height:delta.y))
-        case .ended: onChanged?(CGSize(width:delta.x,height:delta.y)); onEnded?()
+        case .began,.changed: onChanged?(delta)
+        case .ended: onChanged?(delta); onEnded?()
         case .cancelled,.failed: onEnded?()
         default: break
         }
     }
+}
+
+/// Grip touches belong to resizing immediately. UIPanGestureRecognizer waits
+/// for its movement slop and omits that initial distance from translation;
+/// that makes a 20pt drag resize by only a few points. Capture the raw start
+/// and subsequent window coordinates for the entire touch instead.
+final class WindowResizeRecognizer:UIGestureRecognizer {
+    private var origin:CGPoint?
+    private(set) var translation = CGSize.zero
+    override func touchesBegan(_ touches:Set<UITouch>,with event:UIEvent) {
+        guard origin == nil,touches.count == 1,let touch = touches.first else { state = .cancelled; return }
+        origin = touch.location(in:view?.window); translation = .zero
+        state = .began
+    }
+    private func update(_ touches:Set<UITouch>) {
+        guard let origin,let touch = touches.first else { return }
+        let point = touch.location(in:view?.window)
+        translation = CGSize(width:point.x-origin.x,height:point.y-origin.y)
+    }
+    override func touchesMoved(_ touches:Set<UITouch>,with event:UIEvent) { update(touches); state = .changed }
+    override func touchesEnded(_ touches:Set<UITouch>,with event:UIEvent) { update(touches); state = .ended }
+    override func touchesCancelled(_ touches:Set<UITouch>,with event:UIEvent) { state = .cancelled }
+    override func reset() { super.reset(); origin = nil }
 }
 
 /// 窗口右下角的白色缩放手柄弧条(v0.6.7):**造型即窗口边缘的一段**——
