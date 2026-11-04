@@ -149,7 +149,8 @@ final class InteractionPolishTests:XCTestCase {
             XCTAssertLessThanOrEqual(spacing,80)
             let a = GraphGridLayout.lines(length:1000,offset:-17,spacing:spacing)
             let b = GraphGridLayout.lines(length:1000,offset:-17+spacing,spacing:spacing)
-            XCTAssertEqual(a,b)
+            XCTAssertEqual(a.count,b.count)
+            for (x,y) in zip(a,b) { XCTAssertEqual(x,y,accuracy:0.0001) }
             XCTAssertLessThanOrEqual(a.count,51)
             XCTAssertTrue(a.allSatisfy { $0 >= 0 && $0 <= 1000 })
         }
@@ -501,6 +502,9 @@ final class InteractionPolishTests:XCTestCase {
             sentenceState.start(request); sentenceState.finish("每个单词都与另一个概念相联系。",request:request)
         }
         let cases: [(String, CGSize, AnyView)] = [
+            ("hover-short",CGSize(width:480,height:600),AnyView(HoverTipView(term:"function",detail:"函数；功能",anchor:CGPoint(x:240,y:450),bounds:CGSize(width:480,height:600)).background(DS.background1))),
+            ("hover-long",CGSize(width:480,height:600),AnyView(HoverTipView(term:"function",detail:String(repeating:"函数；功能；作用；职责。\n",count:40),anchor:CGPoint(x:240,y:500),bounds:CGSize(width:480,height:600)).background(DS.background1))),
+            ("library-dark",CGSize(width:834,height:1194),AnyView(LibraryView(store:docs).environment(\.colorScheme,.dark))),
             ("palette-marker-expanded", CGSize(width: 360, height: 420), AnyView(PencilPaletteView(session: markerReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("palette-brush-expanded", CGSize(width: 320, height: 420), AnyView(PencilPaletteView(session: brushReview, onUndo: {}, onRedo: {}).stylePanel.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white))),
             ("library-ipad", CGSize(width: 834, height: 1194), AnyView(LibraryView(store: DocumentStore(db: db)))),

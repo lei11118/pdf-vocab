@@ -199,9 +199,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
 
     // MARK: - 缩放手柄(右下角,像原生窗口)
 
-    /// 缩放手柄命中区(v0.10.0,Bug 1.1):**44×44 实心热区**钉在右下角(不再做"形状∩弧线"裁剪)——
-    /// 手指与 Pencil 都容易抓住;`highPriorityGesture` 保证它优先于"拖动窗口"手势,
-    /// 拖小白条不会再误触发移动、松手也不会瞬移。
+    /// Persistent 44pt UIKit target; the compact body cannot replace or cancel it.
     private var resizeHitArea: some View {
         WindowResizeGrip(onChanged: { translation in
             if resizeBase == nil { resizeBase = size }
@@ -269,7 +267,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         let maxW = max(minSize.width, bounds.width - 16)
         let maxH = max(minSize.height, bounds.height - 16)
         return CGSize(
-            width: min(max(value.width, value.height < compactThreshold ? minSize.width : 260), maxW),
+            width: min(max(value.width, allowsCompact && value.height < compactThreshold ? minSize.width : 260), maxW),
             height: min(max(value.height, minSize.height), maxH)
         )
     }

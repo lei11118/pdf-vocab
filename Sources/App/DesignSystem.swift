@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Neumorphic reading workspace: one material, soft relief and legible content.
+/// Research atlas: warm paper, forest ink, editorial type and quiet elevation.
 enum DS {
     static let hero = dynamic(light:0x183F34,dark:0x304D3D)
     static let onHero = Color(red:0.98,green:0.97,blue:0.92)
@@ -61,13 +61,13 @@ enum DS {
     static let accentContainer = dynamic(light: 0xDFEAE3, dark: 0x2E4B40)
     /// 主色上的文字 / 图标
     static let onAccent = dynamic(light: 0xFFFFFF, dark: 0x183B2C)
-    static let signal = dynamic(light: 0xA6603D, dark: 0xE1AF8A)
+    static let signal = dynamic(light: 0x975334, dark: 0xE1AF8A)
     /// 次级强调
     static let secondary = dynamic(light: 0x6E7C91, dark: 0x8E9AAD)
 
-    static let success = dynamic(light: 0x2E9E63, dark: 0x55C289)
-    static let caution = dynamic(light: 0xD98E24, dark: 0xE3A94D)
-    static let alert = dynamic(light: 0xED5279, dark: 0xFF6E8C)
+    static let success = dynamic(light: 0x267148, dark: 0x55C289)
+    static let caution = dynamic(light: 0x90601D, dark: 0xE3A94D)
+    static let alert = dynamic(light: 0xB32E49, dark: 0xFF6E8C)
     static let incorrect = dynamic(light: 0xC74440, dark: 0xE06B67)
 
     /// 内容 / 品牌辅助色(标签、分组、插画位)
@@ -272,7 +272,7 @@ struct DSReliefButtonStyle: ButtonStyle {
     }
 }
 
-/// Native inner shadows, constrained to the shape rather than blurred content.
+/// One restrained elevation for floating tools; inset controls use a clear outline.
 struct DSReliefSurface: View {
     var radius: CGFloat = DS.Radius.comfy
     var inset = false

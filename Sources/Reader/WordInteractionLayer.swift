@@ -222,7 +222,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
         highlight.path = path.cgPath
     }
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
-        selection = nil; redraw(); interactionSession.clear(); selectionMenu.dismiss()
+        selection = nil; redraw(); interactionSession.clear(); selectionMenu.dismiss(); isAccessibilityElement = true
     }
     @objc private func edit(_ gesture: UITapGestureRecognizer) { if image == nil { onEdit?() } }
     @objc private func press(_ gesture: UILongPressGestureRecognizer) {
@@ -278,6 +278,7 @@ final class WordInteractionView: UIView, UIPencilInteractionDelegate, UIGestureR
             }
         }
         selectionMenu.present(at:point)
+        isAccessibilityElement = false
     }
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .ended else { return }

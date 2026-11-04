@@ -45,7 +45,7 @@ struct KnowledgeGraphView: View {
         NavigationStack {
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
-                    DS.background1.ignoresSafeArea()
+                    DS.background1
                         .overlay { GraphGridBackground(offset:model.graph.offset,zoom:model.graph.zoom).allowsHitTesting(false) }
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance:2,coordinateSpace:.global).updating($panActive) { _,active,_ in active = true }.onChanged { value in
@@ -85,6 +85,8 @@ struct KnowledgeGraphView: View {
             }
             .navigationTitle(libraryDocuments == nil ? "知识图谱" : "主知识图谱")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(DS.background1,for:.navigationBar)
+            .toolbarBackground(.visible,for:.navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { if panelClose == nil { Button("完成") { model.save(immediate: true); closePanel() } } }
                 ToolbarItem(placement: .topBarTrailing) {
