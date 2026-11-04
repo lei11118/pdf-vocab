@@ -7,6 +7,15 @@ import SwiftUI
 
 @MainActor
 final class InteractionPolishTests:XCTestCase {
+    func testDocumentWindowsShareGraphSessionButDifferentBooksStayIndependent() throws {
+        let db = try XCTUnwrap(AppDatabase.shared)
+        let id = "window-graph-" + UUID().uuidString
+        let first = KnowledgeGraphStore.session(docId: id, db: db)
+        let peer = KnowledgeGraphStore.session(docId: id, db: db)
+        let other = KnowledgeGraphStore.session(docId: id+"-other", db: db)
+        XCTAssertTrue(first === peer)
+        XCTAssertFalse(first === other)
+    }
     func testRulerMeasuresAlongEdgeWithoutMovingDocumentPose() throws {
         let host = UIView(frame: CGRect(x: 0,y: 0,width: 500,height: 500))
         let ruler = SmartRulerView(length: 500,host: host)

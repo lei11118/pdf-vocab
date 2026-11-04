@@ -83,7 +83,7 @@ struct ReaderView: View {
         self.doc = doc
         self.store = store
         self.jumpTarget = jumpTarget
-        _graphModel = StateObject(wrappedValue: KnowledgeGraphStore(docId: doc.sha256, db: store.db))
+        _graphModel = StateObject(wrappedValue: KnowledgeGraphStore.session(docId: doc.sha256, db: store.db))
         _currentPage = State(initialValue: jumpTarget?.page ?? doc.lastPage)
         _suppressSave = State(initialValue: jumpTarget != nil)
         // v0.24.0:按书恢复上次的书写状态(可在设置里关闭)

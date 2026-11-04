@@ -116,6 +116,20 @@ struct KnowledgeGraph: Codable, Equatable {
 
 /// Uses the existing app database, so the normal database backup includes graphs.
 @MainActor final class KnowledgeGraphStore: ObservableObject {
+    private final class WeakSession {
+        weak var value: KnowledgeGraphStore?
+        init(_ value: KnowledgeGraphStore) { self.value = value }
+    }
+    private static var sessions: [ObjectIdentifier: [String: WeakSession]] = [:]
+    /// Reader scenes editing one document share a live graph and one save queue.
+    static func session(docId: String, db: AppDatabase) -> KnowledgeGraphStore {
+        let key = ObjectIdentifier(db)
+        if let existing = sessions[key]?[docId]?.value { return existing }
+        let value = KnowledgeGraphStore(docId: docId, db: db)
+        sessions[key] = (sessions[key] ?? [:]).filter { $0.value.value != nil }
+        sessions[key, default: [:]][docId] = WeakSession(value)
+        return value
+    }
     @Published var graph: KnowledgeGraph
     @Published var error: String?
     @Published private(set) var loaded = false

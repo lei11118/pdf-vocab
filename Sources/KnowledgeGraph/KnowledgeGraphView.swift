@@ -33,7 +33,7 @@ struct KnowledgeGraphView: View {
 
     init(docId: String, db: AppDatabase, tools: PencilToolSession, onSource: ((GraphScreenshot) -> Void)? = nil,
          libraryDocuments: [DocumentRecord]? = nil, onOpenDocument: ((String) -> Void)? = nil) {
-        _model = StateObject(wrappedValue: KnowledgeGraphStore(docId: docId, db: db))
+        _model = StateObject(wrappedValue: KnowledgeGraphStore.session(docId: docId, db: db))
         self.tools = tools; vocab = VocabStore(db: db); self.onSource = onSource
         self.libraryDocuments = libraryDocuments; self.onOpenDocument = onOpenDocument
     }
