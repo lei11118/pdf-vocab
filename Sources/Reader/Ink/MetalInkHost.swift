@@ -420,6 +420,16 @@ final class MetalInkHost: UIView {
         refresh()
     }
     func retrySavingInk() { if !failedPages.isEmpty { persist(failedPages) } }
+    @discardableResult func clearPage(_ index: Int) -> Bool {
+        finishErase(); clearInkSelection()
+        let before = pageInk(index)
+        guard !before.isEmpty else { return false }
+        commitGroup += 1
+        pages[index] = InkPage()
+        undoStack.append(UndoEntry(group:commitGroup,page:index,before:before,after:InkPage()))
+        redoStack.removeAll(); persist([index])
+        return true
+    }
     func detach() {
         finishErase();canvas.handleCancelled();clearInkSelection()
         drawingEnabled=false;canvas.isDrawingEnabled=false

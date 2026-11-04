@@ -169,6 +169,12 @@ final class InkRegressionTests: XCTestCase {
         XCTAssertTrue(try saved().isEmpty)
         host.undo()
         XCTAssertEqual(try saved().strokes.count,2)
+        XCTAssertTrue(host.clearPage(0))
+        XCTAssertTrue(try saved().isEmpty)
+        host.undo()
+        XCTAssertEqual(try saved().strokes.count,2)
+        host.redo()
+        XCTAssertTrue(try saved().isEmpty)
     }
 
     func testMetalShaderCompilesAndEmptyFrameCanDraw() throws {
@@ -279,5 +285,11 @@ final class InkRegressionTests: XCTestCase {
         acceptsSave = true; surface.retrySavingInk()
         XCTAssertEqual(saved.strokes.count,1,"retry must include the original unsaved stroke")
         XCTAssertEqual(surface.canvas.drawing.strokes.count,1)
+        XCTAssertTrue(surface.clearPage(0))
+        XCTAssertTrue(saved.strokes.isEmpty)
+        surface.undo()
+        XCTAssertEqual(saved.strokes.count,1)
+        surface.redo()
+        XCTAssertTrue(saved.strokes.isEmpty)
     }
 }

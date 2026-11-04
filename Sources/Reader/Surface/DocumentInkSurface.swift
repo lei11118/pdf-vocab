@@ -292,6 +292,17 @@ final class DocumentInkSurface: UIView {
         }
         if unsavedBefore.isEmpty { reloadStoredInk() }
     }
+    @discardableResult func clearPage(_ page: Int) -> Bool {
+        guard !inputActive else { return false }
+        let before = pageDrawings[page] ?? pageDrawingProvider?(page) ?? PKDrawing()
+        guard !before.strokes.isEmpty else { return false }
+        history.append((before:[page:before],after:[page:PKDrawing()]))
+        future.removeAll()
+        pageDrawings[page] = PKDrawing()
+        persistChange(page:page,before:before,after:PKDrawing())
+        if onPageInkDelta != nil && unsavedBefore.isEmpty { reloadStoredInk() } else { recompose() }
+        return true
+    }
 
     // MARK: - 几何工具
 

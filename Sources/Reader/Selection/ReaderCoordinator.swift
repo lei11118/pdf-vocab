@@ -2341,7 +2341,10 @@ final class ReaderCoordinator: NSObject {
     func clearCurrentPageInk() {
         guard let pdfView, let page = pdfView.currentPage,
               let index = pdfView.document?.index(for: page) else { return }
-        let cleared = overlayProvider?.clearInk(pageIndex: index) ?? false
+        let cleared: Bool
+        if let metalHost { cleared = metalHost.clearPage(index) }
+        else if let inkSurface { cleared = inkSurface.clearPage(index) }
+        else { cleared = overlayProvider?.clearInk(pageIndex:index) ?? false }
         DiagLog.log("pencil: clear page \(index) -> \(cleared ? 1 : 0)")
     }
     func retrySavingInk() {
