@@ -1,5 +1,105 @@
 import UIKit
 
+struct SmartRulerPanBaseline {
+    private(set) var origin = CGPoint.zero
+    private(set) var touchCount = 0
+
+    mutating func begin(at position: CGPoint, touchCount: Int) {
+        origin = position
+        self.touchCount = touchCount
+    }
+
+    mutating func rebase(at position: CGPoint, touchCount: Int) {
+        origin = position
+        self.touchCount = touchCount
+    }
+
+    mutating func rebaseIfTouchCountChanged(_ touchCount: Int, at position: CGPoint) -> Bool {
+        guard touchCount != self.touchCount else { return false }
+        rebase(at: position, touchCount: touchCount)
+        return true
+    }
+
+    mutating func end() {
+        touchCount = 0
+    }
+}
+struct SmartRulerPose {
+    var position: CGPoint
+    var angle: CGFloat
+    var enteredSoftSnap: Bool
+}
+
+/// Tracks only valid two-touch samples. Ending a rotation consumes no new touch
+/// location, because UIKit's final centroid can jump after one finger lifts.
+struct SmartRulerRotationSession {
+    private(set) var position: CGPoint
+    private(set) var displayedAngle: Double
+    private(set) var angleBadgeCenter: CGPoint?
+    private var rawAngle: Double
+    private var lastPivot: CGPoint
+    private var lastRecognizerRotation: CGFloat
+    private var isSoftSnapping = false
+
+    init(position: CGPoint, angle: CGFloat, pivot: CGPoint, recognizerRotation: CGFloat) {
+        self.position = position
+        displayedAngle = Double(angle)
+        rawAngle = Double(angle)
+        angleBadgeCenter = pivot
+        lastPivot = pivot
+        lastRecognizerRotation = recognizerRotation
+    }
+
+    mutating func update(pivot: CGPoint, recognizerRotation: CGFloat) -> SmartRulerPose? {
+        guard pivot.x.isFinite, pivot.y.isFinite, recognizerRotation.isFinite else { return nil }
+        let delta = recognizerRotation - lastRecognizerRotation
+        guard delta.isFinite else { return nil }
+
+        rawAngle += Double(delta)
+        let snapped = SmartRulerView.calculateSoftSnappedAngle(current: rawAngle)
+        let nextAngle = snapped.angle
+        let effectiveRotation = nextAngle - displayedAngle
+        let cosine = CGFloat(cos(effectiveRotation))
+        let sine = CGFloat(sin(effectiveRotation))
+        let dx = position.x - lastPivot.x
+        let dy = position.y - lastPivot.y
+        position = CGPoint(
+            x: pivot.x + dx * cosine - dy * sine,
+            y: pivot.y + dx * sine + dy * cosine
+        )
+        displayedAngle = nextAngle
+        lastPivot = pivot
+        lastRecognizerRotation = recognizerRotation
+        angleBadgeCenter = pivot
+        let enteredSoftSnap = snapped.didSnap && !isSoftSnapping
+        isSoftSnapping = snapped.didSnap
+        return SmartRulerPose(position: position, angle: CGFloat(nextAngle), enteredSoftSnap: enteredSoftSnap)
+    }
+
+    /// Reprojects the active pose after PDF scrolling or zooming without
+    /// discarding the recognizer's last valid pivot or cumulative rotation.
+    mutating func adopt(position: CGPoint, angle: CGFloat) {
+        guard position.x.isFinite, position.y.isFinite, angle.isFinite else { return }
+        self.position = position
+        let normalized = SmartRulerView.normalizedAngle(Double(angle))
+        let equivalent = normalized + ((displayedAngle - normalized) / .pi).rounded() * .pi
+        let shift = equivalent - displayedAngle
+        displayedAngle = equivalent
+        rawAngle += shift
+        isSoftSnapping = SmartRulerView.calculateSoftSnappedAngle(current: rawAngle).didSnap
+    }
+
+    /// Finishes using the last accepted two-finger midpoint; no release location
+    /// is read, so lifting a finger cannot move the ruler.
+    mutating func finish() -> SmartRulerPose {
+        angleBadgeCenter = nil
+        return SmartRulerPose(position: position, angle: CGFloat(displayedAngle), enteredSoftSnap: false)
+    }
+
+    mutating func cancel() {
+        angleBadgeCenter = nil
+    }
+}
 /// An analytical infinite line rendered inside the viewport. The pose is stored
 /// in document coordinates and projected into the viewport after scroll/zoom.
 final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
@@ -21,10 +121,8 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
     private(set) var measuredLength: CGFloat?
     private var measurementPoint: CGPoint?
     private var measurementRevision = 0
-    private var dragOrigin=CGPoint.zero
-    private var turnOrigin=CGPoint.zero
-    private var turnPivot=CGPoint.zero
-    private var turnAngle:CGFloat?
+    private var panBaseline = SmartRulerPanBaseline()
+    private var rotationSession: SmartRulerRotationSession?
     private let haptic=UIImpactFeedbackGenerator(style:.light)
     private lazy var pan=UIPanGestureRecognizer(target:self,action:#selector(dragRuler(_:)))
     init(length:CGFloat,host:UIView) {
@@ -53,7 +151,9 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
         guard let documentView,let anchor=documentAnchor,let axis=documentAxis else { return }
         let a=convert(anchor,from:documentView),b=convert(axis,from:documentView)
         rulerPosition=a;angle=atan2(b.y-a.y,b.x-a.x)
-        poseScale=max(0.01,hypot(b.x-a.x,b.y-a.y)/100);setNeedsDisplay()
+        poseScale=max(0.01,hypot(b.x-a.x,b.y-a.y)/100)
+        rotationSession?.adopt(position:rulerPosition,angle:angle)
+        setNeedsDisplay()
     }
     func resetInHost() {
         updateHostBounds();poseScale=1;rulerPosition=CGPoint(x:bounds.midX,y:bounds.midY);angle=0;captureDocumentPose();setNeedsDisplay()
@@ -73,6 +173,24 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
             return (normalizedAngle(target * .pi/180),true)
         }
         return (value,false)
+    }
+    static func calculateSoftSnappedAngle(current: Double) -> (angle: Double, didSnap: Bool) {
+        guard current.isFinite else { return (0, false) }
+        let targets = snapTargetsDegrees.map { degrees -> Double in
+            let normalized = normalizedAngle(degrees * .pi / 180)
+            return normalized + ((current - normalized) / .pi).rounded() * .pi
+        }
+        guard let target = targets.min(by: { abs($0 - current) < abs($1 - current) }) else {
+            return (current, false)
+        }
+        let difference = current - target
+        let tolerance = snapToleranceDegrees * .pi / 180
+        guard abs(difference) <= tolerance else { return (current, false) }
+
+        // Cubic smoothstep keeps both angle and slope continuous at the snap boundary.
+        let progress = abs(difference) / tolerance
+        let eased = progress * progress * (3 - 2 * progress)
+        return (target + difference * eased, true)
     }
     func linePoints()->(CGPoint,CGPoint) {
         let dx=cos(angle)*rulerLength,dy=sin(angle)*rulerLength
@@ -113,29 +231,55 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
         isOn && bounds.contains(point) && abs(signedDistance(point))<=halfHeight+6
     }
     @objc private func dragRuler(_ g:UIPanGestureRecognizer) {
-        guard turnAngle==nil else { return }
         switch g.state {
-        case .began:dragOrigin=rulerPosition
+        case .began:
+            panBaseline.begin(at:rulerPosition,touchCount:g.numberOfTouches)
+            g.setTranslation(.zero,in:self)
         case .changed:
-            let t=g.translation(in:self);setPose(position:CGPoint(x:dragOrigin.x+t.x,y:dragOrigin.y+t.y),angle:angle)
+            if panBaseline.rebaseIfTouchCountChanged(g.numberOfTouches,at:rulerPosition) {
+                g.setTranslation(.zero,in:self)
+                return
+            }
+            guard rotationSession == nil else { return }
+            let t=g.translation(in:self)
+            setPose(position:CGPoint(x:panBaseline.origin.x+t.x,y:panBaseline.origin.y+t.y),angle:angle)
+        case .ended,.cancelled,.failed:
+            panBaseline.end()
         default:break
         }
     }
     @objc private func rotate(_ g:UIRotationGestureRecognizer) {
         switch g.state {
-        case .began:turnAngle=angle;turnOrigin=rulerPosition;turnPivot=g.location(in:self)
-        case .changed,.ended:
-            guard let initial=turnAngle else { return }
-            let pivot=g.location(in:self),rotation=g.rotation
-            let dx=turnOrigin.x-turnPivot.x,dy=turnOrigin.y-turnPivot.y
-            let snap=Self.calculateSnappedAngle(current:Double(initial+rotation))
-            let p=CGPoint(x:pivot.x+dx*cos(rotation)-dy*sin(rotation),y:pivot.y+dx*sin(rotation)+dy*cos(rotation))
-            if snap.didSnap && abs(Double(angle)-snap.angle)>0.01 { haptic.impactOccurred() }
-            setPose(position:p,angle:CGFloat(snap.angle))
-            if g.state == .ended { turnAngle=nil;dragOrigin=rulerPosition;pan.setTranslation(.zero,in:self) }
-        case .cancelled,.failed:turnAngle=nil;dragOrigin=rulerPosition;pan.setTranslation(.zero,in:self)
+        case .began:
+            guard g.numberOfTouches == 2 else { return }
+            let pivot=g.location(in:self)
+            rotationSession=SmartRulerRotationSession(position:rulerPosition,angle:angle,pivot:pivot,recognizerRotation:g.rotation)
+            rebasePan()
+            setNeedsDisplay()
+        case .changed:
+            guard g.numberOfTouches == 2, var session=rotationSession else { return }
+            let pivot=g.location(in:self)
+            guard let pose=session.update(pivot:pivot,recognizerRotation:g.rotation) else { return }
+            rotationSession=session
+            if pose.enteredSoftSnap { haptic.impactOccurred() }
+            setPose(position:pose.position,angle:pose.angle)
+        case .ended:
+            guard var session=rotationSession else { return }
+            let pose=session.finish()
+            rotationSession=nil
+            setPose(position:pose.position,angle:pose.angle)
+            rebasePan()
+        case .cancelled,.failed:
+            rotationSession?.cancel()
+            rotationSession=nil
+            rebasePan()
+            setNeedsDisplay()
         default:break
         }
+    }
+    private func rebasePan() {
+        panBaseline.rebase(at:rulerPosition,touchCount:pan.numberOfTouches)
+        pan.setTranslation(.zero,in:self)
     }
     func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldRecognizeSimultaneouslyWith other:UIGestureRecognizer)->Bool { other.view === self }
     override func draw(_ rect:CGRect) {
@@ -158,18 +302,22 @@ final class SmartRulerView: UIView, UIGestureRecognizerDelegate {
             tick+=1
         }
         ctx.restoreGState()
-        // Labels stay upright and readable; the ruler's document pose is unchanged.
-        drawBadge(angleLabel, at: rulerPosition, circular: true)
+        // The angle badge follows the active two-finger centroid exactly.
+        if let badgeCenter=rotationSession?.angleBadgeCenter {
+            drawBadge(angleLabel, at: badgeCenter, circular: true, clampCenter: false)
+        }
         if let measuredLength, let measurementPoint {
             drawBadge(String(format: "%.0f pt", measuredLength), at: measurementPoint, circular: false)
         }
     }
-    private func drawBadge(_ text: String, at point: CGPoint, circular: Bool) {
+    private func drawBadge(_ text: String, at point: CGPoint, circular: Bool, clampCenter: Bool = true) {
         let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: UIColor.label]
         let size = (text as NSString).size(withAttributes: attrs)
         let width = circular ? max(42,size.width+16) : size.width+16
         let height: CGFloat = circular ? 42 : 28
-        let center = CGPoint(x: min(max(point.x,width/2+4),bounds.width-width/2-4), y: min(max(point.y,height/2+4),bounds.height-height/2-4))
+        let center = clampCenter
+            ? CGPoint(x: min(max(point.x,width/2+4),bounds.width-width/2-4), y: min(max(point.y,height/2+4),bounds.height-height/2-4))
+            : point
         let rect = CGRect(x:center.x-width/2,y:center.y-height/2,width:width,height:height)
         UIColor.secondarySystemBackground.withAlphaComponent(0.96).setFill()
         UIBezierPath(roundedRect:rect,cornerRadius:height/2).fill()

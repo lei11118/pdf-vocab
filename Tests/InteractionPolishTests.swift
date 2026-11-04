@@ -723,6 +723,81 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertTrue(words.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.x+$0.w <= 1.001 && $0.y+$0.h <= 1.001 })
     }
 
+    func testRulerSoftSnapIsContinuousAtToleranceBoundary() {
+        let target = 30.0 * Double.pi / 180
+        let tolerance = SmartRulerView.snapToleranceDegrees * Double.pi / 180
+        let epsilon = 0.001 * Double.pi / 180
+        let midpoint = SmartRulerView.calculateSoftSnappedAngle(current: target + tolerance / 2)
+        XCTAssertEqual(midpoint.angle, target + tolerance / 4, accuracy: 1e-12)
+
+        let inside = SmartRulerView.calculateSoftSnappedAngle(current: target + tolerance - epsilon)
+        let outside = SmartRulerView.calculateSoftSnappedAngle(current: target + tolerance + epsilon)
+        XCTAssertTrue(inside.didSnap)
+        XCTAssertFalse(outside.didSnap)
+        XCTAssertLessThan(abs(inside.angle - outside.angle), 3 * epsilon)
+    }
+
+    func testRulerRotationUsesSnappedAngleDeltaAroundDistantPivot() {
+        let initialPivot = CGPoint(x:40,y:50)
+        let currentPivot = CGPoint(x:45,y:58)
+        let initialPosition = CGPoint(x:700,y:320)
+        let rotation = CGFloat(37 * Double.pi / 180)
+        var session = SmartRulerRotationSession(position:initialPosition,angle:0,pivot:initialPivot,recognizerRotation:0)
+
+        let pose = session.update(pivot:currentPivot,recognizerRotation:rotation)
+        XCTAssertNotNil(pose)
+        let dx = initialPosition.x - initialPivot.x
+        let dy = initialPosition.y - initialPivot.y
+        let expected = CGPoint(
+            x:currentPivot.x + dx*cos(rotation) - dy*sin(rotation),
+            y:currentPivot.y + dx*sin(rotation) + dy*cos(rotation)
+        )
+        XCTAssertEqual(pose?.position.x ?? 0,expected.x,accuracy:1e-5)
+        XCTAssertEqual(pose?.position.y ?? 0,expected.y,accuracy:1e-5)
+        XCTAssertEqual(pose?.angle ?? 0,rotation,accuracy:1e-5)
+    }
+
+    func testRulerSoftSnapCrossesZeroAndOneEightyWithoutFlip() throws {
+        let pivot = CGPoint(x:50,y:40)
+        let initialPosition = CGPoint(x:420,y:260)
+        let initialAngle = CGFloat(179 * Double.pi / 180)
+        var session = SmartRulerRotationSession(position:initialPosition,angle:initialAngle,pivot:pivot,recognizerRotation:0)
+
+        let first = session.update(pivot:pivot,recognizerRotation:CGFloat(2 * Double.pi / 180))
+        let firstAngle = SmartRulerView.normalizedAngle(Double(first?.angle ?? 0))
+        XCTAssertGreaterThan(firstAngle,0)
+        XCTAssertLessThan(firstAngle,Double.pi / 180)
+
+        let second = session.update(pivot:pivot,recognizerRotation:CGFloat(3 * Double.pi / 180))
+        let secondAngle = SmartRulerView.normalizedAngle(Double(second?.angle ?? 0))
+        XCTAssertGreaterThan(secondAngle,Double.pi / 180)
+        XCTAssertLessThan(secondAngle,2 * Double.pi / 180)
+        let initialRadius = hypot(initialPosition.x-pivot.x,initialPosition.y-pivot.y)
+        let finalPosition = try XCTUnwrap(second?.position)
+        XCTAssertEqual(hypot(finalPosition.x-pivot.x,finalPosition.y-pivot.y),initialRadius,accuracy:1e-5)
+    }
+
+    func testRulerRotationFinishKeepsLastTwoFingerPoseAndPanRebasesOnTouchCountChange() throws {
+        let initialPivot = CGPoint(x:20,y:30)
+        let lastPivot = CGPoint(x:35,y:44)
+        var rotation = SmartRulerRotationSession(
+            position:CGPoint(x:500,y:260),angle:0,pivot:initialPivot,recognizerRotation:0
+        )
+        let updated = rotation.update(pivot:lastPivot,recognizerRotation:CGFloat(23 * Double.pi / 180))
+        let changed = try XCTUnwrap(updated)
+        let final = rotation.finish()
+        XCTAssertEqual(final.position,changed.position)
+        XCTAssertEqual(final.angle,changed.angle)
+        XCTAssertNil(rotation.angleBadgeCenter)
+
+        var pan = SmartRulerPanBaseline()
+        pan.begin(at:CGPoint(x:100,y:100),touchCount:1)
+        XCTAssertTrue(pan.rebaseIfTouchCountChanged(2,at:CGPoint(x:120,y:130)))
+        XCTAssertEqual(pan.origin,CGPoint(x:120,y:130))
+        XCTAssertFalse(pan.rebaseIfTouchCountChanged(2,at:CGPoint(x:140,y:150)))
+        XCTAssertTrue(pan.rebaseIfTouchCountChanged(1,at:CGPoint(x:130,y:140)))
+        XCTAssertEqual(pan.origin,CGPoint(x:130,y:140))
+    }
     func testRulerTracksDocumentInsteadOfViewport() {
         let host=UIView(frame:CGRect(x:0,y:0,width:500,height:500))
         let document=UIView(frame:CGRect(x:0,y:0,width:500,height:1500));host.addSubview(document)
