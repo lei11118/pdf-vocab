@@ -307,14 +307,15 @@ struct LibraryView: View {
     private func resumeCard(_ doc: DocumentRecord) -> some View {
         Button { activeDocument = doc } label: {
             HStack(spacing: DS.Space.s) {
-                DocumentCoverThumbnail(doc: doc, url: try? store.pdfURL(for: doc))
-                    .frame(width: 76)
+                if viewportWidth >= 380 {
+                    DocumentCoverThumbnail(doc:doc,url:try? store.pdfURL(for:doc)).frame(width:76)
+                }
 
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Text(doc.title)
                         .font(DS.Fonts.title2)
                         .foregroundStyle(DS.onHero)
-                        .lineLimit(2)
+                        .lineLimit(viewportWidth < 380 ? 3 : 2)
                         .multilineTextAlignment(.leading)
 
                     Text("\(doc.pageCount) 页 · PDF 文档")

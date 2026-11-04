@@ -812,11 +812,10 @@ struct VocabListView: View {
     private var dockContent: some View {
         Group {
             if viewportWidth < 420 {
-                VStack(alignment: .leading, spacing: DS.Space.x3s) {
-                    dockStatus
-                    WrapLayout(spacing: DS.Space.x3s) { dockActions }
+                HStack(spacing:0) {
+                    if listMode == .select { dockStatus }
+                    dockActions
                 }
-                .frame(width: max(120, viewportWidth - 2 * DS.Layout.margin(for: viewportWidth) - 2 * DS.Space.s), alignment: .leading)
             } else {
                 HStack(spacing: DS.Space.x3s) {
                     dockStatus
@@ -1057,8 +1056,10 @@ private struct VocabCardView: View {
             }
 
             Spacer(minLength: DS.Space.x2s)
-            Divider().overlay(DS.accent.opacity(0.10))
-            footer
+            if word.sourcePage != nil || word.sourceDocTitle != nil || onJump != nil {
+                Divider().overlay(DS.accent.opacity(0.10))
+                footer
+            }
         }
         .padding(DS.Space.m)
         .frame(maxWidth: .infinity, minHeight: compact ? 88 : 148, alignment: .topLeading)

@@ -58,7 +58,7 @@ struct DocumentCoverThumbnail: View {
             }
 
         }
-        .shadow(color: DS.reliefDark.opacity(0.45), radius: 7, x: 4, y: 5)
+        .shadow(color:.black.opacity(0.12),radius:7,x:2,y:5)
         .aspectRatio(DS.Layout.coverAspect, contentMode: .fit)
         .task(id: doc.sha256) { await loadThumbnail() }
         .accessibilityHidden(true)

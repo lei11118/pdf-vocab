@@ -542,7 +542,8 @@ final class InteractionPolishTests:XCTestCase {
             UserDefaults.standard.set(name == "vocab-compact", forKey: "vocabCompactLayout")
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
-            let host = UIHostingController(rootView: content)
+            let host = UIHostingController(rootView:content.tint(DS.accent).buttonStyle(DSPressableButtonStyle()))
+            host.overrideUserInterfaceStyle = name.contains("dark") ? .dark : .light
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(origin: .zero, size: size)
             window.rootViewController = host
@@ -554,7 +555,7 @@ final class InteractionPolishTests:XCTestCase {
             host.view.frame = window.bounds
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
-            try await Task.sleep(for: .milliseconds(name.hasPrefix("graph-") ? 2500 : 500))
+            try await Task.sleep(for:.milliseconds(name.hasPrefix("graph-") ? 2500 : name.hasPrefix("library-") ? 1800 : 700))
             var drawn = false
             let format = UIGraphicsImageRendererFormat()
             format.preferredRange = .standard
