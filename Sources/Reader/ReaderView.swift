@@ -28,6 +28,9 @@ struct ReaderView: View {
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     @State private var contextReadingGeneration = 0
+    @State private var contextOCRPage: ContextOCRPage?
+    @State private var activeContextOCRRunID: UUID?
+    @State private var activeDocumentOCRRunID: UUID?
     /// v0.9.0(M4):标记 / 阅读模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
     /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
     /// 用户反馈"用过的工具回到主界面再进来就被重置了"。设置里可关掉"恢复上次书写状态"。
@@ -105,6 +108,7 @@ struct ReaderView: View {
         pencilSyncContent
             .onChange(of: contextReadingEnabled) { _, enabled in
                 contextReadingGeneration += 1
+                contextOCRPage = nil
                 readerHandle.coordinator?.setContextReadingMode(enabled, generation: contextReadingGeneration)
                 if let cardContent, case .contextual = cardContent {
                     self.cardContent = nil
@@ -171,6 +175,8 @@ struct ReaderView: View {
             .onDisappear {
                 // v0.24.0:退出阅读只落盘,不再重置工具 —— 上次用什么笔、是否在书写,
                 // 下次进这本书原样恢复(用户反馈:回到主界面再进来工具被重置了)。
+                activeDocumentOCRRunID = nil
+                ocrRunning = false
                 arcAnchor = nil
                 readerHandle.coordinator?.setMarkMode(false)
                 DiagLog.log("reader: disappear (mark=\(markMode) tool=\(pencilTools.kind.rawValue))")
@@ -239,6 +245,31 @@ struct ReaderView: View {
     /// 当前是否有任何弹层/面板打开(词卡之外的一切)
     private var anySheetOpen: Bool {
         showPageJump || showSettings || showVocab || showGraph || showOutline || showSearch || showAnalyze || showThumbnails || confirmClearInk || exportFailed || showToolCustomization
+    }
+
+    private var contextPageOCRTaskKey: ContextPageOCRTaskKey? {
+        guard let resolvedURL else { return nil }
+        return ContextPageOCRTaskKey(documentSHA256: doc.sha256,
+                                     url: resolvedURL,
+                                     pageIndex: currentPage,
+                                     contextReadingEnabled: contextReadingEnabled,
+                                     generation: contextReadingGeneration)
+    }
+
+    private var documentOCRTaskKey: DocumentOCRTaskKey? {
+        guard let resolvedURL else { return nil }
+        return DocumentOCRTaskKey(documentSHA256: doc.sha256,
+                                  url: resolvedURL,
+                                  contextReadingEnabled: contextReadingEnabled,
+                                  generation: contextReadingGeneration)
+    }
+
+    private func isCurrentContextOCRRun(_ runID: UUID, key: ContextPageOCRTaskKey) -> Bool {
+        activeContextOCRRunID == runID && contextPageOCRTaskKey == key
+    }
+
+    private func isCurrentDocumentOCRRun(_ runID: UUID, key: DocumentOCRTaskKey) -> Bool {
+        activeDocumentOCRRunID == runID && documentOCRTaskKey == key
     }
 
     /// 收起悬浮词卡与弧形工具盘(v0.37.0)
@@ -759,24 +790,117 @@ struct ReaderView: View {
     }
 
     /// v0.11.0(M6):扫描版自动 OCR(每文档一次;进度显示;完成后通知协调器刷新词框缓存)。
-    private func runOCROnce(url:URL) async {
-        let sha = doc.sha256
-        let ocrStore = OCRStore(db: store.db)
-        if ocrStore.isDone(docSha: sha) { return }
-        DiagLog.log("ocr: start (scanned doc)")
-        ocrRunning = true
-        ocrDone = 0
-        ocrTotal = max(doc.pageCount, 1)
-        await OCRService.run(url: url, docSha: sha, store: ocrStore) { current, total in
-            DispatchQueue.main.async {
-                readerHandle.coordinator?.ocrDidFinish()
-                ocrDone = current
-                ocrTotal = total
+    private func runOCROnce(for key: DocumentOCRTaskKey) async {
+        guard !Task.isCancelled, documentOCRTaskKey == key else { return }
+        let runID = UUID()
+        activeDocumentOCRRunID = runID
+        defer {
+            if activeDocumentOCRRunID == runID {
+                activeDocumentOCRRunID = nil
+                ocrRunning = false
             }
         }
         ocrRunning = false
-        readerHandle.coordinator?.ocrDidFinish()
-        DiagLog.log("ocr: done")
+        ocrDone = 0
+        ocrTotal = 0
+
+        let ocrStore = OCRStore(db: store.db)
+        if ocrStore.isDone(docSha: key.documentSHA256) {
+            DiagLog.log("ocr: already done sha=\(key.documentSHA256.prefix(8))")
+            return
+        }
+
+        do {
+            if key.contextReadingEnabled {
+                let total = try await ContextOCRWorker.shared.pageCount(
+                    url: key.url,
+                    documentSHA256: key.documentSHA256)
+                try Task.checkCancellation()
+                guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+
+                ocrRunning = true
+                ocrTotal = total
+                ocrDone = 0
+                DiagLog.log("ocr: start actor pages=\(total) sha=\(key.documentSHA256.prefix(8))")
+                for pageIndex in 0..<total {
+                    try Task.checkCancellation()
+                    _ = try await ContextOCRWorker.shared.recognizeLegacyPage(
+                        url: key.url,
+                        documentSHA256: key.documentSHA256,
+                        pageIndex: pageIndex,
+                        store: ocrStore)
+                    try Task.checkCancellation()
+                    guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+                    ocrDone = pageIndex + 1
+                    readerHandle.coordinator?.ocrDidFinish()
+                    await Task.yield()
+                }
+                try Task.checkCancellation()
+                guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+                ocrStore.markDone(docSha: key.documentSHA256)
+            } else {
+                ocrRunning = true
+                ocrDone = 0
+                ocrTotal = max(doc.pageCount, 1)
+                DiagLog.log("ocr: start legacy (scanned doc) sha=\(key.documentSHA256.prefix(8))")
+                await OCRService.run(url: key.url, docSha: key.documentSHA256, store: ocrStore) { current, total in
+                    DispatchQueue.main.async {
+                        guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+                        readerHandle.coordinator?.ocrDidFinish()
+                        ocrDone = current
+                        ocrTotal = total
+                    }
+                }
+                try Task.checkCancellation()
+                guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+                guard ocrStore.isDone(docSha: key.documentSHA256) else {
+                    throw ContextOCRWorkerError.invalidDocument
+                }
+            }
+
+            guard isCurrentDocumentOCRRun(runID, key: key) else { return }
+            ocrRunning = false
+            readerHandle.coordinator?.ocrDidFinish()
+            DiagLog.log("ocr: done sha=\(key.documentSHA256.prefix(8)) context=\(key.contextReadingEnabled)")
+        } catch is CancellationError {
+            DiagLog.log("ocr: cancelled sha=\(key.documentSHA256.prefix(8))")
+        } catch ContextOCRRecognitionError.cancelled {
+            DiagLog.log("ocr: cancelled sha=\(key.documentSHA256.prefix(8))")
+        } catch {
+            guard !Task.isCancelled, isCurrentDocumentOCRRun(runID, key: key) else { return }
+            DiagLog.log("ocr: failed sha=\(key.documentSHA256.prefix(8)) error=\(error.localizedDescription)")
+        }
+    }
+
+    private func runCurrentPageContextOCR(for key: ContextPageOCRTaskKey, runID: UUID) async {
+        guard key.contextReadingEnabled, isCurrentContextOCRRun(runID, key: key) else { return }
+        defer {
+            if activeContextOCRRunID == runID { activeContextOCRRunID = nil }
+        }
+        do {
+            try Task.checkCancellation()
+            let page = try await ContextOCRWorker.shared.recognizeContextPage(
+                url: key.url,
+                documentSHA256: key.documentSHA256,
+                pageIndex: key.pageIndex,
+                db: store.db)
+            try Task.checkCancellation()
+            guard isCurrentContextOCRRun(runID, key: key) else { return }
+
+            contextOCRPage = page
+            if page != nil {
+                readerHandle.coordinator?.ocrDidFinish()
+                DiagLog.log("context OCR: page ready sha=\(key.documentSHA256.prefix(8)) page=\(key.pageIndex)")
+            }
+        } catch is CancellationError {
+            // A replacement key owns all subsequent state updates.
+        } catch ContextOCRRecognitionError.cancelled {
+            // OCR cancellation is not reported as a failure or as an empty page.
+        } catch {
+            guard !Task.isCancelled, isCurrentContextOCRRun(runID, key: key) else { return }
+            contextOCRPage = nil
+            DiagLog.log("context OCR: failed sha=\(key.documentSHA256.prefix(8)) page=\(key.pageIndex) error=\(error.localizedDescription)")
+        }
     }
 
     /// v0.12.0(M7):导出批注版 PDF(高亮 + 手写烧录;后台生成 → 分享面板)
@@ -835,6 +959,7 @@ struct ReaderView: View {
                     markMode: markMode,
                     contextReadingEnabled: contextReadingEnabled,
                     contextReadingGeneration: contextReadingGeneration,
+                    contextOCRPage: contextOCRPage,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
@@ -958,9 +1083,16 @@ struct ReaderView: View {
             resolvedURL = url
             optimizing = false
         }
-        .task(id: resolvedURL) {
-            guard let resolvedURL else { return }
-            await runOCROnce(url:resolvedURL)
+        .task(id: contextPageOCRTaskKey, priority: .userInitiated) {
+            guard let key = contextPageOCRTaskKey, key.contextReadingEnabled else { return }
+            let runID = UUID()
+            activeContextOCRRunID = runID
+            contextOCRPage = nil
+            await runCurrentPageContextOCR(for: key, runID: runID)
+        }
+        .task(id: documentOCRTaskKey, priority: .utility) {
+            guard let key = documentOCRTaskKey else { return }
+            await runOCROnce(for: key)
         }
     }
 
@@ -981,6 +1113,21 @@ struct ReaderView: View {
         guard let state = readerHandle.coordinator?.captureReadingState() else { return }
         try? store.saveReadingState(state, for: doc.sha256)
     }
+}
+
+private struct ContextPageOCRTaskKey: Hashable, Sendable {
+    let documentSHA256: String
+    let url: URL
+    let pageIndex: Int
+    let contextReadingEnabled: Bool
+    let generation: Int
+}
+
+private struct DocumentOCRTaskKey: Hashable, Sendable {
+    let documentSHA256: String
+    let url: URL
+    let contextReadingEnabled: Bool
+    let generation: Int
 }
 
 /// 页码跳转面板:按页码(输入 + 滑杆)/ 按缩略图,两种方式;越界处理。

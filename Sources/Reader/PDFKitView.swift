@@ -35,6 +35,7 @@ struct PDFKitView: UIViewRepresentable {
     var markMode: Bool = false
     var contextReadingEnabled: Bool = false
     var contextReadingGeneration: Int = 0
+    var contextOCRPage: ContextOCRPage? = nil
     /// v0.14.0:手写工具会话(浮动工具带驱动各页画布)
     var toolSession: PencilToolSession? = nil
     /// v0.15.0:挤压 → 弧形工具盘(回调笔尖坐标)
@@ -107,6 +108,10 @@ struct PDFKitView: UIViewRepresentable {
         if let document = loaded {
             view.document = document
             context.coordinator.documentDidLoad(document)
+            if let contextOCRPage {
+                context.coordinator.installContextOCRPage(contextOCRPage,
+                                                          generation: contextReadingGeneration)
+            }
         } else {
             DiagLog.log("pdf.open: failed file=\(url.lastPathComponent)")
             DispatchQueue.main.async { onLoadFailed() }
@@ -159,6 +164,10 @@ struct PDFKitView: UIViewRepresentable {
         // PKCanvasView.tool 会让 PencilKit 反复重建状态(选工具卡死的根因)。
         // 工具变化由 ReaderView 的 onChange → applyToolSession(带签名去重)驱动。
         context.coordinator.onVocabWordTap = onVocabWordTap
+        if let contextOCRPage {
+            context.coordinator.installContextOCRPage(contextOCRPage,
+                                                      generation: contextReadingGeneration)
+        }
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {

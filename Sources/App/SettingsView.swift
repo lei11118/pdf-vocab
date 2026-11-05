@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("实验功能")
                 } footer: {
-                    Text("默认关闭。开启后仅对可追溯的原生 PDF 文本使用新的 Token 选区卡；扫描版 OCR、数学识别和语境译义尚未接入。关闭后恢复现有选词与整句卡片。")
+                    Text("默认关闭。开启后使用新的文字与扫描页选词卡；扫描页识别质量仍在验证中，语境译义和数学识别暂不可用。关闭后使用原有选词与整句卡片。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)

@@ -111,6 +111,26 @@ final class ReaderCoordinator: NSObject {
     var ocrStore: OCRStore?
     private var docScanned = false
     private var ocrWordsCache: [Int: [OCRWord]] = [:]
+    private struct CachedContextOCRSource {
+        let source: ContextOCRSelectionSource
+        let generation: Int
+    }
+    private struct PinnedOCRSelectionSnapshot {
+        let page: PDFPage
+        let pageIndex: Int
+        let documentSHA256: String
+        let words: [OCRWord]
+        let contextSource: ContextOCRSelectionSource?
+        let generation: Int
+        var selectedRange: ClosedRange<Int>
+
+        func matches(page candidate: PDFPage, pageIndex candidateIndex: Int, documentSHA256 candidateSHA: String) -> Bool {
+            page === candidate && pageIndex == candidateIndex && documentSHA256 == candidateSHA
+        }
+    }
+    private var contextOCRSourceCache: [Int: CachedContextOCRSource] = [:]
+    private var contextOCRCacheOrder: [Int] = []
+    private var pinnedOCRSelection: PinnedOCRSelectionSnapshot?
     private var ocrDrag: (page: PDFPage, pageIndex: Int, anchorIdx: Int, didMove: Bool)?
     private var ocrSelectionActive = false
     private var ocrContextOverride: String?
@@ -236,6 +256,9 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log("doc: \(document.pageCount) pages sha=\(docLabel.prefix(8))")
         docScanned = OCRService.isScanned(document: document)
         ocrWordsCache.removeAll()
+        clearContextOCRSourceCache()
+        pinnedOCRSelection = nil
+        ocrDrag = nil
         autoHighlightDonePages.removeAll()
         DiagLog.log("ocr: scanned=\(docScanned)")
         // v0.23.2:恢复页面排布(纵向/横向/双页)
@@ -278,6 +301,9 @@ final class ReaderCoordinator: NSObject {
         overlayProvider?.flushAll()   // v0.9.0:收尾把未落盘的手写存库
         holdMenuWork?.cancel()
         holdMenuWork = nil
+        pinnedOCRSelection = nil
+        ocrDrag = nil
+        clearContextOCRSourceCache()
         stopAutoscroll()
         stopAutoScroll()
         loupe.end()
@@ -301,6 +327,9 @@ final class ReaderCoordinator: NSObject {
         jumpGuardUntil = 0
         docScanned = pdfView.document.map { OCRService.isScanned(document: $0) } ?? false
         ocrWordsCache.removeAll()
+        clearContextOCRSourceCache()
+        pinnedOCRSelection = nil
+        ocrDrag = nil
         autoHighlightDonePages.removeAll()
         let index = pdfView.document.flatMap { doc in pdfView.currentPage.map { doc.index(for: $0) } } ?? 0
         lastGoodPage = (index, CFAbsoluteTimeGetCurrent())
@@ -353,6 +382,12 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, !killingNativeSelection else { return }
         let text = pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !text.isEmpty {
+            if contextReadingEnabled {
+                pinnedOCRSelection = nil
+                ocrDrag = nil
+                ocrSelectionActive = false
+                ocrContextOverride = nil
+            }
             // 内置手势漏网(被重建/再长按):立刻清掉原生选区 + 再压制(v0.6.5;v0.6.6 加重入保护)
             DiagLog.log("native sel detected(len=\(text.count)); kill + re-suppress")
             killingNativeSelection = true
@@ -759,6 +794,23 @@ final class ReaderCoordinator: NSObject {
                page === hit.page,
                let firstLine = lineRects.first, let lastLine = lineRects.last,
                lineRects.contains(where: { $0.contains(hit.point) }) {
+                if contextReadingEnabled,
+                   ocrSelectionActive,
+                   let snapshot = pinnedSnapshot(for: page) {
+                    let selectedRange = snapshot.selectedRange
+                    let startAnchor = CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
+                    let endAnchor = CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
+                    let nearerStart = SelectionGeometry.distanceSquared(hit.point, startAnchor)
+                        <= SelectionGeometry.distanceSquared(hit.point, endAnchor)
+                    let anchorIndex = nearerStart ? selectedRange.upperBound : selectedRange.lowerBound
+                    ocrDrag = (page, snapshot.pageIndex, anchorIndex, false)
+                    lastTouchViewPoint = viewPoint
+                    freezeScrolling(true)
+                    if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
+                    scheduleHoldMenu()
+                    DiagLog.log("press.began(\(kind)): context OCR body-drag")
+                    return
+                }
                 let startAnchor = CGPoint(x: firstLine.minX + 0.6, y: firstLine.midY)
                 let endAnchor = CGPoint(x: lastLine.maxX - 0.6, y: lastLine.midY)
                 let nearerStart = SelectionGeometry.distanceSquared(hit.point, startAnchor)
@@ -976,12 +1028,122 @@ final class ReaderCoordinator: NSObject {
 
     /// 页面 OCR 词框(缓存 + 懒加载);未识别或无词返回 nil。
     private func ocrWords(for page: PDFPage) -> [OCRWord]? {
-        guard let ocrStore, !docSha.isEmpty,
-              let idx = pdfView?.document?.index(for: page) else { return nil }
-        if let cached = ocrWordsCache[idx] { return cached.isEmpty ? nil : cached }
-        let words = ocrStore.words(docSha: docSha, page: idx)
-        ocrWordsCache[idx] = words
+        guard !docSha.isEmpty,
+              let idx = pdfView?.document?.index(for: page), idx >= 0 else { return nil }
+        if contextReadingEnabled {
+            if let pinned = pinnedSnapshot(for: page) {
+                return pinned.words.isEmpty ? nil : pinned.words
+            }
+            if let source = cachedContextOCRSource(for: page, pageIndex: idx) {
+                return source.words.isEmpty ? nil : source.words
+            }
+        }
+        return legacyOCRWords(pageIndex: idx)
+    }
+
+    /// Installs only immutable OCR values for the current document/page/mode
+    /// generation. This is cache-only: it does not redraw or emit a selection.
+    @discardableResult
+    func installContextOCRPage(_ page: ContextOCRPage, generation: Int) -> Bool {
+        guard contextReadingEnabled,
+              generation == contextReadingGeneration,
+              !docSha.isEmpty,
+              page.documentSHA256 == docSha,
+              page.pageIndex >= 0,
+              page.revision == ContextOCRPage.currentRevision,
+              let document = pdfView?.document,
+              page.pageIndex < document.pageCount,
+              let pdfPage = document.page(at: page.pageIndex),
+              let actualMediaBox = SourceRect(rect: pdfPage.bounds(for: .mediaBox)),
+              mediaBoxesMatch(page.mediaBox, actualMediaBox) else { return false }
+        if let cached = contextOCRSourceCache[page.pageIndex] {
+            if cached.generation == generation, cached.source.page == page {
+                touchContextOCRCache(page.pageIndex)
+                return true
+            }
+            if cached.source.page.revision > page.revision { return false }
+        }
+        guard let source = ContextOCRSelectionSource(page: page) else { return false }
+        contextOCRSourceCache[page.pageIndex] = CachedContextOCRSource(source: source, generation: generation)
+        touchContextOCRCache(page.pageIndex)
+        return true
+    }
+
+    private func legacyOCRWords(pageIndex: Int) -> [OCRWord]? {
+        guard let ocrStore, !docSha.isEmpty else { return nil }
+        if let cached = ocrWordsCache[pageIndex] { return cached.isEmpty ? nil : cached }
+        let words = ocrStore.words(docSha: docSha, page: pageIndex)
+        ocrWordsCache[pageIndex] = words
         return words.isEmpty ? nil : words
+    }
+
+    private func cachedContextOCRSource(for page: PDFPage, pageIndex: Int) -> ContextOCRSelectionSource? {
+        guard contextReadingEnabled,
+              let cached = contextOCRSourceCache[pageIndex],
+              cached.generation == contextReadingGeneration,
+              cached.source.page.documentSHA256 == docSha,
+              cached.source.page.pageIndex == pageIndex,
+              pdfView?.document?.page(at: pageIndex) === page else { return nil }
+        touchContextOCRCache(pageIndex)
+        return cached.source
+    }
+
+    private func touchContextOCRCache(_ pageIndex: Int) {
+        contextOCRCacheOrder.removeAll { $0 == pageIndex }
+        contextOCRCacheOrder.append(pageIndex)
+        while contextOCRCacheOrder.count > 8 {
+            let evicted = contextOCRCacheOrder.removeFirst()
+            contextOCRSourceCache.removeValue(forKey: evicted)
+        }
+    }
+
+    private func clearContextOCRSourceCache() {
+        contextOCRSourceCache.removeAll()
+        contextOCRCacheOrder.removeAll()
+    }
+
+    private func mediaBoxesMatch(_ expected: SourceRect, _ actual: SourceRect) -> Bool {
+        let tolerance = 0.01
+        return abs(expected.x - actual.x) <= tolerance
+            && abs(expected.y - actual.y) <= tolerance
+            && abs(expected.width - actual.width) <= tolerance
+            && abs(expected.height - actual.height) <= tolerance
+    }
+
+    private func pinnedSnapshot(for page: PDFPage) -> PinnedOCRSelectionSnapshot? {
+        guard contextReadingEnabled,
+              let index = pdfView?.document?.index(for: page), index >= 0,
+              let snapshot = pinnedOCRSelection,
+              snapshot.generation == contextReadingGeneration,
+              snapshot.matches(page: page, pageIndex: index, documentSHA256: docSha) else { return nil }
+        return snapshot
+    }
+
+    private func pinOCRSelectionSnapshot(page: PDFPage,
+                                         range: ClosedRange<Int>) -> PinnedOCRSelectionSnapshot? {
+        guard contextReadingEnabled,
+              !docSha.isEmpty,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0 else { return nil }
+        var snapshot: PinnedOCRSelectionSnapshot
+        if let current = pinnedOCRSelection,
+           current.generation == contextReadingGeneration,
+           current.matches(page: page, pageIndex: pageIndex, documentSHA256: docSha) {
+            snapshot = current
+        } else {
+            let source = contextReadingEnabled ? cachedContextOCRSource(for: page, pageIndex: pageIndex) : nil
+            guard let words = source?.words ?? legacyOCRWords(pageIndex: pageIndex), !words.isEmpty else { return nil }
+            snapshot = PinnedOCRSelectionSnapshot(page: page,
+                                                  pageIndex: pageIndex,
+                                                  documentSHA256: docSha,
+                                                  words: words,
+                                                  contextSource: source,
+                                                  generation: contextReadingGeneration,
+                                                  selectedRange: range)
+        }
+        guard range.lowerBound >= 0, range.upperBound < snapshot.words.count else { return nil }
+        snapshot.selectedRange = range
+        pinnedOCRSelection = snapshot
+        return snapshot
     }
 
     /// 页坐标点 → 当前页 OCR 词索引。
@@ -1003,10 +1165,32 @@ final class ReaderCoordinator: NSObject {
 
     /// OCR 词框选区(词粒度,范围 = 锚词…拖动词);与文字层路径共用高亮 / 拖柄 / 菜单。
     private func applyOCRSelection(page: PDFPage, range: ClosedRange<Int>, src: String) {
-        guard let pdfView, let words = ocrWords(for: page), !words.isEmpty,
-              range.lowerBound >= 0, range.upperBound < words.count else { return }
+        guard let pdfView else { return }
+        let snapshot: PinnedOCRSelectionSnapshot?
+        let words: [OCRWord]
+        if contextReadingEnabled {
+            guard let pinned = pinOCRSelectionSnapshot(page: page, range: range) else { return }
+            snapshot = pinned
+            words = pinned.words
+        } else {
+            guard let legacyWords = ocrWords(for: page) else { return }
+            snapshot = nil
+            words = legacyWords
+        }
+        guard range.lowerBound >= 0, range.upperBound < words.count else { return }
         let sub = Array(words[range])
-        let text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
+        let contextual: ContextualSelection?
+        let text: String
+        if contextReadingEnabled, let snapshot,
+           snapshot.generation == contextReadingGeneration,
+           let source = snapshot.contextSource {
+            guard let selection = source.contextualSelection(for: range, generation: snapshot.generation) else { return }
+            contextual = selection
+            text = selection.displaySurface
+        } else {
+            contextual = nil
+            text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
+        }
         guard !text.isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         let bounds = page.bounds(for: .mediaBox)
@@ -1020,18 +1204,24 @@ final class ReaderCoordinator: NSObject {
             }
             desired[annotationKey(page, rect)] = (page, rect)
         }
-        appliedKey = "ocr|\(range.lowerBound)-\(range.upperBound)|\(text.hashValue)"
+        let revision = snapshot?.contextSource?.page.revision ?? 0
+        appliedKey = "ocr|\(docSha)|\(currentPageIndexFor(page: page))|\(revision)|\(range.lowerBound)-\(range.upperBound)|\(text)"
         appliedCharCount = text.count
         selectionText = text
         ocrSelectionActive = true
-        let lineIdx = sub.first?.line ?? -1
-        ocrContextOverride = words.filter { $0.line == lineIdx }.map { $0.text }.joined(separator: " ")
+        if contextReadingEnabled, let source = snapshot?.contextSource {
+            ocrContextOverride = source.fullLineContext(for: range)
+        } else {
+            let lineIdx = sub.first?.line ?? -1
+            ocrContextOverride = words.filter { $0.line == lineIdx }.map { $0.text }.joined(separator: " ")
+        }
         applyHighlightDesired(desired, rejected: rejected, t0: CFAbsoluteTimeGetCurrent())
         refreshHandles()
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm))
+        onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm,
+                                      contextual: contextual))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
         }
@@ -1070,6 +1260,21 @@ final class ReaderCoordinator: NSObject {
             holdMenuWork?.cancel()
             holdMenuWork = nil
             menu.dismiss()
+            if contextReadingEnabled,
+               ocrSelectionActive,
+               let existing = pinnedOCRSelection,
+               let snapshot = pinnedSnapshot(for: existing.page) {
+                let anchorIndex = isStart ? snapshot.selectedRange.upperBound : snapshot.selectedRange.lowerBound
+                ocrDrag = (snapshot.page, snapshot.pageIndex, anchorIndex, false)
+                lastTouchViewPoint = viewPoint
+                freezeScrolling(true)
+                let pencil = (gesture as? PencilAwarePanGestureRecognizer)?.isPencilDriven ?? false
+                if !pencil {
+                    loupe.begin(at: viewPoint, widget: isStart ? startHandle : endHandle, in: pdfView)
+                }
+                DiagLog.log("handle.drag began context OCR isStart=\(isStart) pencil=\(pencil)")
+                return
+            }
             guard let (page, lineRects) = orderedSelectionRects(),
                   let firstLine = lineRects.first, let lastLine = lineRects.last else { return }
             // v0.8.3:lineRects 为显示矩形;锚点仍取"原始文字边缘"内侧 0.6pt(与扩边前行为一致)
@@ -1089,6 +1294,11 @@ final class ReaderCoordinator: NSObject {
             DiagLog.log("handle.drag began isStart=\(isStart) pencil=\(pencil)")
 
         case .changed:
+            if contextReadingEnabled, ocrDrag != nil {
+                extendOCRDrag(to: viewPoint)
+                updateAutoscroll(for: viewPoint)
+                return
+            }
             guard let d = drag, d.kind == .handleStart || d.kind == .handleEnd,
                   let hit = pageHit(viewPoint), hit.page === d.page else { return }
             lastTouchViewPoint = viewPoint
@@ -1103,6 +1313,22 @@ final class ReaderCoordinator: NSObject {
             updateAutoscroll(for: viewPoint)
 
         case .ended, .cancelled, .failed:
+            if contextReadingEnabled, ocrDrag != nil {
+                let isEnded = gesture.state == .ended
+                ocrDrag = nil
+                holdMenuWork?.cancel()
+                holdMenuWork = nil
+                stopAutoscroll()
+                loupe.end()
+                freezeScrolling(false)
+                DiagLog.log("handle.drag end context OCR ended=\(isEnded)")
+                refreshHandles()
+                if isEnded, !selectionText.isEmpty, !menu.isPresented { presentMenu() }
+                if isEnded, !selectionText.isEmpty, hapticsEnabled {
+                    PencilHaptics.selectionCompleted(at: viewPoint)
+                }
+                return
+            }
             if let k = drag?.kind, k != .handleStart && k != .handleEnd { return }
             drag = nil
             stopAutoscroll()
@@ -1227,12 +1453,20 @@ final class ReaderCoordinator: NSObject {
         let text = SelectionGeometry.lookupText(for:selection)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
-        ocrSelectionActive = false
-        ocrContextOverride = nil
+        if !contextReadingEnabled {
+            ocrSelectionActive = false
+            ocrContextOverride = nil
+        }
         guard SelectionGeometry.isSane(selection, maxPages: 1, maxChars: 6_000) else {
             // v0.6.6:坏帧只记录、**不清空现有选区**(拖动中偶发解析异常时保留上一个好状态)
             DiagLog.log("applySelection rejected(\(src)): pages=\(selection.pages.count) len=\(text.count)")
             return
+        }
+        if contextReadingEnabled {
+            pinnedOCRSelection = nil
+            ocrDrag = nil
+            ocrSelectionActive = false
+            ocrContextOverride = nil
         }
         let pageIndex = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) } ?? -1
         let key = "\(pageIndex)|\(SelectionGeometry.identity(for: selection))|\(text)"
@@ -1338,6 +1572,7 @@ final class ReaderCoordinator: NSObject {
         appliedCharCount = 0
         selectionText = ""
         ocrDrag = nil
+        pinnedOCRSelection = nil
         ocrSelectionActive = false
         ocrContextOverride = nil
         clearHover()
@@ -1355,6 +1590,7 @@ final class ReaderCoordinator: NSObject {
         contextReadingEnabled = enabled
         contextReadingGeneration = generation
         drag = nil
+        clearContextOCRSourceCache()
         clearSelection(notifySelection: false)
     }
 
@@ -1377,6 +1613,7 @@ final class ReaderCoordinator: NSObject {
         appliedCharCount = 0
         selectionText = ""
         ocrDrag = nil
+        pinnedOCRSelection = nil
         ocrSelectionActive = false
         ocrContextOverride = nil
         clearTempHighlight()
@@ -2512,7 +2749,8 @@ final class ReaderCoordinator: NSObject {
 
     /// 拖动到屏幕上下边缘时自动滚动(只写 contentOffset,速度封顶)。
     private func updateAutoscroll(for touchViewPoint: CGPoint) {
-        guard drag != nil, let pdfView, let sv = pdfScrollView(pdfView) else { return }
+        guard drag != nil || (contextReadingEnabled && ocrDrag != nil),
+              let pdfView, let sv = pdfScrollView(pdfView) else { return }
         let height = pdfView.bounds.height
         guard height > 1 else { return }
         let edge: CGFloat = 64
@@ -2546,7 +2784,8 @@ final class ReaderCoordinator: NSObject {
     }
 
     @objc private func autoscrollTick() {
-        guard drag != nil, let pdfView, let sv = pdfScrollView(pdfView) else {
+        guard drag != nil || (contextReadingEnabled && ocrDrag != nil),
+              let pdfView, let sv = pdfScrollView(pdfView) else {
             stopAutoscroll()
             return
         }
@@ -2558,7 +2797,9 @@ final class ReaderCoordinator: NSObject {
         guard abs(y - sv.contentOffset.y) > 0.25 else { return }
         sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: y)
         // 手指不动、内容在动:用同一屏幕点重算选区,实现"贴边延伸"
-        if let hit = pageHit(lastTouchViewPoint) {
+        if contextReadingEnabled, ocrDrag != nil {
+            extendOCRDrag(to: lastTouchViewPoint)
+        } else if let hit = pageHit(lastTouchViewPoint) {
             extendDrag(to: hit, viewPoint: lastTouchViewPoint)
         }
     }
