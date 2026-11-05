@@ -125,7 +125,7 @@ final class ContextOCRWorkerTests: XCTestCase {
             }
         }
 
-        try db.dbQueue.write { database in
+        try await db.dbQueue.write { database in
             try database.execute(sql: """
                 INSERT INTO context_ocr_page (docSha, page, revision, payload)
                 VALUES (?, ?, ?, ?)
