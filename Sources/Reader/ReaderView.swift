@@ -171,7 +171,7 @@ struct ReaderView: View {
 
     private var sheetContent: some View {
         primarySheetContent
-            .readerPanel(isPresented:$showToolCustomization,title:"自定义手写工具") { PencilToolCustomization(session:pencilTools) }
+            .readerPanel(isPresented:$showToolCustomization,title:"弧形工具设置") { PencilArcToolSettingsView(session:pencilTools) }
             .readerPanel(isPresented: $showAnalyze, title: "词频分析") {
                 if let resolvedURL {
                     VocabAnalyzeSheet(
@@ -409,7 +409,7 @@ struct ReaderView: View {
                             openWindow(id: PDFReaderWindowRequest.sceneID, value: PDFReaderWindowRequest(docSha: doc.sha256, page: currentPage))
                         } label: { Label("在新窗口打开当前 PDF", systemImage: "macwindow.badge.plus") }
                     }
-                    Button("自定义手写工具") { showToolCustomization = true }
+                    Button("弧形工具设置") { showToolCustomization = true }
                     Button("全文搜索") { showSearch = true }
                     Button("目录与书签") { showOutline = true }
                     Button("生词本") { showVocab = true }
@@ -493,8 +493,7 @@ struct ReaderView: View {
                 onExitWriting: { markMode = false },
                 onDockDragChanged: { translation in handleDockDrag(translation) },
                 onDockDragEnded: { endDockDrag() },
-                onDockReset: { resetDock() },
-                onArc: { arcAnchor = CGPoint(x:dockBounds.width/2,y:dockBounds.height/2) }
+                onDockReset: { resetDock() }
             )
             .background(
                 DockSizeReader { size in
@@ -536,15 +535,12 @@ struct ReaderView: View {
     /// Reading actions live next to the page rather than in the document header.
     private var readerActionRail: some View {
         VStack(spacing: DS.Space.xs) {
-            DSIconButton(systemImage: "magnifyingglass", accessibility: "全文搜索") { showSearch = true }
-            DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline = true }
+            DSIconButton(systemImage: "magnifyingglass", accessibility: "全文搜索") { showSearch.toggle() }
+            DSIconButton(systemImage: "list.bullet.indent", accessibility: "目录与书签") { showOutline.toggle() }
             Rectangle().fill(DS.foreground3.opacity(0.2)).frame(width: 24, height: 1)
-            DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab = true }
-            DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", accessibility: "知识图谱") { showGraph = true }
-            DSIconButton(systemImage: "circle.grid.cross", accessibility: "弧形工具盘") {
-                arcAnchor = CGPoint(x: dockBounds.width / 2, y: dockBounds.height / 2)
-            }
-            DSIconButton(systemImage: "chart.bar.doc.horizontal", accessibility: "词频分析") { showAnalyze = true }
+            DSIconButton(systemImage: "text.book.closed", accessibility: "生词本") { showVocab.toggle() }
+            DSIconButton(systemImage: "point.3.connected.trianglepath.dotted", accessibility: "知识图谱") { showGraph.toggle() }
+            DSIconButton(systemImage: "chart.bar.doc.horizontal", accessibility: "词频分析") { showAnalyze.toggle() }
         }
         .padding(4)
         .dsFloatingPanel()

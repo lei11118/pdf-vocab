@@ -76,6 +76,8 @@ enum PencilShapeKind: String, CaseIterable, Identifiable, Codable {
 /// 编辑与 UI 绑定;每次变更 `stateRevision += 1`,SwiftUI 与协调器据此同步。
 /// 由双列浮动工具托盘(PencilPaletteView)与挤压弧形工具盘(PencilArcMenu)共同驱动。
 final class PencilToolSession: ObservableObject {
+    private let defaults: UserDefaults
+
     @Published var kind: PencilToolKind = .pen {
         didSet {
             if kind != .eraser, kind != .lasso, kind != oldValue { lastInkKind = kind }
@@ -94,7 +96,13 @@ final class PencilToolSession: ObservableObject {
     @Published var customInkRGBA: Int = 0xE4572EFF { didSet { persist() } }
     @Published var customMarkerRGBA: Int = 0xFFD400CC { didSet { persist() } }
     /// 0…4 五档笔宽(Notability 托盘为 5 档尺寸圆点)
-    @Published var widthIndex: Int = 2 { didSet { persist() } }
+    @Published var widthIndex: Int = 2 {
+        didSet {
+            if !applying, widthIndex != oldValue { customWidth = nil }
+            persist()
+        }
+    }
+    @Published private(set) var customWidth: CGFloat? = nil { didSet { persist() } }
     /// 橡皮:false = 局部(bitmap,擦过即擦),true = 整笔(vector,整条笔迹消失)
     @Published var eraserWhole: Bool = false { didSet { persist() } }
     /// v0.22.0:自研橡皮半径档位(页面点;画布坐标里会 ×超采样倍数)
@@ -107,44 +115,48 @@ final class PencilToolSession: ObservableObject {
     @Published var rulerActive: Bool = false { didSet { persist() } }
 
     /// 被隐藏的工具(rawValue 列表;长按工具图标隐藏,「⋯」里恢复)——可定制工具带
-    @Published var hiddenToolRaw: String = UserDefaults.standard.string(forKey: "pencilHiddenTools") ?? "" {
-        didSet { UserDefaults.standard.set(hiddenToolRaw, forKey: "pencilHiddenTools") }
+    @Published var hiddenToolRaw: String = "" {
+        didSet { defaults.set(hiddenToolRaw, forKey: "pencilHiddenTools") }
     }
 
-    @Published private(set) var presets: [PencilToolPreset] = {
-        guard let data = UserDefaults.standard.data(forKey: "pencil.customPresets.v1") else { return [] }
-        return (try? JSONDecoder().decode([PencilToolPreset].self, from: data)) ?? []
-    }()
+    private static let arcToolOrderKey = "pencil.arcTools.v1"
+    @Published private(set) var arcToolRaw: String = ""
+    var arcToolKinds: [PencilToolKind] {
+        var seen = Set<PencilToolKind>()
+        return arcToolRaw.split(separator: ",").compactMap { PencilToolKind(rawValue: String($0)) }
+            .filter { seen.insert($0).inserted }
+    }
+    var availableArcToolKinds: [PencilToolKind] { PencilToolKind.allCases.filter { !arcToolKinds.contains($0) } }
     var arcItems: [PencilArcItem] {
-        visibleKinds.map { PencilArcItem(id:$0.rawValue,kind:$0,name:$0.label,preset:nil) } +
-        presets.map { PencilArcItem(id:$0.id,kind:$0.state.kind,name:$0.name,preset:$0) }
+        arcToolKinds.map { PencilArcItem(id:$0.rawValue,kind:$0,name:$0.label) }
     }
     func activate(_ item: PencilArcItem) {
-        if let preset = item.preset {
-            // A preset replaces only its own tool slot, never the other pens' preferences.
-            var next = state
-            next.kind = preset.state.kind; next.prefs[next.kind.rawValue] = preset.state.activePrefs
-            next.rulerActive = preset.state.rulerActive
-            if next.kind == .shape { next.shapeKind = preset.state.shapeKind }
-            if next.kind == .eraser { next.useCustomEraser = preset.state.useCustomEraser }
-            apply(next); saveState()
-        }
-        else { select(kind:item.kind) }
+        select(kind:item.kind)
     }
     func isActive(_ item: PencilArcItem) -> Bool {
-        guard kind == item.kind else { return false }
-        guard let preset = item.preset else { return true }
-        return state.activePrefs == preset.state.activePrefs && rulerActive == preset.state.rulerActive
+        kind == item.kind
     }
-    func savePreset(name: String) {
-        let name = name.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        presets.append(PencilToolPreset(name:name,state:state)); persistPresets()
+    func addArcTool(_ tool: PencilToolKind) {
+        guard !arcToolKinds.contains(tool) else { return }
+        setArcToolKinds(arcToolKinds + [tool])
     }
-    func deletePresets(at offsets: IndexSet) { presets.remove(atOffsets:offsets); persistPresets() }
-    func movePresets(from offsets: IndexSet, to destination: Int) { presets.move(fromOffsets:offsets,toOffset:destination); persistPresets() }
-    private func persistPresets() {
-        if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data,forKey:"pencil.customPresets.v1") }
+    func removeArcTools(at offsets: IndexSet) {
+        let current = arcToolKinds
+        guard !current.isEmpty else { return }
+        let remaining = current.enumerated().compactMap { offsets.contains($0.offset) ? nil : $0.element }
+        setArcToolKinds(remaining.isEmpty ? [current[0]] : remaining)
+    }
+    func moveArcTools(from offsets: IndexSet, to destination: Int) {
+        var kinds = arcToolKinds
+        kinds.move(fromOffsets: offsets, toOffset: destination)
+        setArcToolKinds(kinds)
+    }
+    private func setArcToolKinds(_ kinds: [PencilToolKind]) {
+        var seen = Set<PencilToolKind>()
+        let unique = kinds.filter { seen.insert($0).inserted }
+        guard !unique.isEmpty else { return }
+        arcToolRaw = unique.map(\.rawValue).joined(separator: ",")
+        defaults.set(arcToolRaw, forKey: Self.arcToolOrderKey)
     }
 
     /// 橡皮切换前的上一支笔(双击手势回退用)
@@ -172,12 +184,28 @@ final class PencilToolSession: ObservableObject {
     static let inkColors: [UIColor] = inkHex.map { UIColor(hex: $0) }
     static let markerColors: [UIColor] = markerHex.map { UIColor(hex: $0) }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        hiddenToolRaw = defaults.string(forKey: "pencilHiddenTools") ?? ""
+        if let storedArcTools = defaults.string(forKey: Self.arcToolOrderKey) {
+            let fallback = PencilToolKind.allCases.filter { !Set(hiddenToolRaw.split(separator: ",").map(String.init)).contains($0.rawValue) }
+            let stored = storedArcTools.split(separator: ",").compactMap { PencilToolKind(rawValue: String($0)) }
+            var seen = Set<PencilToolKind>()
+            let normalized = stored.filter { seen.insert($0).inserted }
+            let initial = normalized.isEmpty ? (fallback.isEmpty ? [.pen] : fallback) : normalized
+            arcToolRaw = initial.map(\.rawValue).joined(separator: ",")
+            defaults.set(arcToolRaw, forKey: Self.arcToolOrderKey)
+        } else {
+            let hidden = Set(hiddenToolRaw.split(separator: ",").map(String.init))
+            let visible = PencilToolKind.allCases.filter { !hidden.contains($0.rawValue) }
+            arcToolRaw = (visible.isEmpty ? [.pen] : visible).map(\.rawValue).joined(separator: ",")
+            defaults.set(arcToolRaw, forKey: Self.arcToolOrderKey)
+        }
         // v0.28.0:优先 v2 状态;没有就迁移 v0.26 快照 + 逐键值。
-        if let saved = PencilToolStateStore.loadGlobal() {
+        if let saved = PencilToolStateStore.loadGlobal(defaults: defaults) {
             apply(saved)
         } else {
-            let migrated = PencilToolStateStore.migrateGlobal()
+            let migrated = PencilToolStateStore.migrateGlobal(defaults: defaults)
             apply(migrated)
             if prefs[kind.rawValue] == nil {
                 captureCurrentPrefs()
@@ -229,7 +257,7 @@ final class PencilToolSession: ObservableObject {
     var swatchColor: Color { Color(uiColor: currentUIColor) }
 
     /// 五档笔宽(按工具分档;与持久化状态共用 PencilMetrics)
-    var width: CGFloat { PencilMetrics.width(kind: kind, index: widthIndex) }
+    var width: CGFloat { PencilMetrics.width(kind: kind, index: widthIndex, customWidth: customWidth) }
 
     /// v0.22.0:橡皮半径五档(页面点)
     static let eraserRadii: [CGFloat] = PencilMetrics.eraserRadii
@@ -249,7 +277,7 @@ final class PencilToolSession: ObservableObject {
             return PKInkingTool(.crayon, color: currentUIColor, width: width * scale)
         case .shape:
             // 形状由自研手势生成 PKStroke,这里的工具只作占位(绘制手势会被关闭)
-            return PKInkingTool(.pen, color: currentUIColor, width: max(width, 1) * scale)
+            return PKInkingTool(.pen, color: currentUIColor, width: width * scale)
         case .laser:
             return PKInkingTool(.pen, color: currentUIColor, width: 2 * scale)
         case .lasso:
@@ -282,11 +310,20 @@ final class PencilToolSession: ObservableObject {
     }
 
     func cycleWidth() {
-        widthIndex = (widthIndex + 1) % 5
+        setWidth((widthIndex + 1) % 5)
     }
 
     func setWidth(_ index: Int) {
+        let wasApplying = applying
+        applying = true
+        customWidth = nil
         widthIndex = clamped(index, 0, 4)
+        applying = wasApplying
+        persist()
+    }
+
+    func setCustomWidth(_ value: CGFloat?) {
+        customWidth = PencilMetrics.normalizedCustomWidth(kind: kind, value: value)
     }
 
     func toggleEraserWhole() {
@@ -320,10 +357,10 @@ final class PencilToolSession: ObservableObject {
         guard !sha.isEmpty, docKey != sha else { return }
         docKey = sha
         // v0.28.0:v2 按书状态优先;没有就迁移旧快照/逐键值;都没有则沿用全局状态。
-        if let saved = PencilToolStateStore.loadDoc(sha) {
+        if let saved = PencilToolStateStore.loadDoc(sha, defaults: defaults) {
             apply(saved)
             DiagLog.log("pencil: state loaded rev=\(stateRevision) scope=doc kind=\(kind.rawValue) shape=\(shapeKind.rawValue) ruler=\(rulerActive ? 1 : 0) customEraser=\(useCustomEraser ? 1 : 0) tools=\(prefs.count)")
-        } else if let migrated = PencilToolStateStore.migrateDoc(sha, fallback: state) {
+        } else if let migrated = PencilToolStateStore.migrateDoc(sha, fallback: state, defaults: defaults) {
             apply(migrated)
             saveState()
             DiagLog.log("pencil: state migrated rev=\(stateRevision) scope=doc kind=\(kind.rawValue) shape=\(shapeKind.rawValue) ruler=\(rulerActive ? 1 : 0) customEraser=\(useCustomEraser ? 1 : 0) tools=\(prefs.count)")
@@ -347,6 +384,7 @@ final class PencilToolSession: ObservableObject {
         p.colorIndex = isMarker ? markerColorIndex : colorIndex
         p.customRGBA = isMarker ? customMarkerRGBA : customInkRGBA
         p.widthIndex = widthIndex
+        p.customWidth = PencilMetrics.normalizedCustomWidth(kind: kind, value: customWidth)
         p.eraserWhole = eraserWhole
         p.eraserSizeIndex = eraserSizeIndex
         s.prefs[kind.rawValue] = p
@@ -403,6 +441,7 @@ final class PencilToolSession: ObservableObject {
             colorIndex: isMarker ? markerColorIndex : colorIndex,
             customRGBA: isMarker ? customMarkerRGBA : customInkRGBA,
             widthIndex: widthIndex,
+            customWidth: PencilMetrics.normalizedCustomWidth(kind: kind, value: customWidth),
             eraserWhole: eraserWhole,
             eraserSizeIndex: eraserSizeIndex
         )
@@ -421,6 +460,7 @@ final class PencilToolSession: ObservableObject {
             customInkRGBA = p.customRGBA
         }
         widthIndex = p.widthIndex
+        customWidth = PencilMetrics.normalizedCustomWidth(kind: tool, value: p.customWidth)
         eraserWhole = p.eraserWhole
         eraserSizeIndex = p.eraserSizeIndex
         applying = wasApplying
@@ -430,9 +470,9 @@ final class PencilToolSession: ObservableObject {
     private func saveState() {
         captureCurrentPrefs()
         let snapshot = state
-        PencilToolStateStore.saveGlobal(snapshot)
+        PencilToolStateStore.saveGlobal(snapshot, defaults: defaults)
         if let docKey {
-            PencilToolStateStore.saveDoc(snapshot, sha: docKey)
+            PencilToolStateStore.saveDoc(snapshot, sha: docKey, defaults: defaults)
         }
     }
 
@@ -447,82 +487,62 @@ final class PencilToolSession: ObservableObject {
     }
 }
 
-struct PencilToolPreset: Codable, Equatable, Identifiable {
-    var id = UUID().uuidString
-    var name: String
-    var state: PencilToolState
-}
 struct PencilArcItem: Identifiable {
     let id: String
     let kind: PencilToolKind
     let name: String
-    let preset: PencilToolPreset?
     var systemImage: String { kind.systemImage }
     var label: String { name }
 }
 
-struct PencilToolCustomization: View {
+struct PencilArcToolSettingsView: View {
     @ObservedObject var session: PencilToolSession
     @Environment(\.readerPanelClose) private var panelClose
-    var onActivate: (() -> Void)? = nil
-    @State private var name = ""
     @State private var editMode: EditMode = .inactive
     var body: some View {
         NavigationStack {
             List {
-                Section("当前笔具参数") {
-                    Picker("类型",selection:Binding(get:{session.kind},set:{session.select(kind:$0)})) {
-                        ForEach(PencilToolKind.allCases) { Text($0.label).tag($0) }
+                Section {
+                    ForEach(session.arcToolKinds) { tool in
+                        Label(tool.label, systemImage: tool.systemImage)
+                            .deleteDisabled(session.arcToolKinds.count <= 1)
                     }
-                    PencilPaletteView(session:session,onUndo:{},onRedo:{}).stylePanel
-                        .frame(maxWidth:.infinity).listRowInsets(EdgeInsets())
-                    TextField("自定义工具名称",text:$name)
-                    Button("保存为独立工具") { session.savePreset(name:name); name = "" }
-                        .disabled(name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    .onDelete(perform: session.removeArcTools)
+                    .onMove(perform: session.moveArcTools)
+                } header: {
+                    Text("弧形工具顺序")
+                } footer: {
+                    Text("至少保留一个工具。此顺序独立于底部工具栏的显示设置。")
                 }
-                Section("自定义工具（包含颜色、宽度与工具参数）") {
-                    ForEach(session.presets) { preset in
-                        Button {
-                            session.activate(PencilArcItem(id:preset.id,kind:preset.state.kind,name:preset.name,preset:preset))
-                            onActivate?()
-                        } label: {
-                            Label(preset.name,systemImage:preset.state.kind.systemImage)
+                Section("添加内置工具") {
+                    if session.availableArcToolKinds.isEmpty {
+                        Text("所有内置工具均已加入")
+                            .font(DS.Fonts.caption)
+                            .foregroundStyle(DS.foreground3)
+                    } else {
+                        ForEach(session.availableArcToolKinds) { tool in
+                            Button { session.addArcTool(tool) } label: {
+                                Label(tool.label, systemImage: tool.systemImage)
+                            }
                         }
-                    }.onDelete(perform:session.deletePresets).onMove(perform:session.movePresets)
-                }
-                if onActivate != nil {
-                    Section("选择内置工具") {
-                        ForEach(session.visibleKinds) { kind in
-                            Button {
-                                session.activate(PencilArcItem(id:kind.rawValue,kind:kind,name:kind.label,preset:nil))
-                                onActivate?()
-                            } label: { Label(kind.label,systemImage:kind.systemImage) }
-                        }
-                    }
-                }
-                Section("工具盘显示") {
-                    ForEach(PencilToolKind.allCases) { kind in
-                        Toggle(kind.label,isOn:Binding(get:{!session.hiddenSet.contains(kind.rawValue)},set:{show in
-                            if show { session.unhide(kind) } else { session.hide(kind) }
-                        }))
                     }
                 }
             }
                 .safeAreaInset(edge:.top,spacing:0) {
                     if panelClose != nil {
                         HStack {
-                            Text("自定义手写工具").font(.headline)
+                            Text("弧形工具设置").font(.headline)
                             Spacer()
                             Button(editMode.isEditing ? "完成编辑" : "编辑") {
                                 withAnimation { editMode = editMode.isEditing ? .inactive : .active }
                             }
-                            .accessibilityIdentifier("custom-tools-edit")
+                            .accessibilityIdentifier("arc-tools-edit")
                         }
                         .padding(.leading,16).padding(.trailing,56).padding(.vertical,12)
                         .background(DS.background1)
                     }
                 }
-                .navigationTitle("自定义手写工具").navigationBarTitleDisplayMode(.inline)
+                .navigationTitle("弧形工具设置").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement:.topBarTrailing) { if panelClose == nil { EditButton() } }
                 }

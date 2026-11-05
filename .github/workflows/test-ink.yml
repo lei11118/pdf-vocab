@@ -50,7 +50,7 @@ jobs:
           TEST_ARGS=()
           if [ "${{ inputs.gesture_only }}" = "true" ]; then
             xcodebuild -help 2>&1 | sed -n '/only-testing/p'
-            TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndMoveArcWithSelectionBarOpen)
+            TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen)
           elif [ "${{ inputs.workspace_only }}" = "true" ]; then
             TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testWorkspaceNavigationAtPortraitAndLandscapeWidths)
           fi

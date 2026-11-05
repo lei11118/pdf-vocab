@@ -6,7 +6,7 @@ import UIKit
 /// 设计原则:
 /// - 默认只占一条胶囊的高度,尽量不挡纸面;点右侧 chevron 才展开颜色与笔宽;
 /// - 工具“选中即写”,笔/铅笔/荧光笔/套索/橡皮一目了然;
-/// - 颜色、五档笔宽、笔画预览都放在展开层,避免长期占据画布;
+/// - 颜色、精确笔宽、五档快捷档与笔画预览都放在展开层,避免长期占据画布;
 /// - 橡皮局部/整笔、用完自动回笔,均是 Notability 的手写辅助细节。
 struct PencilPaletteView: View {
     @ObservedObject var session: PencilToolSession
@@ -18,7 +18,6 @@ struct PencilPaletteView: View {
     var onDockDragChanged: ((CGSize) -> Void)? = nil
     var onDockDragEnded: (() -> Void)? = nil
     var onDockReset: (() -> Void)? = nil
-    var onArc: (() -> Void)? = nil
     var onShowStyle: (() -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -113,8 +112,6 @@ struct PencilPaletteView: View {
     /// Undo/redo and the style control stay visible while tool kinds scroll.
     private var paletteActions: some View {
         HStack(spacing: 4) {
-            if let onArc { compactIcon("circle.grid.cross",label:"弧形工具盘",action:onArc) }
-
             Button {
                 DiagLog.log("palette: expand -> \(!expanded)")
                 if let onShowStyle { onShowStyle() } else { withAnimation(reduceMotion ? nil : DS.Motion.spring) { expanded.toggle() } }
@@ -294,12 +291,12 @@ struct PencilPaletteView: View {
 
     private var headerHint: String {
         switch session.kind {
-        case .pen, .brush, .pencil: return "颜色 · 笔宽"
-        case .marker: return "半透明 · 五档宽度"
-        case .crayon: return "蜡质纹理 · 五档宽度"
+        case .pen, .brush, .pencil: return "颜色 · 精确笔宽"
+        case .marker: return "半透明 · 精确笔宽"
+        case .crayon: return "蜡质纹理 · 精确笔宽"
         case .eraser: return session.eraserWhole ? "整笔擦除" : "局部擦除"
         case .lasso: return "圈选后可移动 / 删除"
-        case .shape: return "拖动生成规整图形"
+        case .shape: return "拖动图形 · 精确笔宽"
         case .laser: return "不落墨 · 抬手淡出"
         }
     }
@@ -325,6 +322,7 @@ struct PencilPaletteView: View {
             }
 
             VStack(alignment: .leading, spacing: DS.Space.xs) {
+                exactWidthControls
                 sizeDots
                 strokePreview
                     .frame(maxWidth: .infinity)
@@ -481,8 +479,9 @@ struct PencilPaletteView: View {
     private var sizeDots: some View {
         HStack(spacing: 5) {
             ForEach(0..<5, id: \.self) { index in
-                let selected = session.widthIndex == index
+                let selected = session.customWidth == nil && session.widthIndex == index
                 let diameter = CGFloat(5 + index * 3)
+                let presetWidth = PencilMetrics.width(kind: session.kind, index: index)
                 Button {
                     session.setWidth(index)
                 } label: {
@@ -498,9 +497,41 @@ struct PencilPaletteView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(DSPressableButtonStyle())
-                .accessibilityLabel("笔宽 \(index + 1)")
+                .accessibilityLabel("笔宽档 \(index + 1)，\(String(format: "%.1f", Double(presetWidth))) pt")
                 .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
             }
+        }
+    }
+
+    private var exactWidthRange: ClosedRange<Double> {
+        let range = PencilMetrics.customWidthRange(kind: session.kind) ?? (0.8...18)
+        return Double(range.lowerBound)...Double(range.upperBound)
+    }
+
+    private var exactWidthBinding: Binding<Double> {
+        Binding(
+            get: { Double(session.width) },
+            set: { session.setCustomWidth(CGFloat($0)) }
+        )
+    }
+
+    private var exactWidthControls: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("精确笔宽")
+                    .font(DS.Fonts.caption2)
+                    .foregroundStyle(DS.foreground2)
+                Spacer(minLength: 4)
+                Text(String(format: "%.1f pt", Double(session.width)))
+                    .font(DS.Fonts.micro.monospacedDigit())
+                    .foregroundStyle(DS.foreground1)
+            }
+            Slider(value: exactWidthBinding, in: exactWidthRange, step: 0.1)
+                .tint(DS.accent)
+                .accessibilityLabel("精确笔宽，页面点")
+            Stepper("微调 0.1 pt", value: exactWidthBinding, in: exactWidthRange, step: 0.1)
+                .font(DS.Fonts.micro)
+                .foregroundStyle(DS.foreground2)
         }
     }
 
@@ -514,14 +545,13 @@ struct PencilPaletteView: View {
                 control1: CGPoint(x: size.width * 0.30, y: midY - 11),
                 control2: CGPoint(x: size.width * 0.68, y: midY + 10)
             )
-            let lineWidth = min(max(session.width * 0.82, 1.2), 10)
             context.stroke(
                 path,
                 with: .color(session.swatchColor.opacity(session.kind == .marker ? 0.62 : 1)),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                style: StrokeStyle(lineWidth: session.width, lineCap: .round, lineJoin: .round)
             )
         }
-        .frame(height: 30)
+        .frame(height: max(30, session.width + 10))
         .clipped()
         .accessibilityHidden(true)
     }

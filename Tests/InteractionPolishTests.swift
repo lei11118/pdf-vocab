@@ -641,7 +641,7 @@ final class InteractionPolishTests:XCTestCase {
             ("reader-split", CGSize(width: 480, height: 900), AnyView(ReaderView(doc: record, store: docs))),
             ("palette-ipad", CGSize(width: 834, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),
             ("palette-split", CGSize(width: 480, height: 240), AnyView(PencilPaletteView(session: PencilToolSession(), onUndo: {}, onRedo: {}).padding().background(DS.background1))),
-            ("palette-window-narrow", CGSize(width:320,height:240),AnyView(PencilPaletteView(session:PencilToolSession(),onUndo:{},onRedo:{},onExitWriting:{},onArc:{}).padding().background(DS.background1)))
+            ("palette-window-narrow", CGSize(width:320,height:240),AnyView(PencilPaletteView(session:PencilToolSession(),onUndo:{},onRedo:{},onExitWriting:{}).padding().background(DS.background1)))
         ]
         for (name, size, content) in cases {
             UserDefaults.standard.set(name == "vocab-compact", forKey: "vocabCompactLayout")

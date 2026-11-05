@@ -39,7 +39,9 @@ struct PencilToolState: Codable, Equatable {
         }
     }
 
-    var width: CGFloat { PencilMetrics.width(kind: kind, index: activePrefs.widthIndex) }
+    var width: CGFloat {
+        PencilMetrics.width(kind: kind, index: activePrefs.widthIndex, customWidth: activePrefs.customWidth)
+    }
     var eraserRadius: CGFloat {
         PencilMetrics.eraserRadii[min(max(activePrefs.eraserSizeIndex, 0), PencilMetrics.eraserRadii.count - 1)]
     }
@@ -81,6 +83,8 @@ struct PencilToolPrefs: Codable, Equatable {
     var colorIndex: Int = 0
     var customRGBA: Int = 0
     var widthIndex: Int = 2
+    /// Exact page-point width for ink tools; nil keeps the legacy five-step preset.
+    var customWidth: CGFloat? = nil
     /// v0.29.0:书法笔已移除。这两个键仅为兼容旧 v2 blob 保留(解码时读入、不再使用)。
     var nibAngleIndex: Int = 2
     var smoothing: Bool = true
@@ -89,17 +93,18 @@ struct PencilToolPrefs: Codable, Equatable {
 
     init() {}
 
-    init(colorIndex: Int, customRGBA: Int, widthIndex: Int,
+    init(colorIndex: Int, customRGBA: Int, widthIndex: Int, customWidth: CGFloat? = nil,
          eraserWhole: Bool, eraserSizeIndex: Int) {
         self.colorIndex = colorIndex
         self.customRGBA = customRGBA
         self.widthIndex = widthIndex
+        self.customWidth = customWidth
         self.eraserWhole = eraserWhole
         self.eraserSizeIndex = eraserSizeIndex
     }
 
     private enum CodingKeys: String, CodingKey {
-        case colorIndex, customRGBA, widthIndex, nibAngleIndex, smoothing, eraserWhole, eraserSizeIndex
+        case colorIndex, customRGBA, widthIndex, customWidth, nibAngleIndex, smoothing, eraserWhole, eraserSizeIndex
     }
 
     init(from decoder: Decoder) throws {
@@ -107,16 +112,54 @@ struct PencilToolPrefs: Codable, Equatable {
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         customRGBA = try c.decodeIfPresent(Int.self, forKey: .customRGBA) ?? 0
         widthIndex = try c.decodeIfPresent(Int.self, forKey: .widthIndex) ?? 2
+        if let decodedWidth = try? c.decode(Double.self, forKey: .customWidth), decodedWidth.isFinite {
+            customWidth = CGFloat(decodedWidth)
+        } else {
+            customWidth = nil
+        }
         nibAngleIndex = try c.decodeIfPresent(Int.self, forKey: .nibAngleIndex) ?? 2
         smoothing = try c.decodeIfPresent(Bool.self, forKey: .smoothing) ?? true
         eraserWhole = try c.decodeIfPresent(Bool.self, forKey: .eraserWhole) ?? false
         eraserSizeIndex = try c.decodeIfPresent(Int.self, forKey: .eraserSizeIndex) ?? 2
     }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(colorIndex, forKey: .colorIndex)
+        try c.encode(customRGBA, forKey: .customRGBA)
+        try c.encode(widthIndex, forKey: .widthIndex)
+        if let customWidth, customWidth.isFinite {
+            try c.encode(Double(customWidth), forKey: .customWidth)
+        }
+        try c.encode(nibAngleIndex, forKey: .nibAngleIndex)
+        try c.encode(smoothing, forKey: .smoothing)
+        try c.encode(eraserWhole, forKey: .eraserWhole)
+        try c.encode(eraserSizeIndex, forKey: .eraserSizeIndex)
+    }
 }
 
 /// 笔宽/笔锋/橡皮档位的唯一取值表(UI 与持久化状态共用,避免两处漂移)。
 enum PencilMetrics {
-    static func width(kind: PencilToolKind, index: Int) -> CGFloat {
+    static func customWidthRange(kind: PencilToolKind) -> ClosedRange<CGFloat>? {
+        switch kind {
+        case .pen, .shape: return 0.8...18
+        case .brush: return 0.8...30
+        case .pencil: return 0.8...8
+        case .marker: return 0.8...52
+        case .crayon: return 0.8...26
+        case .lasso, .laser, .eraser: return nil
+        }
+    }
+
+    static func normalizedCustomWidth(kind: PencilToolKind, value: CGFloat?) -> CGFloat? {
+        guard let value, value.isFinite, let range = customWidthRange(kind: kind) else { return nil }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    static func width(kind: PencilToolKind, index: Int, customWidth: CGFloat? = nil) -> CGFloat {
+        if let customWidth = normalizedCustomWidth(kind: kind, value: customWidth) {
+            return customWidth
+        }
         let i = min(max(index, 0), 4)
         switch kind {
         case .brush: return [2.4, 4.0, 6.4, 9.6, 14.0][i]
@@ -142,23 +185,23 @@ enum PencilToolStateStore {
     /// v0.26 的按书快照键(只有 prefs,读不到 shape/ruler/customEraser)。
     static func legacyDocPrefsKey(_ sha: String) -> String { "pencil.state.\(sha)" }
 
-    static func loadGlobal() -> PencilToolState? {
-        decode(UserDefaults.standard.data(forKey: globalKey))
+    static func loadGlobal(defaults: UserDefaults = .standard) -> PencilToolState? {
+        decode(defaults.data(forKey: globalKey))
     }
 
-    static func loadDoc(_ sha: String) -> PencilToolState? {
+    static func loadDoc(_ sha: String, defaults: UserDefaults = .standard) -> PencilToolState? {
         guard !sha.isEmpty else { return nil }
-        return decode(UserDefaults.standard.data(forKey: docKey(sha)))
+        return decode(defaults.data(forKey: docKey(sha)))
     }
 
-    static func saveGlobal(_ state: PencilToolState) {
+    static func saveGlobal(_ state: PencilToolState, defaults: UserDefaults = .standard) {
         guard let data = encode(state) else { return }
-        UserDefaults.standard.set(data, forKey: globalKey)
+        defaults.set(data, forKey: globalKey)
     }
 
-    static func saveDoc(_ state: PencilToolState, sha: String) {
+    static func saveDoc(_ state: PencilToolState, sha: String, defaults: UserDefaults = .standard) {
         guard !sha.isEmpty, let data = encode(state) else { return }
-        UserDefaults.standard.set(data, forKey: docKey(sha))
+        defaults.set(data, forKey: docKey(sha))
     }
 
     static func encode(_ state: PencilToolState) -> Data? {
@@ -173,8 +216,8 @@ enum PencilToolStateStore {
     // MARK: - 迁移(v0.26 / 更早)
 
     /// 全局迁移:优先 v0.26 的 prefs 快照,补齐只有逐键存的三项。
-    static func migrateGlobal() -> PencilToolState {
-        let d = UserDefaults.standard
+    static func migrateGlobal(defaults: UserDefaults = .standard) -> PencilToolState {
+        let d = defaults
         var state = PencilToolState()
         if let raw = d.string(forKey: "pencilToolKind"),
            let kind = PencilToolKind(rawValue: raw) { state.kind = kind }
@@ -217,9 +260,10 @@ enum PencilToolStateStore {
 
     /// 按书迁移:prefs 快照 + 逐键的 kind/shape/customEraser/ruler。
     /// 没有任何这本书的记录时返回 nil(沿用全局状态,不覆盖)。
-    static func migrateDoc(_ sha: String, fallback: PencilToolState) -> PencilToolState? {
+    static func migrateDoc(_ sha: String, fallback: PencilToolState,
+                           defaults: UserDefaults = .standard) -> PencilToolState? {
         guard !sha.isEmpty else { return nil }
-        let d = UserDefaults.standard
+        let d = defaults
         let prefix = "pencil.doc.\(sha)."
         var state = fallback
         var found = false

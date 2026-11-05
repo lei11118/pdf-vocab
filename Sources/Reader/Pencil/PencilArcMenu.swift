@@ -22,13 +22,13 @@ struct PencilArcMenu: View {
     @State private var appeared = false
     @State private var customizing = false
     @State private var showActions = true
-    @State private var dragOffset = CGSize.zero
-    @State private var dragBase:CGSize?
+    @State private var hoveredToolIndex: Int?
+    @State private var hoveredActionIndex: Int?
     private var capacity: Int { ToolArcConfig.visibleToolCapacity(in:bounds) }
     private var tools: [PencilArcItem] { Array(session.arcItems.prefix(capacity)) }
-    private var geometry: ToolArcGeometry { ToolArcGeometry(anchor:CGPoint(x:anchor.x+dragOffset.width,y:anchor.y+dragOffset.height), bounds: bounds, count: tools.count, leftHanded: leftHanded, upperCount:upper.count) }
+    private var geometry: ToolArcGeometry { ToolArcGeometry(anchor:anchor, bounds: bounds, count: tools.count, leftHanded: leftHanded, upperCount:upper.count) }
     private var upper: [(String, String)] {
-        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("slider.horizontal.3", "自定义工具")] : [("viewfinder", "知识图谱截图"), ("slider.horizontal.3", "自定义工具")]
+        marking ? [("arrow.uturn.backward", "撤销"), ("arrow.uturn.forward", "重做"), ("viewfinder", "知识图谱截图"), ("text.cursor", "切换到阅读模式"), ("slider.horizontal.3", "弧形工具设置")] : [("viewfinder", "知识图谱截图"), ("slider.horizontal.3", "弧形工具设置")]
     }
     private var visibleIndices: Range<Int> {
         let base = geometry.initialRange
@@ -52,16 +52,12 @@ struct PencilArcMenu: View {
                 Circle().stroke(Color.red,lineWidth:2).frame(width:10,height:10).position(x:anchor.x+geometry.translation.width,y:anchor.y+geometry.translation.height).allowsHitTesting(false)
             }
             ForEach(Array(tools.enumerated()).filter { visible($0.offset) }, id: \.element.id) { index, tool in
-                icon(tool.systemImage, label: tool.label, active: session.isActive(tool)) {
+                icon(tool.systemImage, label: tool.label, active: session.isActive(tool), hovered: hoveredToolIndex == index) {
                     session.activate(tool); onSelect(); onDismiss()
-                }.overlay(alignment:.bottomTrailing) {
-                    if let preset = tool.preset {
-                        Circle().fill(Color(uiColor:preset.state.currentUIColor)).frame(width:10,height:10).padding(3).allowsHitTesting(false)
-                    }
                 }.transition(.identity).opacity(appeared ? 1 : 0).position(geometry.position(index, count: tools.count, upper: false))
             }
             if showActions { ForEach(upper.indices, id: \.self) { index in
-                icon(upper[index].0, label: upper[index].1, active: false) { activateUpper(index) }
+                icon(upper[index].0, label: upper[index].1, active: false, hovered: hoveredActionIndex == index) { activateUpper(index) }
                     .opacity(appeared ? (enabled(index) ? 1 : 0.3) : 0).position(geometry.position(index, count: upper.count, upper: true))
                     .animation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82).delay(0.04),value:appeared)
             }
@@ -71,14 +67,7 @@ struct PencilArcMenu: View {
                 else if let index = geometry.index(at: point, count: tools.count, upper: false), visible(index) {
                     session.activate(tools[index]); onSelect(); onDismiss()
                 } else { onDismiss() }
-            }, onSqueeze:onDismiss,onDrag:{ delta in
-                if dragBase == nil { dragBase = dragOffset; reset?.cancel(); reset = nil }
-                let base = dragBase ?? .zero
-                var transaction = Transaction(); transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    dragOffset = CGSize(width:base.width+delta.width,height:base.height+delta.height)
-                }
-            },onDragEnd:{ dragBase = nil },accepts:{ point in
+            }, onSqueeze:onDismiss, accepts:{ point in
                 let polar = geometry.polar(point)
                 let nearTrack = abs(polar.r-geometry.radius) <= ToolArcConfig.band || abs(polar.r-geometry.radius-ToolArcConfig.gap) <= ToolArcConfig.band
                 return nearTrack && abs(geometry.delta(polar.angle)) <= fullTrackHalf+0.2
@@ -87,21 +76,27 @@ struct PencilArcMenu: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: leftExtent)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: ToolArcConfig.animation), value: rightExtent)
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
-        .readerPanel(isPresented:$customizing,title:"自定义手写工具") {
-            PencilToolCustomization(session:session,onActivate:{ customizing = false; onSelect(); onDismiss() })
+        .readerPanel(isPresented:$customizing,title:"弧形工具设置") {
+            PencilArcToolSettingsView(session:session)
         }
         .onChange(of: bounds) { _, _ in onDismiss() }
         .onAppear { withAnimation(reduceMotion ? .easeOut(duration:0.15) : .spring(response:0.28,dampingFraction:0.82)) { appeared = true } }
-        .onDisappear { reset?.cancel() }
+        .onDisappear {
+            reset?.cancel()
+            hoveredToolIndex = nil
+            hoveredActionIndex = nil
+        }
     }
-    private func icon(_ name: String, label: String, active: Bool, action: @escaping () -> Void) -> some View {
+    private func icon(_ name: String, label: String, active: Bool, hovered: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name).font(.system(size: 19, weight: .medium))
                 .frame(width: ToolArcConfig.diameter, height: ToolArcConfig.diameter)
-                .foregroundStyle(active ? DS.onAccent : DS.foreground1)
-                .background(active ? DS.accent : DS.background3,in:Circle())
-                .overlay(Circle().stroke(active ? DS.accent : DS.foreground3.opacity(0.15), lineWidth: active ? 2 : 1))
+                .foregroundStyle(active ? DS.onAccent : (hovered ? DS.accent : DS.foreground1))
+                .background(active ? DS.accent : (hovered ? DS.background4 : DS.background3),in:Circle())
+                .overlay(Circle().stroke(hovered && active ? DS.onAccent : (active || hovered ? DS.accent : DS.foreground3.opacity(0.15)), lineWidth: active || hovered ? 2 : 1))
                 .shadow(color: .black.opacity(0.12), radius: 5, y: 3)
+                .scaleEffect(hovered && !reduceMotion ? 1.1 : 1)
+                .animation(reduceMotion ? .easeOut(duration:0.1) : .spring(response:0.18,dampingFraction:0.72), value: hovered)
         }.accessibilityLabel(label)
     }
     private func track(_ index:Int,count:Int,upper:Bool) -> Path {
@@ -147,6 +142,10 @@ struct PencilArcMenu: View {
     }
     private func hover(_ point: CGPoint?) {
         if let point {
+            let lowerIndex = geometry.index(at: point, count: tools.count, upper: false)
+            hoveredToolIndex = lowerIndex.flatMap { visible($0) ? $0 : nil }
+            let upperIndex = geometry.index(at: point, count: upper.count, upper: true)
+            hoveredActionIndex = showActions ? upperIndex.flatMap { enabled($0) ? $0 : nil } : nil
             let polar = geometry.polar(point)
             if abs(polar.r - geometry.radius) <= ToolArcConfig.band {
                 reset?.cancel(); reset = nil
@@ -160,6 +159,9 @@ struct PencilArcMenu: View {
                 reset?.cancel(); reset = nil; showActions = true; return
             }
             if abs(polar.r - geometry.radius) < ToolArcConfig.band + ToolArcConfig.hysteresis { return }
+        } else {
+            hoveredToolIndex = nil
+            hoveredActionIndex = nil
         }
         guard reset == nil else { return }
         reset = Task { @MainActor in
@@ -173,24 +175,20 @@ private struct ArcInput: UIViewRepresentable {
     let onHover: (CGPoint?) -> Void
     let onTap: (CGPoint, Bool) -> Void
     let onSqueeze: () -> Void
-    let onDrag:(CGSize)->Void
-    let onDragEnd:()->Void
     let accepts:(CGPoint)->Bool
     func makeUIView(context: Context) -> ArcInputView { ArcInputView() }
     func updateUIView(_ view: ArcInputView, context: Context) {
         view.onHover = onHover; view.onTap = onTap; view.onSqueeze = onSqueeze
-        view.onDrag = onDrag; view.onDragEnd = onDragEnd; view.accepts = accepts
+        view.accepts = accepts
     }
 }
 private final class ArcInputView: UIView, UIPencilInteractionDelegate {
     var onHover: ((CGPoint?) -> Void)?
     var onTap: ((CGPoint, Bool) -> Void)?
     var onSqueeze: (() -> Void)?
-    var onDrag:((CGSize)->Void)?
-    var onDragEnd:(()->Void)?
     var accepts:((CGPoint)->Bool)?
     private var touchOrigin:CGPoint?
-    private var dragging = false
+    private var movedBeyondTapThreshold = false
     override init(frame: CGRect) {
         super.init(frame: frame)
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
@@ -206,21 +204,22 @@ private final class ArcInputView: UIView, UIPencilInteractionDelegate {
         onHover?(gesture.state == .ended || gesture.state == .cancelled ? nil : gesture.location(in: self))
     }
     override func touchesBegan(_ touches:Set<UITouch>,with event:UIEvent?) {
-        touchOrigin = touches.first?.location(in:window); dragging = false
+        touchOrigin = touches.first?.location(in:window); movedBeyondTapThreshold = false
     }
     override func touchesMoved(_ touches:Set<UITouch>,with event:UIEvent?) {
         guard let touch = touches.first,let origin = touchOrigin else { return }
         let point = touch.location(in:window)
         let delta = CGSize(width:point.x-origin.x,height:point.y-origin.y)
-        if hypot(delta.width,delta.height) > 6 { dragging = true }
-        if dragging { onDrag?(delta) }
+        if hypot(delta.width,delta.height) > 6 { movedBeyondTapThreshold = true }
     }
     override func touchesEnded(_ touches:Set<UITouch>,with event:UIEvent?) {
-        if dragging { onDragEnd?() }
-        else if let touch = touches.first { onTap?(touch.location(in:self),touch.type == .pencil) }
-        touchOrigin = nil; dragging = false
+        if !movedBeyondTapThreshold, let touch = touches.first {
+            onTap?(touch.location(in:self),touch.type == .pencil)
+        }
+        touchOrigin = nil; movedBeyondTapThreshold = false
     }
     override func touchesCancelled(_ touches:Set<UITouch>,with event:UIEvent?) {
-        if dragging { onDragEnd?() }; touchOrigin = nil; dragging = false
+        onHover?(nil)
+        touchOrigin = nil; movedBeyondTapThreshold = false
     }
 }

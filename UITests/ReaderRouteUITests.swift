@@ -27,7 +27,7 @@ final class ReaderRouteUITests:XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
-    func testResizeAcrossCapsuleThresholdAndMoveArcWithSelectionBarOpen() {
+    func testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen() {
         let app = XCUIApplication()
         app.launchArguments = ["--gesture-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
         app.launch()
@@ -71,8 +71,37 @@ final class ReaderRouteUITests:XCTestCase {
         let toolBefore = tool.frame
         root.withOffset(CGVector(dx:toolBefore.midX,dy:toolBefore.midY)).press(forDuration:0.1,
             thenDragTo:root.withOffset(CGVector(dx:toolBefore.midX-80,dy:toolBefore.midY-60)))
-        XCTAssertGreaterThan(toolBefore.midX-tool.frame.midX,50)
-        XCTAssertTrue(bar.exists,"the arc moves without dismissing the selection bar")
+        XCTAssertLessThan(abs(toolBefore.midX-tool.frame.midX),5,"swiping over the arc does not reposition it")
+        XCTAssertLessThan(abs(toolBefore.midY-tool.frame.midY),5,"swiping over the arc does not reposition it")
+        XCTAssertTrue(bar.exists,"arc movement does not dismiss the selection bar")
+    }
+    func testReaderActionRailTogglesItsWindow() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
+        app.launch()
+        let document = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
+        if document.waitForExistence(timeout:10) { document.tap() }
+        let searchAction = app.buttons["全文搜索"].firstMatch
+        XCTAssertTrue(searchAction.waitForExistence(timeout:20))
+        searchAction.tap()
+        let searchField = app.textFields["在文档中搜索"].firstMatch
+        XCTAssertTrue(searchField.waitForExistence(timeout:10))
+
+        // Move the floating search window away from the side rail so the same
+        // rail action can be tapped again to close only its own window.
+        let close = app.buttons["关闭窗口"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout:5))
+        let root = app.coordinate(withNormalizedOffset:.zero)
+        let panelInset = min(250, app.frame.width * 0.25)
+        let dragStartX = close.frame.midX - panelInset
+        let dragStartY = close.frame.minY + 2
+        let dragStart = root.withOffset(CGVector(dx:dragStartX,dy:dragStartY))
+        dragStart.press(forDuration:0.12,thenDragTo:root.withOffset(CGVector(dx:dragStartX-min(210,app.frame.width*0.35),dy:dragStartY+42)))
+        XCTAssertTrue(searchAction.isHittable)
+        searchAction.tap()
+        let closed = XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:searchField)
+        XCTAssertEqual(XCTWaiter.wait(for:[closed],timeout:8),.completed)
+        XCTAssertTrue(app.buttons["更多"].exists,"the reader remains open after toggling search")
     }
     func testReaderFunctionsStayInDocumentInBothModes() {
         let app = XCUIApplication()
@@ -83,7 +112,7 @@ final class ReaderRouteUITests:XCTestCase {
         XCTAssertTrue(app.buttons["更多"].waitForExistence(timeout:30))
         for writing in [false,true] {
             if writing { app.buttons["标记模式"].tap() }
-            for label in ["全文搜索","目录与书签","生词本","自定义手写工具","知识图谱","词频分析","页面缩略图","设置","清空本页手写"] {
+            for label in ["全文搜索","目录与书签","生词本","弧形工具设置","知识图谱","词频分析","页面缩略图","设置","清空本页手写"] {
                 app.buttons["更多"].tap()
                 let action = app.cells.buttons[label].firstMatch
                 XCTAssertTrue(action.waitForExistence(timeout:5),label)
@@ -95,9 +124,9 @@ final class ReaderRouteUITests:XCTestCase {
                     let search = app.textFields["在文档中搜索"].firstMatch
                     XCTAssertTrue(search.waitForExistence(timeout:5),"search field must be visible in the window")
                 }
-                if label == "自定义手写工具" {
-                    let edit = app.buttons["custom-tools-edit"].firstMatch
-                    XCTAssertTrue(edit.waitForExistence(timeout:5),"custom tools remain editable")
+                if label == "弧形工具设置" {
+                    let edit = app.buttons["arc-tools-edit"].firstMatch
+                    XCTAssertTrue(edit.waitForExistence(timeout:5),"arc tool ordering remains editable")
                     XCTAssertTrue(edit.isHittable)
                     edit.tap()
                     XCTAssertEqual(edit.label,"完成编辑")

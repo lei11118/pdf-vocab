@@ -73,4 +73,88 @@ final class InteractionRebuildTests: XCTestCase {
         XCTAssertFalse(gate.accept(at:10.01))
         XCTAssertTrue(gate.accept(at:10.2))
     }
+
+    func testArcToolSettingsMigratePersistAndProtectTheLastTool() {
+        let suite = "InteractionRebuildTests.ArcTools.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(PencilToolKind.eraser.rawValue, forKey: "pencilHiddenTools")
+        let legacyPresetData = Data("legacy preset blob".utf8)
+        defaults.set(legacyPresetData, forKey: "pencil.customPresets.v1")
+
+        let session = PencilToolSession(defaults: defaults)
+        let migrated = PencilToolKind.allCases.filter { $0 != .eraser }
+        XCTAssertEqual(session.arcToolKinds, migrated)
+
+        let previousHiddenSet = session.hiddenSet
+        session.addArcTool(.eraser)
+        session.moveArcTools(from: IndexSet(integer: session.arcToolKinds.count - 1), to: 0)
+        session.removeArcTools(at: IndexSet(integer: 1))
+        let savedOrder = session.arcToolKinds
+        XCTAssertEqual(session.hiddenSet, previousHiddenSet)
+        XCTAssertEqual(defaults.string(forKey: "pencil.arcTools.v1"), savedOrder.map(\.rawValue).joined(separator: ","))
+        XCTAssertEqual(defaults.data(forKey: "pencil.customPresets.v1"), legacyPresetData)
+        XCTAssertEqual(session.arcItems.map(\.id), savedOrder.map(\.rawValue))
+
+        let restored = PencilToolSession(defaults: defaults)
+        XCTAssertEqual(restored.arcToolKinds, savedOrder)
+        restored.removeArcTools(at: IndexSet(integersIn: 0..<restored.arcToolKinds.count))
+        XCTAssertEqual(restored.arcToolKinds.count, 1)
+        XCTAssertTrue(defaults.data(forKey: "pencil.customPresets.v1") == legacyPresetData)
+    }
+
+    func testCustomWidthDecodesLegacyPrefsAndRejectsInvalidValues() throws {
+        let legacy = try JSONDecoder().decode(PencilToolPrefs.self, from: Data(#"{"widthIndex":3}"#.utf8))
+        XCTAssertEqual(legacy.widthIndex, 3)
+        XCTAssertNil(legacy.customWidth)
+
+        let invalid = try JSONDecoder().decode(
+            PencilToolPrefs.self,
+            from: Data(#"{"widthIndex":1,"customWidth":"not-a-number"}"#.utf8)
+        )
+        XCTAssertEqual(invalid.widthIndex, 1)
+        XCTAssertNil(invalid.customWidth)
+
+        var nonFinite = PencilToolPrefs()
+        nonFinite.customWidth = CGFloat.infinity
+        let encoded = try JSONEncoder().encode(nonFinite)
+        XCTAssertNil(try JSONDecoder().decode(PencilToolPrefs.self, from: encoded).customWidth)
+        XCTAssertEqual(PencilMetrics.width(kind: .pen, index: 3, customWidth: CGFloat.nan), PencilMetrics.width(kind: .pen, index: 3))
+        XCTAssertEqual(PencilMetrics.width(kind: .shape, index: 2, customWidth: 4.3), 4.3)
+        XCTAssertEqual(PencilMetrics.width(kind: .pen, index: 2, customWidth: 1000), 18)
+        XCTAssertNil(PencilMetrics.customWidthRange(kind: .laser))
+        XCTAssertNil(PencilMetrics.customWidthRange(kind: .eraser))
+    }
+
+    func testCustomWidthPersistsPerToolAndQuickPresetsClearTheOverride() {
+        let suite = "InteractionRebuildTests.CustomWidth.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let session = PencilToolSession(defaults: defaults)
+        session.setCustomWidth(2.7)
+        XCTAssertEqual(session.width, 2.7, accuracy: 0.0001)
+        XCTAssertEqual(session.state.width, 2.7, accuracy: 0.0001)
+
+        session.select(kind: .marker)
+        XCTAssertNil(session.customWidth)
+        session.setCustomWidth(31.4)
+        session.select(kind: .pen)
+        XCTAssertEqual(session.width, 2.7, accuracy: 0.0001)
+
+        session.setWidth(0)
+        XCTAssertNil(session.customWidth)
+        XCTAssertEqual(session.width, PencilMetrics.width(kind: .pen, index: 0), accuracy: 0.0001)
+        session.setCustomWidth(CGFloat.infinity)
+        XCTAssertNil(session.customWidth)
+        session.setCustomWidth(1000)
+        XCTAssertEqual(session.width, 18, accuracy: 0.0001)
+
+        let restored = PencilToolSession(defaults: defaults)
+        XCTAssertEqual(restored.width, 18, accuracy: 0.0001)
+        restored.select(kind: .marker)
+        XCTAssertEqual(restored.width, 31.4, accuracy: 0.0001)
+    }
 }
