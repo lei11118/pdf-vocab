@@ -7,6 +7,7 @@ struct SettingsView: View {
     let db: AppDatabase
 
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
+    @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     @AppStorage("autoCollectOnSelect") private var autoCollectOnSelect = false
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
@@ -51,6 +52,13 @@ struct SettingsView: View {
                     Text("查词")
                 } footer: {
                     Text("开启后:选中单词、词卡出现时自动朗读一次(美音)。")
+                }
+                Section {
+                    Toggle("语境 Token 阅读", isOn: $contextReadingEnabled)
+                } header: {
+                    Text("实验功能")
+                } footer: {
+                    Text("默认关闭。开启后仅对可追溯的原生 PDF 文本使用新的 Token 选区卡；扫描版 OCR、数学识别和语境译义尚未接入。关闭后恢复现有选词与整句卡片。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)

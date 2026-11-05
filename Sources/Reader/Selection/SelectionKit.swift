@@ -189,6 +189,33 @@ enum SelectionGeometry {
         }.joined(separator: ";")
     }
 
+    /// PDFKit source ranges are the read-only bridge from a visual selection
+    /// back to the unmodified `PDFPage.string` UTF-16 surface.
+    static func sourceRanges(of selection: PDFSelection, on page: PDFPage) -> [NSRange] {
+        guard let source = page.string else { return [] }
+        let ranges = (0..<selection.numberOfTextRanges(on: page)).map { selection.range(at: $0, on: page) }
+        return validatedSourceRanges(ranges, in: source) ?? []
+    }
+
+    /// Reject the complete selection when even one PDFKit range is invalid;
+    /// silently dropping a range could mismatch source offsets and display text.
+    static func validatedSourceRanges(_ ranges: [NSRange], in source: String) -> [NSRange]? {
+        guard !ranges.isEmpty else { return nil }
+        let validated = ranges.compactMap { range -> NSRange? in
+            guard range.length > 0 else { return nil }
+            return UTF16Span(range: range, in: source)?.nsRange(in: source)
+        }
+        guard validated.count == ranges.count else { return nil }
+        return validated
+    }
+
+    /// Changes when page rotation or the source boxes used for geometry change.
+    static func contextGeometryRevision(for page: PDFPage) -> String {
+        let media = page.bounds(for: .mediaBox)
+        let crop = page.bounds(for: .cropBox)
+        return "\(page.rotation)|\(NSCoder.string(for: media))|\(NSCoder.string(for: crop))"
+    }
+
     /// Recover a nearby lexical glyph when PDFKit returns a space or a neighbour.
     /// Exact glyph hits win; the bounded tolerance never jumps to a distant line.
     static func wordCharacter(text: NSString, near index: Int, at point: CGPoint,

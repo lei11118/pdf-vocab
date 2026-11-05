@@ -6,6 +6,8 @@ struct SelectionInfo: Equatable {
     var wordCount: Int
     /// 首个可查询词(侧边词卡用)
     var primaryTerm: String
+    /// Present only when the local context-reading mode routed native PDF text.
+    var contextual: ContextualSelection? = nil
 }
 
 /// 阅读会话句柄:让 SwiftUI 侧在任意时刻取到协调器(保存阅读位置等)。
@@ -31,6 +33,8 @@ struct PDFKitView: UIViewRepresentable {
     var onHoverUpdate: ((String, String, CGPoint) -> Void)? = nil
     var onHoverEnd: (() -> Void)? = nil
     var markMode: Bool = false
+    var contextReadingEnabled: Bool = false
+    var contextReadingGeneration: Int = 0
     /// v0.14.0:手写工具会话(浮动工具带驱动各页画布)
     var toolSession: PencilToolSession? = nil
     /// v0.15.0:挤压 → 弧形工具盘(回调笔尖坐标)
@@ -61,6 +65,8 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.onHoverUpdate = onHoverUpdate
         coordinator.onHoverEnd = onHoverEnd
         coordinator.markMode = markMode
+        coordinator.contextReadingEnabled = contextReadingEnabled
+        coordinator.contextReadingGeneration = contextReadingGeneration
         coordinator.toolSession = toolSession
         coordinator.onPencilSqueeze = onPencilSqueeze
         coordinator.onFocusToggle = onFocusToggle
@@ -138,6 +144,8 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onTeardown = onTeardown
         context.coordinator.vocabStore = vocabStore
         context.coordinator.ocrStore = ocrStore
+        // Context mode changes are coordinated by ReaderView.onChange so the
+        // clear callback never mutates SwiftUI state during updateUIView.
         context.coordinator.hoverPreviewEnabled = hoverPreviewEnabled
         context.coordinator.hapticsEnabled = hapticsEnabled
         context.coordinator.onHoverUpdate = onHoverUpdate

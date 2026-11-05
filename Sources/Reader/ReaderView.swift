@@ -26,6 +26,8 @@ struct ReaderView: View {
     @State private var showVocab = false
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
+    @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
+    @State private var contextReadingGeneration = 0
     /// v0.9.0(M4):标记 / 阅读模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
     /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
     /// 用户反馈"用过的工具回到主界面再进来就被重置了"。设置里可关掉"恢复上次书写状态"。
@@ -101,6 +103,14 @@ struct ReaderView: View {
     // 会让 Swift 类型检查超时 —— "unable to type-check this expression in reasonable time")。
     private var lifecycleContent: some View {
         pencilSyncContent
+            .onChange(of: contextReadingEnabled) { _, enabled in
+                contextReadingGeneration += 1
+                readerHandle.coordinator?.setContextReadingMode(enabled, generation: contextReadingGeneration)
+                if let cardContent, case .contextual = cardContent {
+                    self.cardContent = nil
+                    translationRequest = nil
+                }
+            }
             .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
@@ -636,13 +646,22 @@ struct ReaderView: View {
             .overlay { captureOverlay }
             .overlay(alignment:.bottom) { captureToast }
     }
+
+    private func closeReaderCard() {
+        if let cardContent, case .contextual = cardContent {
+            readerHandle.coordinator?.dismissSelection()
+            translationRequest = nil
+        }
+        cardContent = nil
+    }
+
     private var wordOverlay: some View {
     GeometryReader { geo in
         if let content = cardContent {
             FloatingCardWindow(
                 content: content,
                 bounds: geo.size,
-                onClose: { cardContent = nil },
+                onClose: closeReaderCard,
                 onSelectWord: { word in
                     autoSpeak(word)
                 },
@@ -814,6 +833,8 @@ struct ReaderView: View {
                     onHoverUpdate: { term, key, point in wordInteraction.hover(term, query: key, at: point) },
                     onHoverEnd: { wordInteraction.clear() },
                     markMode: markMode,
+                    contextReadingEnabled: contextReadingEnabled,
+                    contextReadingGeneration: contextReadingGeneration,
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
@@ -846,6 +867,16 @@ struct ReaderView: View {
                             cardContent = nil
                             translationRequest = nil
                             return
+                        }
+                        if let contextual = info.contextual {
+                            guard contextReadingEnabled,
+                                  contextual.generation == contextReadingGeneration else { return }
+                            if contextual.tokens.count == 1, info.wordCount <= 1 {
+                                translationRequest = nil
+                                cardContent = .contextual(contextual)
+                                if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
+                                return
+                            }
                         }
                         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
                             if cardContent != .word(info.primaryTerm) { translationRequest = nil }

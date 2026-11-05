@@ -96,6 +96,8 @@ final class ReaderCoordinator: NSObject {
     /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
     private var lastHandleCheckKey: String?
     private var selectionText = ""
+    var contextReadingEnabled = false
+    var contextReadingGeneration = 0
 
     /// v0.11.0(M4-B):悬停预览 + 触觉(由 PDFKitView 注入,跟随设置页开关)
     var hoverPreviewEnabled = true
@@ -138,6 +140,7 @@ final class ReaderCoordinator: NSObject {
         var anchorPoint: CGPoint
         var anchorWord: PDFSelection
         var lastPoint: CGPoint
+        var contextRoute: Bool
         var didMove = false
     }
     private var drag: DragState?
@@ -718,8 +721,10 @@ final class ReaderCoordinator: NSObject {
     // MARK: - 长按选词 / 本体拖动(一个连续手势)
 
     /// 建立一次拖动(冻结滚动,记录触点)。
-    private func beginDrag(kind: DragKind, page: PDFPage, anchorPoint: CGPoint, anchorWord: PDFSelection, touchPoint: CGPoint, viewPoint: CGPoint) {
-        drag = DragState(kind: kind, page: page, anchorPoint: anchorPoint, anchorWord: anchorWord, lastPoint: touchPoint, didMove: false)
+    private func beginDrag(kind: DragKind, page: PDFPage, anchorPoint: CGPoint, anchorWord: PDFSelection,
+                           touchPoint: CGPoint, viewPoint: CGPoint, contextRoute: Bool = false) {
+        drag = DragState(kind: kind, page: page, anchorPoint: anchorPoint, anchorWord: anchorWord,
+                         lastPoint: touchPoint, contextRoute: contextRoute, didMove: false)
         lastTouchViewPoint = viewPoint
         freezeScrolling(true)
     }
@@ -760,7 +765,8 @@ final class ReaderCoordinator: NSObject {
                     < SelectionGeometry.distanceSquared(hit.point, endAnchor)
                 let fixedPoint = nearerStart ? endAnchor : startAnchor
                 guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
-                beginDrag(kind: .body, page: page, anchorPoint: fixedPoint, anchorWord: anchor, touchPoint: hit.point, viewPoint: viewPoint)
+                beginDrag(kind: .body, page: page, anchorPoint: fixedPoint, anchorWord: anchor,
+                          touchPoint: hit.point, viewPoint: viewPoint, contextRoute: contextReadingEnabled)
                 if kind == "finger" {
                     loupe.begin(at: viewPoint, widget: nil, in: pdfView)
                 }
@@ -771,13 +777,18 @@ final class ReaderCoordinator: NSObject {
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
             let tolerance = min(8,6 / max(pdfView.scaleFactor,0.1))
-            if let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point,tolerance:tolerance)
-                ?? SelectionGeometry.initialCharacter(on:hit.page,at:hit.point,tolerance:tolerance),
+            let wordSeed = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
+            let characterSeed = wordSeed == nil
+                ? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance)
+                : nil
+            if let word = wordSeed ?? characterSeed,
                SelectionGeometry.isSane(word, maxPages: 1, maxChars: 300) {
                 DiagLog.log(String(format: "press.began(%@): word=「%@」 len=%d", kind,
                                    SelectionGeometry.logSnippet(word.string ?? ""), word.string?.count ?? 0))
-                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point, anchorWord: word, touchPoint: hit.point, viewPoint: viewPoint)
-                applySelection(word, src: "own")
+                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point, anchorWord: word,
+                          touchPoint: hit.point, viewPoint: viewPoint, contextRoute: contextReadingEnabled)
+                applySelection(word, src: "own", contextRoute: contextReadingEnabled,
+                               geometryQuality: wordSeed != nil ? .word : .approximate)
                 if kind == "finger" {
                     loupe.begin(at: viewPoint, widget: nil, in: pdfView)
                 }
@@ -1067,7 +1078,8 @@ final class ReaderCoordinator: NSObject {
                 : CGPoint(x: HandleMetrics.lineRect(fromDisplay: firstLine).minX + 0.6, y: firstLine.midY)
             guard let anchor = SelectionGeometry.initialCharacter(on:page,at:fixedPoint) else { return }
             drag = DragState(kind: isStart ? .handleStart : .handleEnd,
-                             page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint, didMove: true)
+                             page: page, anchorPoint: fixedPoint, anchorWord: anchor, lastPoint: fixedPoint,
+                             contextRoute: contextReadingEnabled, didMove: true)
             lastTouchViewPoint = viewPoint
             freezeScrolling(true)
             let pencil = (gesture as? PencilAwarePanGestureRecognizer)?.isPencilDriven ?? false
@@ -1114,7 +1126,7 @@ final class ReaderCoordinator: NSObject {
     private func extendDrag(to hit: (page: PDFPage, point: CGPoint), viewPoint: CGPoint) {
         guard let d = drag, hit.page === d.page else { return }
         if let selection = selectionBetween(d, and: hit.point) {
-            applySelection(selection, src: "own")
+            applySelection(selection, src: "own", contextRoute: d.contextRoute, geometryQuality: .approximate)
         }
         loupe.move(to: viewPoint)
     }
@@ -1168,10 +1180,14 @@ final class ReaderCoordinator: NSObject {
         DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
             source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
             hit.point.x, hit.point.y, pdfView.scaleFactor, hypot(roundTrip.x-viewPoint.x,roundTrip.y-viewPoint.y), link ? 1 : 0))
-        if let selection = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
-            ?? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance) {
+        let wordSeed = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
+        let characterSeed = wordSeed == nil
+            ? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance)
+            : nil
+        if let selection = wordSeed ?? characterSeed {
             DiagLog.log("selection.result: source=\(source) text=「\(SelectionGeometry.logSnippet(selection.string ?? ""))」")
-            applySelection(selection, src: source)
+            applySelection(selection, src: source, contextRoute: contextReadingEnabled,
+                           geometryQuality: wordSeed != nil ? .word : .approximate)
             refreshHandles()
             presentMenu()
             if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
@@ -1204,7 +1220,10 @@ final class ReaderCoordinator: NSObject {
 
     // MARK: - 选区应用 / 高亮
 
-    private func applySelection(_ selection: PDFSelection, src: String) {
+    private func applySelection(_ selection: PDFSelection,
+                                src: String,
+                                contextRoute: Bool = false,
+                                geometryQuality: SourceGeometryQuality = .approximate) {
         let text = SelectionGeometry.lookupText(for:selection)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
@@ -1226,10 +1245,22 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
+        let contextual: ContextualSelection? = {
+            guard contextRoute, contextReadingEnabled, pageIndex >= 0,
+                  let page = selection.pages.first else { return nil }
+            return ContextSelectionRouter.route(selection: selection,
+                                                page: page,
+                                                documentSHA256: docSha,
+                                                pageIndex: pageIndex,
+                                                displaySurface: text,
+                                                geometryQuality: geometryQuality,
+                                                generation: contextReadingGeneration)
+        }()
         onSelectionInfo(SelectionInfo(
             text: display,
             wordCount: wordCount,
-            primaryTerm: primaryTerm
+            primaryTerm: primaryTerm,
+            contextual: contextual
         ))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
@@ -1292,7 +1323,7 @@ final class ReaderCoordinator: NSObject {
         rects.removeAll()
     }
 
-    private func clearSelection() {
+    private func clearSelection(notifySelection: Bool = true) {
         DiagLog.log("clearSelection")
         holdMenuWork?.cancel()
         holdMenuWork = nil
@@ -1312,8 +1343,19 @@ final class ReaderCoordinator: NSObject {
         clearHover()
         clearTempHighlight()
         refreshHandles()
-        onSelectionInfo(nil)
+        if notifySelection { onSelectionInfo(nil) }
         resuppressSoon()
+    }
+
+    /// Explicitly coordinated by ReaderView.onChange, outside updateUIView.
+    /// Clearing only transient selection layers leaves saved vocabulary
+    /// highlights and Pencil ink untouched.
+    func setContextReadingMode(_ enabled: Bool, generation: Int) {
+        guard generation > contextReadingGeneration else { return }
+        contextReadingEnabled = enabled
+        contextReadingGeneration = generation
+        drag = nil
+        clearSelection(notifySelection: false)
     }
 
     /// 关闭整条选中链(供侧边词卡关闭按钮等外部调用)。
@@ -2359,6 +2401,10 @@ final class ReaderCoordinator: NSObject {
     /// ② 若解析异常(损坏文档上 point-pair 可能返回非法选区)→ 用词边界点重试;
     /// ③ 全部失败返回 nil(保持上一个好选区,不清空)。
     private func selectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
+        if dragState.contextRoute {
+            if dragState.kind == .word && !dragState.didMove { return dragState.anchorWord }
+            return contextualSelectionBetween(dragState, and: current)
+        }
         if dragState.kind == .word && !dragState.didMove { return dragState.anchorWord }
         let page = dragState.page
         let anchorRect = dragState.anchorWord.bounds(for: page)
@@ -2391,6 +2437,56 @@ final class ReaderCoordinator: NSObject {
             }
         }
         return nil
+    }
+
+    /// Context mode routes a drag through complete source ranges from trusted
+    /// visual seeds. It never treats point-pair geometry as a whole-token hit.
+    private func contextualSelectionBetween(_ dragState: DragState, and current: CGPoint) -> PDFSelection? {
+        let page = dragState.page
+        guard let source = page.string,
+              let anchor = contextualSeed(on: page, at: dragState.anchorPoint),
+              let target = contextualSeed(on: page, at: current),
+              let anchorStart = anchor.ranges.map(\.location).min(),
+              let targetStart = target.ranges.map(\.location).min(),
+              let anchorEnd = anchor.ranges.map({ $0.location + $0.length }).max(),
+              let targetEnd = target.ranges.map({ $0.location + $0.length }).max() else { return nil }
+
+        let location = min(anchorStart, targetStart)
+        let end = max(anchorEnd, targetEnd)
+        let completeRange = NSRange(location: location, length: end - location)
+        guard UTF16Span(range: completeRange, in: source) != nil,
+              let selection = page.selection(for: completeRange),
+              SelectionGeometry.isSane(selection, maxPages: 1, maxChars: 6_000),
+              let selectedText = selection.string, !selectedText.isEmpty else { return nil }
+        let selectedRanges = SelectionGeometry.sourceRanges(of: selection, on: page)
+        guard !selectedRanges.isEmpty,
+              (anchor.ranges + target.ranges).allSatisfy({ rangeIsCovered($0, by: selectedRanges) }) else { return nil }
+        return selection
+    }
+
+    /// Words are preferred; punctuation, symbols, and other glyphs can still
+    /// be selected as a conservative character seed.
+    private func contextualSeed(on page: PDFPage, at point: CGPoint) -> (selection: PDFSelection, ranges: [NSRange])? {
+        func validatedSeed(_ candidate: PDFSelection?) -> (selection: PDFSelection, ranges: [NSRange])? {
+            guard let candidate,
+                  SelectionGeometry.isSane(candidate, maxPages: 1, maxChars: 300) else { return nil }
+            let ranges = SelectionGeometry.sourceRanges(of: candidate, on: page)
+            guard !ranges.isEmpty else { return nil }
+            return (candidate, ranges)
+        }
+        if let word = validatedSeed(SelectionGeometry.initialWord(on: page, at: point)) { return word }
+        return validatedSeed(SelectionGeometry.initialCharacter(on: page, at: point))
+    }
+
+    private func rangeIsCovered(_ target: NSRange, by ranges: [NSRange]) -> Bool {
+        let targetEnd = target.location + target.length
+        var cursor = target.location
+        for range in ranges.sorted(by: { $0.location < $1.location }) where NSMaxRange(range) > cursor {
+            guard range.location <= cursor else { return false }
+            cursor = max(cursor, NSMaxRange(range))
+            if cursor >= targetEnd { return true }
+        }
+        return false
     }
 
     // MARK: - 冻结滚动 + 贴边自动滚动

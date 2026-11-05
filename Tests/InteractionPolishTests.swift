@@ -178,13 +178,22 @@ final class InteractionPolishTests:XCTestCase {
         page.addAnnotation(link)
         view.go(to:page)
         var texts: [String] = []
-        let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 { texts.append(info.text) } })
+        var contextualSelections: [ContextualSelection] = []
+        let coordinator = ReaderCoordinator(onPageChanged:{ _ in },onSelectionInfo:{ if let info = $0 {
+            texts.append(info.text)
+            if let contextual = info.contextual { contextualSelections.append(contextual) }
+        } })
         coordinator.pdfView = view
+        coordinator.docSha = "openstax-link-fixture"
+        coordinator.contextReadingEnabled = true
+        coordinator.contextReadingGeneration = 4
         coordinator.hapticsEnabled = false
         let point = view.convert(CGPoint(x:183.4946,y:377.4785),from:page)
         let press = BeganWordPress(point:point)
         coordinator.perform(NSSelectorFromString("handlePress:"),with:press)
         XCTAssertEqual(texts.last,"Functions")
+        XCTAssertEqual(contextualSelections.last?.displaySurface, "Functions")
+        XCTAssertEqual(contextualSelections.last?.tokens.map(\.sourceSurface), ["Functions"])
         XCTAssertTrue(view.currentPage === page,"selecting linked text must preserve page")
         press.testState = .ended
         coordinator.perform(NSSelectorFromString("handlePress:"),with:press)
@@ -223,6 +232,98 @@ final class InteractionPolishTests:XCTestCase {
         }
         XCTAssertEqual(picked,["word","next","+"])
         coordinator.clearTempHighlight()
+    }
+
+    func testContextModeCoordinatorRoutesWordAndWholeTokenDragToSymbol() throws {
+        let sourceText = "charge + beta"
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 400, height: 300)).pdfData { context in
+            context.beginPage()
+            (sourceText as NSString).draw(at: CGPoint(x: 30, y: 90), withAttributes: [.font: UIFont.systemFont(ofSize: 26)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let source = try XCTUnwrap(page.string)
+        let sourceNSString = source as NSString
+        let chargeRange = sourceNSString.range(of: "charge")
+        let symbolRange = sourceNSString.range(of: "+")
+        XCTAssertNotEqual(chargeRange.location, NSNotFound)
+        XCTAssertNotEqual(symbolRange.location, NSNotFound)
+
+        let view = VocabPDFView(frame: CGRect(x: 0, y: 0, width: 900, height: 700))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        controller.view = view
+        window.frame = view.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKey() }
+        view.displayMode = .singlePage
+        view.document = document
+        view.scaleFactor = 2.5
+        view.layoutDocumentView()
+        view.go(to: page)
+
+        func point(for range: NSRange) throws -> CGPoint {
+            let selection = try XCTUnwrap(page.selection(for: range))
+            let rect = selection.bounds(for: page)
+            XCTAssertTrue(SelectionGeometry.isValid(rect))
+            return view.convert(CGPoint(x: rect.midX, y: rect.midY), from: page)
+        }
+        let chargePoint = try point(for: chargeRange)
+        let symbolPoint = try point(for: symbolRange)
+        var events: [SelectionInfo?] = []
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { events.append($0) })
+        coordinator.pdfView = view
+        coordinator.docSha = "context-coordinator-fixture"
+        coordinator.contextReadingEnabled = true
+        coordinator.contextReadingGeneration = 12
+        coordinator.hapticsEnabled = false
+
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: CompletedWordTap(point: chargePoint))
+        let doubleTapInfo = try XCTUnwrap(events.compactMap { $0 }.last)
+        let doubleTapContext = try XCTUnwrap(doubleTapInfo.contextual)
+        XCTAssertEqual(doubleTapContext.generation, 12)
+        XCTAssertEqual(doubleTapContext.displaySurface.lowercased(), "charge")
+        XCTAssertEqual(doubleTapContext.tokens.map(\.sourceSurface), ["charge"])
+        XCTAssertEqual(doubleTapContext.tokens.first?.geometryQuality, .word)
+        XCTAssertEqual(doubleTapContext.sourceSpans.first?.location, chargeRange.location)
+
+        coordinator.dismissSelection()
+        let beforeSingleTap = events.count
+        coordinator.perform(NSSelectorFromString("handleTap:"), with: CompletedWordTap(point: chargePoint))
+        XCTAssertEqual(events.count, beforeSingleTap, "Context mode must not change single-tap selection behavior")
+
+        let press = MutableContextPress(point: chargePoint)
+        coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
+        XCTAssertEqual(events.compactMap { $0 }.last?.contextual?.tokens.map(\.sourceSurface), ["charge"])
+        press.point = symbolPoint
+        press.testState = .changed
+        coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
+        let draggedContext = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        XCTAssertEqual(draggedContext.tokens.map(\.sourceSurface), ["charge", "+"], "A punctuation seed must be selectable as the drag endpoint")
+        XCTAssertFalse(draggedContext.tokens.contains { $0.sourceSurface == "beta" }, "The source range must stop at the visual endpoint token")
+        XCTAssertTrue(draggedContext.tokens.allSatisfy { $0.geometryQuality == .approximate })
+        press.testState = .ended
+        coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
+
+        let pendingPress = MutableContextPress(point: chargePoint)
+        coordinator.setContextReadingMode(true, generation: 13)
+        coordinator.perform(NSSelectorFromString("handlePress:"), with: pendingPress)
+        let beforeModeChange = events.count
+        coordinator.setContextReadingMode(false, generation: 14)
+        XCTAssertEqual(events.count, beforeModeChange, "A feature switch clears transient selection without a stale nil callback")
+        pendingPress.point = symbolPoint
+        pendingPress.testState = .changed
+        coordinator.perform(NSSelectorFromString("handlePress:"), with: pendingPress)
+        XCTAssertEqual(events.count, beforeModeChange, "A late drag update must not restore the cleared contextual selection")
+        coordinator.setContextReadingMode(true, generation: 13)
+        XCTAssertFalse(coordinator.contextReadingEnabled, "An older window generation must not restore a stale mode")
+        XCTAssertEqual(coordinator.contextReadingGeneration, 14)
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: CompletedWordTap(point: chargePoint))
+        let legacyInfo = try XCTUnwrap(events.compactMap { $0 }.last)
+        XCTAssertNil(legacyInfo.contextual, "Turning context mode off restores the legacy selection payload")
     }
 
     func testHoverSizeFitsActualContentAndCapsLongDefinitions() {
@@ -606,6 +707,14 @@ final class InteractionPolishTests:XCTestCase {
             let request = SentenceTranslationRequest(text:"Every word connects to another idea.")
             sentenceState.start(request); sentenceState.finish("每个单词都与另一个概念相联系。",request:request)
         }
+        let contextCanonical = SemanticTokenizer.canonicalize("charge", documentSHA256: "ui-fixture", pageIndex: 0)
+        let contextToken = try XCTUnwrap(contextCanonical.tokens.first).withGeometryQuality(.word)
+        let contextFixture = ContextualSelection(documentSHA256: contextCanonical.documentSHA256,
+                                                 pageIndex: contextCanonical.pageIndex,
+                                                 sourceSpans: [contextToken.span],
+                                                 tokens: [contextToken],
+                                                 displaySurface: "charge",
+                                                 generation: 1)
         let cases: [(String, CGSize, AnyView)] = [
             ("hover-short",CGSize(width:480,height:600),AnyView(HoverTipView(term:"function",detail:"函数；功能",anchor:CGPoint(x:240,y:450),bounds:CGSize(width:480,height:600)).background(DS.background1))),
             ("hover-long",CGSize(width:480,height:600),AnyView(HoverTipView(term:"function",detail:String(repeating:"函数；功能；作用；职责。\n",count:40),anchor:CGPoint(x:240,y:500),bounds:CGSize(width:480,height:600)).background(DS.background1))),
@@ -619,6 +728,8 @@ final class InteractionPolishTests:XCTestCase {
             ("vocab-window-narrow", CGSize(width: 300, height: 700), AnyView(VocabListView(store: store).environment(\.readerPanelClose, {}))),
             ("library-narrow", CGSize(width: 320, height: 900), AnyView(LibraryView(store: docs))),
             ("word-window", CGSize(width: 834, height: 900), AnyView(FloatingCardWindow(content:.word("function"),bounds:CGSize(width:834,height:900),onClose:{},onSelectWord:{_ in}))),
+            ("context-card-light", CGSize(width: 480, height: 600), AnyView(FloatingCardWindow(content:.contextual(contextFixture),bounds:CGSize(width:480,height:600),onClose:{},onSelectWord:{_ in}).background(DS.background1))),
+            ("context-card-narrow-dark", CGSize(width: 320, height: 600), AnyView(FloatingCardWindow(content:.contextual(contextFixture),bounds:CGSize(width:320,height:600),onClose:{},onSelectWord:{_ in}).background(DS.background1).preferredColorScheme(.dark))),
             ("word-capsule", CGSize(width: 360, height: 96), AnyView(CompactCardView(content:.word("function"),onClose:{}).background(DS.background3))),
             ("sentence-capsule",CGSize(width:480,height:96),AnyView(CompactCardView(content:.sentence("Every word connects to another idea.",6),onClose:{},sentenceTranslation:"每个单词都与另一个概念相联系。").background(DS.background3))),
             ("sentence-card",CGSize(width:480,height:600),AnyView(WordCardPanel(content:.sentence("Every word connects to another idea.",6),onClose:{},onSelectWord:{_ in}).environmentObject(sentenceState).environment(\.readerPanelClose,{}))),
@@ -977,4 +1088,13 @@ private final class BeganWordPress: UILongPressGestureRecognizer {
     var testState: UIGestureRecognizer.State = .began
     override var state: UIGestureRecognizer.State { get { testState } set { testState = newValue } }
     override func location(in view:UIView?) -> CGPoint { hit }
+}
+
+@MainActor
+private final class MutableContextPress: UILongPressGestureRecognizer {
+    var point: CGPoint
+    var testState: UIGestureRecognizer.State = .began
+    init(point: CGPoint) { self.point = point; super.init(target: nil, action: nil) }
+    override var state: UIGestureRecognizer.State { get { testState } set { testState = newValue } }
+    override func location(in view: UIView?) -> CGPoint { point }
 }

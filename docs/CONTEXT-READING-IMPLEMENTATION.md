@@ -1,13 +1,13 @@
 # ★标记★ iPadOS 26 语境 Token 与数学识别实施现状
 
 > 本文是当前实现与阶段状态的权威说明。按代码核对日期：2026-11-05。
-> 核查基线：`codex/v062-interaction-rebuild`，`e8d650fe31f4bfe93e9911c54369e60dcd24d84d`（v0.70.0 / build 118）。
+> 核查基线：`codex/v062-interaction-rebuild`，`3ce90bd2f3fbf8ff79adf1de5560df4446b21a16`（v0.70.0 / build 118，G0）。
 > 设计来源：`pdf-vocab：iPadOS 26 语境 Token 与数学表达式智能阅读系统`。设计文档描述目标，不证明功能已实现。
 
 ## 当前基座与边界
 
 - iPad 专用应用；Bundle ID 为 `com.lei11118.pdfvocab`。G0 不修改 Bundle ID、营销版本或 build 号。
-- 本轮只做 G0 系统升级和验收基建，不接入语境翻译、Token 选择、数学识别或新模型。
+- G0 系统升级已通过 CI；G1 Token 选择仍在实现和审查中。当前代码差异不代表阶段验收完成。
 - 新能力后续必须保持本地运行；总开关默认关闭，关闭后回到当前阅读路径。
 - 保留现有单击链接跳转；不新增单击选词。当前双击和长按选词继续可用。
 - 保留尺子的现有位置与手势；保留用户指定的不可拖动双层弧形工具栏，以及编辑、颜色和笔宽管理。
@@ -29,8 +29,8 @@
 
 | 阶段 | 状态 | 证据 / 下一步 |
 |---|---|---|
-| G0 系统升级 | 进行中，尚未验收 | `project.yml` 的 deployment target 改为 iOS 26.0；`test-ink.yml` 仅选择 runtime 为 iOS 26.0 或更高的 iPad Simulator。需等待手动触发的回归测试与 IPA 构建结果。 |
-| G1 Token 选择 | 未开始 | 先完成 G0；保持旧路径和独立关闭开关。 |
+| G0 系统升级 | 通过 CI | [test-ink run 41988049409](https://github.com/lei11118/pdf-vocab/actions/runs/41988049409)：97 项单元/集成测试与 5 项 UI 测试零失败，`TEST SUCCEEDED`；[build-ipa run 41988049058](https://github.com/lei11118/pdf-vocab/actions/runs/41988049058)：archive/unsigned IPA 成功。CI 通过不替代真实 iPad/Pencil 验收。 |
+| G1 Token 选择 | 进行中 | 默认关闭的开关、原生 PDF Token 映射、候选卡片和回归测试已完成主脑代码审查；CI 测试与截图验收待运行。`sentenceID`/`blockID` 仍为 nil，尚未完成句子/文本块分段，也没有可验证的语境译义。原文范围与显示 surface 分开保存；不确定几何不强行拆 token。 |
 | G2 OCR 改进 | 未开始 | 先测代表性 PDF 的识别和定位质量。 |
 | G3 系统翻译 | 未开始 | 保留现有独立整句翻译。 |
 | G4 词/短语对齐 | 未开始 | 需要人工标注评测，不推断子词含义。 |

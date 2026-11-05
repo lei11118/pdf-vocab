@@ -4,6 +4,7 @@ import SwiftUI
 enum ReaderCardContent: Equatable {
     case word(String)
     case sentence(String, Int)
+    case contextual(ContextualSelection)
 }
 
 /// 词卡与生词本之间的查询、收录及义项选择接口。
@@ -51,9 +52,76 @@ struct WordCardPanel: View {
                         }
                     }
                 }
+            case .contextual(let selection):
+                ContextualCardView(selection: selection, onClose: onClose, vocab: vocab)
             }
         }
         .onChange(of:content) { _, _ in selectedSentenceWord = nil }
+    }
+}
+
+/// A local token surface with an honest context status and an optional path
+/// to the existing dictionary card. No source sentence or translation is shown.
+struct ContextualCardView: View {
+    @Environment(\.readerPanelClose) private var panelClose
+    let selection: ContextualSelection
+    let onClose: () -> Void
+    var vocab: CardVocabBridge? = nil
+    @State private var showingDictionary = false
+
+    var body: some View {
+        Group {
+            if showingDictionary {
+                VStack(spacing: 0) {
+                    HStack {
+                        Button {
+                            showingDictionary = false
+                        } label: {
+                            Label("返回语境", systemImage: "chevron.left")
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        if panelClose == nil { closeButton(onClose) }
+                    }
+                    .padding(.horizontal, DS.Space.l)
+                    .padding(.top, DS.Space.l)
+                    .padding(.trailing, panelClose == nil ? 0 : 44)
+                    WordCardView(term: selection.displaySurface, onClose: onClose, vocab: vocab)
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DS.Space.l) {
+                        HStack(alignment: .top) {
+                            Text(selection.displaySurface)
+                                .font(DS.Fonts.wordTitle)
+                                .foregroundStyle(DS.foreground1)
+                                .textSelection(.enabled)
+                                .accessibilityAddTraits(.isHeader)
+                            Spacer(minLength: 0)
+                            if panelClose == nil { closeButton(onClose) }
+                        }
+                        .padding(.trailing, panelClose == nil ? 0 : 44)
+
+                        Label("尚无可验证的语境译义", systemImage: "text.book.closed")
+                            .font(.callout)
+                            .foregroundStyle(DS.foreground2)
+                            .padding(DS.Space.m)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous))
+
+                        Button("查看词典释义") {
+                            showingDictionary = true
+                        }
+                        .buttonStyle(DSPillButtonStyle())
+                        .accessibilityHint("打开现有词典释义、发音和生词本信息")
+                    }
+                    .padding(DS.Space.l)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityIdentifier("contextual-card")
+            }
+        }
+        .onChange(of: selection) { _, _ in showingDictionary = false }
     }
 }
 
@@ -452,12 +520,17 @@ struct CompactCardView: View {
             return term
         case .sentence(let text, _):
             return text
+        case .contextual(let selection):
+            return selection.displaySurface
         }
     }
 
     private var lookupTerm: String? {
         if case .word(let term) = content {
             return term
+        }
+        if case .contextual(let selection) = content {
+            return selection.displaySurface
         }
         return nil
     }

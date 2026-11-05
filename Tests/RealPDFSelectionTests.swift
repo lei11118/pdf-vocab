@@ -48,6 +48,34 @@ final class GlyphSelectionTests: XCTestCase {
         }
     }
 
+    func testOpenStaxSeedRoutesToExactCanonicalTokenWithoutNeighborExpansion() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let pageIndex = 0
+        let page = try XCTUnwrap(document.page(at: pageIndex))
+        let point = CGPoint(x: 183.4946, y: 377.4785)
+        let seed = try XCTUnwrap(SelectionGeometry.initialWord(on: page, at: point))
+        let displaySurface = SelectionGeometry.lookupText(for: seed)
+        let source = try XCTUnwrap(page.string)
+        let sourceRanges = SelectionGeometry.sourceRanges(of: seed, on: page)
+        XCTAssertFalse(sourceRanges.isEmpty)
+        XCTAssertTrue(sourceRanges.allSatisfy { UTF16Span(range: $0, in: source) != nil })
+
+        let routed = try XCTUnwrap(ContextSelectionRouter.route(selection: seed,
+                                                                page: page,
+                                                                documentSHA256: "openstax-selection-fixture",
+                                                                pageIndex: pageIndex,
+                                                                displaySurface: displaySurface,
+                                                                geometryQuality: .word,
+                                                                generation: 3))
+
+        XCTAssertEqual(displaySurface, "Functions")
+        XCTAssertEqual(routed.displaySurface, "Functions")
+        XCTAssertEqual(routed.sourceSpans, sourceRanges.compactMap { UTF16Span(range: $0, in: source) })
+        XCTAssertEqual(routed.tokens.map(\.sourceSurface), ["Functions"], "A trusted word seed must not absorb either neighboring word")
+        XCTAssertTrue(routed.tokens.allSatisfy { $0.span.substring(in: source) == $0.sourceSurface })
+    }
+
     func testEveryVisibleCharacterHasAnAlignedSelection() throws {
         struct Hit: Decodable { let page: Int; let text: String; let point: [Double] }
         let bundle = Bundle(for:Self.self)
