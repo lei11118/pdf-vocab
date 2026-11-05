@@ -1,5 +1,7 @@
 # 跃文(pdf-vocab)开发方案 · M0 时点(已确认)
 
+> **当前实现状态：**以 [iPadOS 26 语境 Token 与数学识别实施现状](CONTEXT-READING-IMPLEMENTATION.md) 为准；本文其余内容保留为历史方案。
+
 > 更名记录:App 显示名「读词」→「跃文」(2026-10-12,v0.5.0 起;仓库 slug 保持 pdf-vocab)。
 
 ## 0. 已确认的决定

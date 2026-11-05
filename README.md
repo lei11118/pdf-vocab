@@ -1,5 +1,7 @@
 # 跃文 · pdf-vocab
 
+> **当前实现状态：**以 [iPadOS 26 语境 Token 与数学识别实施现状](docs/CONTEXT-READING-IMPLEMENTATION.md) 为准；下方历史说明不代表当前代码状态。
+
 在 iPad 上读英文 PDF 时,长按/拖选(Pencil 也行)选中单词 → 加亮 → 侧边弹出词典卡牌(音标、发音、释义、例句);
 单词可归入分组/标签,最终导出 Anki 卡牌组。Apple Pencil Pro 可用系统原生标记工具直接在 PDF 上批注。
 

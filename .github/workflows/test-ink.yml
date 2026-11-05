@@ -45,7 +45,34 @@ jobs:
           xcodegen generate
       - name: Run iPad regression tests
         run: |
-          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if "iPad" in d["name"]))')
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+
+          devices = json.load(sys.stdin).get("devices", {})
+          candidates = []
+          prefix = "com.apple.CoreSimulator.SimRuntime.iOS-"
+          for runtime, runtime_devices in devices.items():
+              if not runtime.startswith(prefix):
+                  continue
+              try:
+                  version = tuple(int(part) for part in runtime[len(prefix):].split("-"))
+              except ValueError:
+                  continue
+              if version < (26, 0):
+                  continue
+              for device in runtime_devices:
+                  if "iPad" in device.get("name", ""):
+                      candidates.append((version, runtime, device))
+
+          if not candidates:
+              print("ERROR: no available iPad simulator with iOS 26.0 or later was found.", file=sys.stderr)
+              sys.exit(1)
+
+          candidates.sort(key=lambda item: item[0], reverse=True)
+          version, runtime, device = candidates[0]
+          print("Selected {} simulator: {} ({})".format(runtime, device["name"], device["udid"]), file=sys.stderr)
+          print(device["udid"])
+          ')
           echo "SIMULATOR_UDID=$DEVICE" >> "$GITHUB_ENV"
           TEST_ARGS=()
           if [ "${{ inputs.gesture_only }}" = "true" ]; then

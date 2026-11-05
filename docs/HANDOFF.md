@@ -1,5 +1,7 @@
 # 跃文(pdf-vocab)· 项目交接文档
 
+> **当前实现状态：**以 [iPadOS 26 语境 Token 与数学识别实施现状](CONTEXT-READING-IMPLEMENTATION.md) 为准；下方历史交接记录不代表当前代码状态。
+
 > 交接时间:2026-10-20 · 当前版本:**v0.34.0(build 72)** · 仓库:https://github.com/lei11118/pdf-vocab(公开)
 > 本文写给接手的下一个 agent(或人)。读完这一份,应能在不追问原作者的前提下继续开发与发版。
 

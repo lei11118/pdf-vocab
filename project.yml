@@ -6,7 +6,7 @@ options:
   createIntermediateGroups: true
   developmentLanguage: zh-Hans
   deploymentTarget:
-    iOS: "17.5"
+    iOS: "26.0"
 
 settings:
   base:
