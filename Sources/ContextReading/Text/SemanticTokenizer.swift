@@ -11,7 +11,8 @@ enum SemanticTokenizer {
 
     static func canonicalize(_ sourceText: String,
                              documentSHA256: String,
-                             pageIndex: Int) -> CanonicalContent {
+                             pageIndex: Int,
+                             blockID: String? = nil) -> CanonicalContent {
         let ns = sourceText as NSString
         guard ns.length > 0 else {
             return CanonicalContent(documentSHA256: documentSHA256,
@@ -34,7 +35,8 @@ enum SemanticTokenizer {
                                pageIndex: pageIndex,
                                span: span,
                                sourceSurface: surface,
-                               kind: kind(of: surface))
+                               kind: kind(of: surface),
+                               blockID: blockID)
         }
 
         return CanonicalContent(documentSHA256: documentSHA256,

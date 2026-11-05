@@ -125,7 +125,10 @@ struct SourceToken: Identifiable, Equatable, Hashable, Codable, Sendable {
         self.sentenceID = sentenceID
         self.blockID = blockID
         self.geometryQuality = geometryQuality
-        self.id = Self.stableID(documentSHA256: documentSHA256, pageIndex: pageIndex, span: span)
+        self.id = Self.stableID(documentSHA256: documentSHA256,
+                                pageIndex: pageIndex,
+                                blockID: blockID,
+                                span: span)
     }
 
     func withGeometryQuality(_ quality: SourceGeometryQuality) -> SourceToken {
@@ -139,8 +142,11 @@ struct SourceToken: Identifiable, Equatable, Hashable, Codable, Sendable {
                     geometryQuality: quality)
     }
 
-    private static func stableID(documentSHA256: String, pageIndex: Int, span: UTF16Span) -> String {
-        let identity = "source-token-v1|\(documentSHA256)|\(pageIndex)|\(span.location)|\(span.length)"
+    private static func stableID(documentSHA256: String,
+                                 pageIndex: Int,
+                                 blockID: String?,
+                                 span: UTF16Span) -> String {
+        let identity = "source-token-v2|\(documentSHA256)|\(pageIndex)|\(blockID ?? "")|\(span.location)|\(span.length)"
         let digest = SHA256.hash(data: Data(identity.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

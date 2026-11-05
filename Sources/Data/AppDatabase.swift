@@ -212,6 +212,16 @@ final class AppDatabase: @unchecked Sendable {
                 t.column("folderId", .text).notNull().references("workspace_folder", onDelete: .cascade)
             }
         }
+        migrator.registerMigration("v14.contextOCRPages") { db in
+            try db.create(table: "context_ocr_page") { t in
+                t.column("docSha", .text).notNull()
+                    .references("document", column: "sha256", onDelete: .cascade)
+                t.column("page", .integer).notNull()
+                t.column("revision", .integer).notNull()
+                t.column("payload", .blob).notNull()
+                t.primaryKey(["docSha", "page"])
+            }
+        }
         return migrator
     }
 }

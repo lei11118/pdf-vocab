@@ -2,6 +2,22 @@ import Foundation
 import PDFKit
 import Vision
 
+typealias ContextOCRLineObserver = (VNRecognizedTextObservation, [VNRecognizedText], CGRect) -> Void
+
+enum ContextOCRRecognitionError: LocalizedError {
+    case invalidMediaBox
+    case cancelled
+    case regionFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidMediaBox: return "PDF page has invalid media bounds"
+        case .cancelled: return "Context OCR was cancelled before the page completed"
+        case .regionFailed: return "One or more tiled Vision OCR requests failed"
+        }
+    }
+}
+
 /// OCR 词框(M6,v0.11.0):归一化坐标(**top-left 原点**,相对整页),按行分组。
 struct OCRWord: Sendable {
     let text: String
@@ -97,11 +113,92 @@ enum OCRService {
     }
 
     static func recognize(page: PDFPage) -> [OCRWord] {
+        recognizeTiles(page: page, lineObserver: nil, onRegionCompletion: nil)
+    }
+
+    /// Runs the same tiled Vision pass as legacy OCR while retaining complete
+    /// candidate lines. A failed tile throws so callers cannot persist an
+    /// incomplete page as a successful blank result.
+    static func recognizeContextPage(page: PDFPage,
+                                     documentSHA256: String,
+                                     pageIndex: Int,
+                                     revision: Int) throws -> (legacyWords: [OCRWord], contextPage: ContextOCRPage) {
+        let bounds = page.bounds(for: .mediaBox)
+        guard let mediaBox = SourceRect(rect: bounds) else {
+            throw ContextOCRRecognitionError.invalidMediaBox
+        }
+        var lines: [OCRLine] = []
+        var observationOrdinal = 0
+        var successfulRegions = 0
+        let expectedRegions = regions(for: bounds).count
+        let legacyWords = recognizeTiles(page: page, lineObserver: { observation, candidates, region in
+            defer { observationOrdinal += 1 }
+            guard let primary = candidates.first,
+                  let sourceRegion = SourceRect(rect: region) else { return }
+
+            let pageRect = ContextOCRGeometry.pageRect(fromVisionNormalized: observation.boundingBox, in: region)
+            let blockID = ContextOCRGeometry.stableBlockID(documentSHA256: documentSHA256,
+                                                           pageIndex: pageIndex,
+                                                           sourceText: primary.string,
+                                                           pageRect: pageRect,
+                                                           regionRect: sourceRegion,
+                                                           observationOrdinal: observationOrdinal)
+            let canonical = SemanticTokenizer.canonicalize(primary.string,
+                                                           documentSHA256: documentSHA256,
+                                                           pageIndex: pageIndex,
+                                                           blockID: blockID)
+            var tokens: [SourceToken] = []
+            var geometry: [SourceTokenGeometry] = []
+            for token in canonical.tokens {
+                var tokenRect: SourceRect?
+                if token.kind == .word || token.kind == .number,
+                   let nsRange = token.span.composedCharacterRange(in: primary.string),
+                   let tokenRange = Range(nsRange, in: primary.string),
+                   let box = try? primary.boundingBox(for: tokenRange) {
+                    tokenRect = ContextOCRGeometry.pageRect(fromVisionNormalized: box.boundingBox, in: region)
+                }
+                let quality: SourceGeometryQuality = tokenRect == nil ? .unknown : .word
+                let measured = token.withGeometryQuality(quality)
+                tokens.append(measured)
+                geometry.append(SourceTokenGeometry(tokenID: measured.id,
+                                                    span: measured.span,
+                                                    rect: tokenRect,
+                                                    quality: quality))
+            }
+            lines.append(OCRLine(blockID: blockID,
+                                 candidates: candidates.map { OCRCandidate(text: $0.string, confidence: Double($0.confidence)) },
+                                 regionRect: sourceRegion,
+                                 pageRect: pageRect,
+                                 tokens: tokens,
+                                 tokenGeometry: geometry))
+        }, onRegionCompletion: { succeeded in
+            if succeeded { successfulRegions += 1 }
+        })
+
+        if Task.isCancelled { throw ContextOCRRecognitionError.cancelled }
+        guard expectedRegions > 0, successfulRegions == expectedRegions else {
+            throw ContextOCRRecognitionError.regionFailed
+        }
+        let contextPage = ContextOCRPage(documentSHA256: documentSHA256,
+                                         pageIndex: pageIndex,
+                                         revision: revision,
+                                         mediaBox: mediaBox,
+                                         lines: ContextOCRGeometry.deduplicatedLines(lines))
+        return (legacyWords, contextPage)
+    }
+
+    private static func recognizeTiles(page: PDFPage,
+                                       lineObserver: ContextOCRLineObserver?,
+                                       onRegionCompletion: ((Bool) -> Void)?) -> [OCRWord] {
         let bounds = page.bounds(for: .mediaBox)
         var words: [OCRWord] = []
         for region in regions(for: bounds) {
             if Task.isCancelled { return [] }
-            let local = autoreleasepool { recognizeRegion(page: page, region: region) }
+            let local = autoreleasepool {
+                recognizeRegion(page: page, region: region,
+                                lineObserver: lineObserver,
+                                onCompletion: onRegionCompletion)
+            }
             for word in local {
                 let rect = pageRect(from: word, pageBounds: region)
                 let mapped = OCRWord(text: word.text,
@@ -128,13 +225,19 @@ enum OCRService {
     return ordered.sorted { $0.line == $1.line ? $0.x < $1.x : $0.line < $1.line }
     }
 
-    private static func recognizeRegion(page: PDFPage, region: CGRect) -> [OCRWord] {
+    private static func recognizeRegion(page: PDFPage,
+                                        region: CGRect,
+                                        lineObserver: ContextOCRLineObserver? = nil,
+                                        onCompletion: ((Bool) -> Void)? = nil) -> [OCRWord] {
         let pageBounds = region
-        guard pageBounds.width > 1, pageBounds.height > 1 else { return [] }
+        guard pageBounds.width > 1, pageBounds.height > 1 else { onCompletion?(false); return [] }
         let factor = min(6, min(5120/max(pageBounds.width,pageBounds.height),sqrt(10_000_000/(pageBounds.width*pageBounds.height))))
         let target = CGSize(width:floor(pageBounds.width*factor),height:floor(pageBounds.height*factor))
-        guard target.width>1,target.height>1 else { return [] }
-        guard let cgImage = recognitionImage(page: page, size: target, region: region) else { return [] }
+        guard target.width>1,target.height>1 else { onCompletion?(false); return [] }
+        guard let cgImage = recognitionImage(page: page, size: target, region: region) else {
+            onCompletion?(false)
+            return []
+        }
 
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
@@ -146,13 +249,16 @@ enum OCRService {
         do {
             try handler.perform([request])
         } catch {
+            onCompletion?(false)
             return []
         }
 
         var out: [OCRWord] = []
         let regex = try? NSRegularExpression(pattern: "[A-Za-z][A-Za-z'’\\-]*")
         for (lineIdx, observation) in (request.results ?? []).enumerated() {
-            guard let candidate = observation.topCandidates(1).first else { continue }
+            let recognizedCandidates = observation.topCandidates(lineObserver == nil ? 1 : 5)
+            guard let candidate = recognizedCandidates.first else { continue }
+            lineObserver?(observation, recognizedCandidates, region)
             let text = candidate.string
             let ns = text as NSString
             let matches = regex?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? []
@@ -170,6 +276,7 @@ enum OCRService {
                 ))
             }
         }
+        onCompletion?(true)
         return out
     }
 
