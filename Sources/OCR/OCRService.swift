@@ -112,12 +112,33 @@ enum OCRService {
         } }
     }
 
+    /// Full-width overlapping bands keep a text line in one Vision crop while
+    /// still bounding each render to a partial page.
+    static func contextRegions(for bounds: CGRect) -> [CGRect] {
+        guard bounds.minX.isFinite, bounds.minY.isFinite,
+              bounds.width.isFinite, bounds.height.isFinite,
+              bounds.width > 1, bounds.height > 1 else { return [] }
+        let overlapPadding = max(16, min(96, bounds.height * 0.12))
+        let midpoint = bounds.midY
+        let lower = CGRect(x: bounds.minX,
+                           y: bounds.minY,
+                           width: bounds.width,
+                           height: bounds.height * 0.5 + overlapPadding)
+            .intersection(bounds)
+        let upper = CGRect(x: bounds.minX,
+                           y: midpoint - overlapPadding,
+                           width: bounds.width,
+                           height: bounds.height * 0.5 + overlapPadding)
+            .intersection(bounds)
+        return [lower, upper].filter { !$0.isNull && !$0.isInfinite && $0.width > 1 && $0.height > 1 }
+    }
+
     static func recognize(page: PDFPage) -> [OCRWord] {
         recognizeTiles(page: page, lineObserver: nil, onRegionCompletion: nil)
     }
 
-    /// Runs the same tiled Vision pass as legacy OCR while retaining complete
-    /// candidate lines. A failed tile throws so callers cannot persist an
+    /// Runs a full-width banded Vision pass while retaining complete candidate
+    /// lines. A failed region throws so callers cannot persist an
     /// incomplete page as a successful blank result.
     static func recognizeContextPage(page: PDFPage,
                                      documentSHA256: String,
@@ -130,8 +151,9 @@ enum OCRService {
         var lines: [OCRLine] = []
         var observationOrdinal = 0
         var successfulRegions = 0
-        let expectedRegions = regions(for: bounds).count
-        let legacyWords = recognizeTiles(page: page, lineObserver: { observation, candidates, region in
+        let scanRegions = contextRegions(for: bounds)
+        let expectedRegions = scanRegions.count
+        let legacyWords = recognizeTiles(page: page, regions: scanRegions, lineObserver: { observation, candidates, region in
             defer { observationOrdinal += 1 }
             guard let primary = candidates.first,
                   let sourceRegion = SourceRect(rect: region) else { return }
@@ -188,11 +210,12 @@ enum OCRService {
     }
 
     private static func recognizeTiles(page: PDFPage,
+                                       regions suppliedRegions: [CGRect]? = nil,
                                        lineObserver: ContextOCRLineObserver?,
                                        onRegionCompletion: ((Bool) -> Void)?) -> [OCRWord] {
         let bounds = page.bounds(for: .mediaBox)
         var words: [OCRWord] = []
-        for region in regions(for: bounds) {
+        for region in suppliedRegions ?? regions(for: bounds) {
             if Task.isCancelled { return [] }
             let local = autoreleasepool {
                 recognizeRegion(page: page, region: region,

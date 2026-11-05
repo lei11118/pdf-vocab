@@ -78,6 +78,23 @@ final class ContextOCRTests: XCTestCase {
         // stays in canonical media coordinates.
     }
 
+    func testContextOCRBandsCoverFullWidthWithOverlapAndRespectPageBounds() {
+        let bounds = CGRect(x: 31, y: -27, width: 800, height: 600)
+        let bands = OCRService.contextRegions(for: bounds)
+
+        XCTAssertEqual(bands.count, 2)
+        for band in bands {
+            XCTAssertEqual(band.minX, bounds.minX, accuracy: 0.001)
+            XCTAssertEqual(band.width, bounds.width, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(band.minY, bounds.minY)
+            XCTAssertLessThanOrEqual(band.maxY, bounds.maxY)
+        }
+        XCTAssertEqual(bands[0].minY, bounds.minY, accuracy: 0.001)
+        XCTAssertEqual(bands[1].maxY, bounds.maxY, accuracy: 0.001)
+        XCTAssertGreaterThan(bands[0].maxY, bands[1].minY,
+                             "Adjacent full-width bands must overlap to protect lines near the split")
+    }
+
     func testTileDedupRemovesOnlySameTextWithStrongSpatialOverlap() throws {
         let region = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 800, height: 300))
         let overlapA = try makeLine(blockID: "overlap-a", text: "same line", confidence: 0.7,
@@ -210,6 +227,9 @@ final class ContextOCRTests: XCTestCase {
             raster.draw(in: CGRect(x: 0, y: 0, width: 600, height: 180))
         }
         let page = try XCTUnwrap(PDFDocument(data: pdfData)?.page(at: 0))
+        // Keep the original 2x2 OCR path as the measured baseline. The context
+        // path uses different full-width bands and must be evaluated separately.
+        let baselineLegacyWords = OCRService.recognize(page: page)
         let result = try OCRService.recognizeContextPage(page: page,
                                                          documentSHA256: "synthetic-raster-fixture",
                                                          pageIndex: 0,
@@ -225,7 +245,7 @@ final class ContextOCRTests: XCTestCase {
         XCTAssertFalse(result.contextPage.lines.flatMap(\.tokens).contains { $0.geometryQuality == .verifiedCharacter },
                        "Vision word boxes are never represented as verified character geometry")
 
-        let legacyRaw = result.legacyWords.map(\.text).joined(separator: " ")
+        let legacyRaw = baselineLegacyWords.map(\.text).joined(separator: " ")
         let fullRaw = result.contextPage.lines.map(\.sourceText).joined(separator: " ")
         let expectedLexical = englishWords(in: source)
         let legacyLexical = englishWords(in: legacyRaw)
