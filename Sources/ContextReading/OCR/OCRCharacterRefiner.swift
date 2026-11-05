@@ -200,7 +200,7 @@ enum OCRCharacterRefiner {
                   sourceRange.length == match.sourceSpan.length,
                   let fastRange = match.fastSpan.composedCharacterRange(in: best.observation.text),
                   fastRange.length == match.fastSpan.length else { continue }
-            let sourceCharacter = sourceText[sourceRange]
+            let sourceCharacter = (sourceText as NSString).substring(with: sourceRange)
             guard !sourceCharacter.unicodeScalars.allSatisfy({
                 CharacterSet.whitespacesAndNewlines.contains($0)
             }) else { continue }
