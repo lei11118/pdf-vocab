@@ -42,29 +42,24 @@ struct ContextOCRSelectionSource: Sendable {
                 seeds.append(TokenSeed(token: token, rect: rect))
             }
 
-            var groups: [[TokenSeed]] = []
-            for seed in seeds {
-                if let previousGroup = groups.last,
-                   let previous = previousGroup.last,
-                   Self.sourceGapCanMerge(previous.token.span, seed.token.span,
-                                          lineTokens: line.tokens, sourceText: line.sourceText),
-                   Self.intersectionOverUnion(previous.rect.cgRect, seed.rect.cgRect) >= 0.9 {
-                    groups[groups.count - 1].append(seed)
-                } else {
-                    groups.append([seed])
-                }
-            }
-
-            for group in groups {
-                guard let first = group.first, let last = group.last,
-                      let end = last.token.span.endExclusive,
-                      end > first.token.span.location else { continue }
-                let span = UTF16Span(location: first.token.span.location,
-                                     length: end - first.token.span.location)
+            for seedRange in Self.coalescedSeedRanges(seeds) {
+                let group = seedRange.map { seeds[$0] }
+                guard let first = group.first,
+                      let start = group.map({ $0.token.span.location }).min(),
+                      let end = group.compactMap({ $0.token.span.endExclusive }).max(),
+                      end > start else { continue }
+                let span = UTF16Span(location: start, length: end - start)
                 guard span.composedCharacterRange(in: line.sourceText) != nil,
                       let surface = span.substring(in: line.sourceText), !surface.isEmpty else { continue }
+                let groupTokens = validTokens.filter { token in
+                    guard let tokenEnd = token.span.endExclusive else { return false }
+                    return token.span.location >= start && tokenEnd <= end
+                }
+                guard !groupTokens.isEmpty else { continue }
                 // A shared Vision word box stays a single hit target. We never
                 // invent per-character geometry from its component tokens.
+                // Include every valid source token inside the closure span,
+                // even when an intermediate token has no reliable box.
                 let unionBox = group.dropFirst().reduce(first.rect.cgRect) { current, seed in
                     current.union(seed.rect.cgRect)
                 }
@@ -86,7 +81,7 @@ struct ContextOCRSelectionSource: Sendable {
                                                       lineIndex: lineIndex,
                                                       blockID: line.blockID,
                                                       sourceSpan: span,
-                                                      tokens: group.map(\.token)))
+                                                      tokens: groupTokens))
             }
         }
         let sortedEntries = built.sorted {
@@ -181,23 +176,51 @@ struct ContextOCRSelectionSource: Sendable {
         return Double(intersectionArea / unionArea)
     }
 
-    private static func sourceGapCanMerge(_ previous: UTF16Span,
-                                          _ next: UTF16Span,
-                                          lineTokens: [SourceToken],
-                                          sourceText: String) -> Bool {
-        guard let previousEnd = previous.endExclusive,
-              previousEnd <= next.location else { return false }
-        let gap = UTF16Span(location: previousEnd, length: next.location - previousEnd)
-        guard let gapText = gap.substring(in: sourceText),
-              gapText.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }) else {
-            return false
+    private static func coalescedSeedRanges(_ seeds: [TokenSeed]) -> [ClosedRange<Int>] {
+        guard !seeds.isEmpty else { return [] }
+
+        // A shared Vision word box can cover seeds separated by unboxed or
+        // separately boxed source tokens. Record the furthest seed paired
+        // with each start, then take interval closure so groups cannot cross.
+        var maxReach = Array(seeds.indices)
+        if seeds.count > 1 {
+            for start in 0..<(seeds.count - 1) {
+                for candidate in (start + 1)..<seeds.count {
+                    if Self.intersectionOverUnion(seeds[start].rect.cgRect,
+                                                  seeds[candidate].rect.cgRect) >= 0.9 {
+                        maxReach[start] = candidate
+                    }
+                }
+            }
         }
-        guard gap.length > 0 else { return true }
-        let gapEnd = next.location
-        return !lineTokens.contains { token in
-            guard let end = token.span.endExclusive else { return true }
-            return token.span.location < gapEnd && end > previousEnd
+
+        var mergedIntervals: [ClosedRange<Int>] = []
+        for start in seeds.indices {
+            let end = maxReach[start]
+            guard end > start else { continue }
+            if let previous = mergedIntervals.last, start <= previous.upperBound {
+                mergedIntervals[mergedIntervals.count - 1] =
+                    previous.lowerBound...Swift.max(previous.upperBound, end)
+            } else {
+                mergedIntervals.append(start...end)
+            }
         }
+
+        var groups: [ClosedRange<Int>] = []
+        var nextSeed = 0
+        for interval in mergedIntervals {
+            while nextSeed < interval.lowerBound {
+                groups.append(nextSeed...nextSeed)
+                nextSeed += 1
+            }
+            groups.append(interval)
+            nextSeed = interval.upperBound + 1
+        }
+        while nextSeed < seeds.count {
+            groups.append(nextSeed...nextSeed)
+            nextSeed += 1
+        }
+        return groups
     }
 
     private static func isValidSourceToken(_ token: SourceToken,

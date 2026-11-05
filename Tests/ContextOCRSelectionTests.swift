@@ -206,6 +206,71 @@ final class ContextOCRSelectionTests: XCTestCase {
                        "charge plus")
     }
 
+    func testSharedWordBoxCoalescesAcrossUnknownUnboxedTokenAndPreservesRawText() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let shared = CGRect(x: 50, y: 180, width: 40, height: 20)
+        let page = try makePage(sha: "shared-box-unknown-gap", pageIndex: 0, mediaBox: media,
+                                blockID: "unknown-gap-row", text: "x_i",
+                                tokens: [
+                                    TokenFixture(text: "x", span: UTF16Span(location: 0, length: 1), kind: .word,
+                                                 rect: shared),
+                                    TokenFixture(text: "_", span: UTF16Span(location: 1, length: 1), kind: .symbol,
+                                                 geometryQuality: .unknown),
+                                    TokenFixture(text: "i", span: UTF16Span(location: 2, length: 1), kind: .word,
+                                                 rect: shared)
+                                ])
+
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        XCTAssertEqual(source.words.map(\.text), ["x_i"])
+        XCTAssertEqual(source.entries.first?.sourceSpan, UTF16Span(location: 0, length: 3))
+        XCTAssertEqual(source.entries.first?.tokens.map(\.sourceSurface), ["x", "_", "i"])
+        XCTAssertEqual(source.entries.first?.tokens.map(\.geometryQuality), [.word, .unknown, .word])
+        XCTAssertEqual(try XCTUnwrap(source.contextualSelection(for: 0...0, generation: 3)).displaySurface,
+                       "x_i")
+    }
+
+    func testSharedWordBoxClosesAcrossIntermediateDistinctSmallerSeed() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let shared = CGRect(x: 50, y: 180, width: 40, height: 20)
+        let smaller = CGRect(x: 67, y: 180, width: 5, height: 20)
+        let page = try makePage(sha: "shared-box-small-seed", pageIndex: 0, mediaBox: media,
+                                blockID: "small-seed-row", text: "x_i",
+                                tokens: [
+                                    TokenFixture(text: "x", span: UTF16Span(location: 0, length: 1), kind: .word,
+                                                 rect: shared),
+                                    TokenFixture(text: "_", span: UTF16Span(location: 1, length: 1), kind: .symbol,
+                                                 rect: smaller),
+                                    TokenFixture(text: "i", span: UTF16Span(location: 2, length: 1), kind: .word,
+                                                 rect: shared)
+                                ])
+
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        XCTAssertEqual(source.words.map(\.text), ["x_i"])
+        XCTAssertEqual(source.entries.first?.tokens.map(\.sourceSurface), ["x", "_", "i"])
+        let groupedWord = try XCTUnwrap(source.words.first)
+        XCTAssertEqual(groupedWord.x, 0.125, accuracy: 0.000_001)
+        XCTAssertEqual(groupedWord.w, 0.1, accuracy: 0.000_001)
+    }
+
+    func testRepeatedTextInDifferentColumnsKeepsSeparateHitTargets() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 800, height: 300))
+        let page = try makePage(sha: "repeated-text-columns", pageIndex: 0, mediaBox: media,
+                                blockID: "two-columns", text: "x x",
+                                tokens: [
+                                    TokenFixture(text: "x", span: UTF16Span(location: 0, length: 1), kind: .word,
+                                                 rect: CGRect(x: 80, y: 180, width: 30, height: 20)),
+                                    TokenFixture(text: "x", span: UTF16Span(location: 2, length: 1), kind: .word,
+                                                 rect: CGRect(x: 620, y: 180, width: 30, height: 20))
+                                ])
+
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        XCTAssertEqual(source.words.map(\.text), ["x", "x"])
+        XCTAssertEqual(source.entries.map(\.sourceSpan), [
+            UTF16Span(location: 0, length: 1),
+            UTF16Span(location: 2, length: 1)
+        ])
+    }
+
     func testLegacyFallbackKeepsPayloadNilWithMasterOffAndOn() throws {
         let fixture = try makeBlankPDFView()
         defer { fixture.close() }
@@ -257,15 +322,17 @@ final class ContextOCRSelectionTests: XCTestCase {
                        sourceSurface: fixture.text,
                        kind: fixture.kind,
                        blockID: blockID,
-                       geometryQuality: .word)
+                       geometryQuality: fixture.geometryQuality)
         }
-        let geometry = zip(tokens, fixtures).map { pair in
-            SourceTokenGeometry(tokenID: pair.0.id,
-                                span: pair.0.span,
-                                rect: SourceRect(rect: pair.1.rect),
-                                quality: .word)
+        let geometry = zip(tokens, fixtures).compactMap { pair -> SourceTokenGeometry? in
+            guard let rect = pair.1.rect,
+                  let sourceRect = SourceRect(rect: rect) else { return nil }
+            return SourceTokenGeometry(tokenID: pair.0.id,
+                                       span: pair.0.span,
+                                       rect: sourceRect,
+                                       quality: pair.1.geometryQuality)
         }
-        let combinedRect = fixtures.map(\.rect).reduce(CGRect.null) { $0.union($1) }
+        let combinedRect = fixtures.compactMap(\.rect).reduce(CGRect.null) { $0.union($1) }
         let lineRect = try XCTUnwrap(SourceRect(rect: combinedRect))
         let line = OCRLine(blockID: blockID,
                            candidates: [OCRCandidate(text: text, confidence: 0.95)],
@@ -311,7 +378,20 @@ private struct TokenFixture {
     let text: String
     let span: UTF16Span
     let kind: SourceTokenKind
-    let rect: CGRect
+    let rect: CGRect?
+    let geometryQuality: SourceGeometryQuality
+
+    init(text: String,
+         span: UTF16Span,
+         kind: SourceTokenKind,
+         rect: CGRect? = nil,
+         geometryQuality: SourceGeometryQuality = .word) {
+        self.text = text
+        self.span = span
+        self.kind = kind
+        self.rect = rect
+        self.geometryQuality = geometryQuality
+    }
 }
 
 @MainActor
