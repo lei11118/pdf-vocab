@@ -32,11 +32,11 @@ struct ContextOCRSelectionSource: Sendable {
             let geometryByToken = Dictionary(grouping: line.tokenGeometry, by: \.tokenID)
             var seeds: [TokenSeed] = []
             for token in validTokens {
-                guard token.geometryQuality == .word,
+                guard token.geometryQuality == .word || token.geometryQuality == .verifiedCharacter,
                       let matches = geometryByToken[token.id], matches.count == 1,
                       let geometry = matches.first,
                       geometry.span == token.span,
-                      geometry.quality == .word,
+                      geometry.quality == token.geometryQuality,
                       let rect = geometry.rect,
                       Self.isInsideMediaBox(rect, mediaBox: page.mediaBox) else { continue }
                 seeds.append(TokenSeed(token: token, rect: rect))
@@ -56,8 +56,8 @@ struct ContextOCRSelectionSource: Sendable {
                     return token.span.location >= start && tokenEnd <= end
                 }
                 guard !groupTokens.isEmpty else { continue }
-                // A shared Vision word box stays a single hit target. We never
-                // invent per-character geometry from its component tokens.
+                // Shared or indistinguishable source geometry stays a single
+                // hit target; this adapter never invents smaller rectangles.
                 // Include every valid source token inside the closure span,
                 // even when an intermediate token has no reliable box.
                 let unionBox = group.dropFirst().reduce(first.rect.cgRect) { current, seed in

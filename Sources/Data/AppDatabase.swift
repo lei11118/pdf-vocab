@@ -222,6 +222,26 @@ final class AppDatabase: @unchecked Sendable {
                 t.primaryKey(["docSha", "page"])
             }
         }
+        migrator.registerMigration("v15.contextOCRCharacterGeometry") { db in
+            try db.create(table: "ocr_character_geometry") { t in
+                t.column("cacheKey", .text).primaryKey()
+                t.column("docSha", .text).notNull()
+                    .references("document", column: "sha256", onDelete: .cascade)
+                t.column("page", .integer).notNull()
+                t.column("blockID", .text).notNull()
+                t.column("sourceRevision", .integer).notNull()
+                t.column("geometryRevision", .integer).notNull()
+                t.column("engineVersion", .text).notNull()
+                t.column("payload", .blob).notNull()
+                t.column("lastAccess", .double).notNull()
+            }
+            try db.create(index: "idx_ocr_character_geometry_doc_page_block",
+                          on: "ocr_character_geometry",
+                          columns: ["docSha", "page", "blockID"])
+            try db.create(index: "idx_ocr_character_geometry_last_access",
+                          on: "ocr_character_geometry",
+                          columns: ["lastAccess"])
+        }
         return migrator
     }
 }

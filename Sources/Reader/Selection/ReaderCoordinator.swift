@@ -19,6 +19,7 @@ final class ReaderCoordinator: NSObject {
     weak var pdfView: PDFView?
     var onPageChanged: (Int) -> Void
     var onSelectionInfo: ((SelectionInfo?) -> Void)
+    var onOCRCharacterRefinementRequested: ((ContextOCRRefinementRequest) -> Void)?
     /// 「翻译」菜单项回调(SwiftUI 层弹系统翻译面板)
     var onTranslate: ((String) -> Void)?
     /// 阅读位置变化(节流 ≈1.2s 触发一次;宿主做尾随防抖写库)
@@ -115,6 +116,19 @@ final class ReaderCoordinator: NSObject {
         let source: ContextOCRSelectionSource
         let generation: Int
     }
+    private struct OCRCharacterRefinementTarget: Hashable {
+        let documentSHA256: String
+        let pageIndex: Int
+        let blockID: String
+        let generation: Int
+
+        init(_ request: ContextOCRRefinementRequest) {
+            documentSHA256 = request.documentSHA256
+            pageIndex = request.pageIndex
+            blockID = request.blockID
+            generation = request.generation
+        }
+    }
     private struct PinnedOCRSelectionSnapshot {
         let page: PDFPage
         let pageIndex: Int
@@ -131,6 +145,10 @@ final class ReaderCoordinator: NSObject {
     private var contextOCRSourceCache: [Int: CachedContextOCRSource] = [:]
     private var contextOCRCacheOrder: [Int] = []
     private var pinnedOCRSelection: PinnedOCRSelectionSnapshot?
+    private var ocrCharacterRefinementInFlight: [OCRCharacterRefinementTarget: UUID] = [:]
+    private var completedOCRCharacterRefinements = Set<OCRCharacterRefinementTarget>()
+    private var completedOCRCharacterRefinementOrder: [OCRCharacterRefinementTarget] = []
+    private var failedOCRCharacterRefinementsUntil: [OCRCharacterRefinementTarget: CFAbsoluteTime] = [:]
     private var ocrDrag: (page: PDFPage, pageIndex: Int, anchorIdx: Int, didMove: Bool)?
     private var ocrSelectionActive = false
     private var ocrContextOverride: String?
@@ -789,6 +807,8 @@ final class ReaderCoordinator: NSObject {
                 return
             }
 
+            requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+
             // ① 长按落在已有选区内 → 选区本体拖动微调(以远端为锚,与原生"按住选区拖动"一致)
             if let (page, lineRects) = orderedSelectionRects(),
                page === hit.page,
@@ -963,6 +983,7 @@ final class ReaderCoordinator: NSObject {
             let viewPoint = gesture.location(in: pdfView)
             if let hit = pageHit(viewPoint), let words = ocrWords(for:hit.page),
                let index = ocrWordIndex(at:hit.point,on:hit.page) {
+                requestOCRCharacterRefinement(page: hit.page, entryIndex: index)
                 let text = words[index].text
                 let term = WordPicker.firstLexicalWord(in:text) ?? text
                 let key = VocabStore.normalizedKey(term)
@@ -1056,14 +1077,20 @@ final class ReaderCoordinator: NSObject {
               let pdfPage = document.page(at: page.pageIndex),
               let actualMediaBox = SourceRect(rect: pdfPage.bounds(for: .mediaBox)),
               mediaBoxesMatch(page.mediaBox, actualMediaBox) else { return false }
+        var pageToInstall = page
         if let cached = contextOCRSourceCache[page.pageIndex] {
-            if cached.generation == generation, cached.source.page == page {
+            if cached.generation == generation {
+                pageToInstall = OCRCharacterGeometryComposer.mergePreservingVerifiedGeometry(
+                    existing: cached.source.page,
+                    incoming: page)
+            }
+            if cached.generation == generation, cached.source.page == pageToInstall {
                 touchContextOCRCache(page.pageIndex)
                 return true
             }
-            if cached.source.page.revision > page.revision { return false }
+            if cached.source.page.revision > pageToInstall.revision { return false }
         }
-        guard let source = ContextOCRSelectionSource(page: page) else { return false }
+        guard let source = ContextOCRSelectionSource(page: pageToInstall) else { return false }
         contextOCRSourceCache[page.pageIndex] = CachedContextOCRSource(source: source, generation: generation)
         touchContextOCRCache(page.pageIndex)
         return true
@@ -1100,6 +1127,99 @@ final class ReaderCoordinator: NSObject {
     private func clearContextOCRSourceCache() {
         contextOCRSourceCache.removeAll()
         contextOCRCacheOrder.removeAll()
+        ocrCharacterRefinementInFlight.removeAll()
+        completedOCRCharacterRefinements.removeAll()
+        completedOCRCharacterRefinementOrder.removeAll()
+        failedOCRCharacterRefinementsUntil.removeAll()
+    }
+
+    private func requestOCRCharacterRefinement(page: PDFPage, at pagePoint: CGPoint) {
+        guard contextReadingEnabled,
+              !markMode,
+              onOCRCharacterRefinementRequested != nil,
+              !docSha.isEmpty,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0 else { return }
+
+        let source: ContextOCRSelectionSource
+        if let pinned = pinnedSnapshot(for: page) {
+            guard let pinnedSource = pinned.contextSource else { return }
+            source = pinnedSource
+        } else if let cached = cachedContextOCRSource(for: page, pageIndex: pageIndex) {
+            source = cached
+        } else {
+            return
+        }
+        guard source.page.documentSHA256 == docSha,
+              source.page.pageIndex == pageIndex else { return }
+        guard let index = ocrWordIndex(at: pagePoint, on: page) else { return }
+        requestOCRCharacterRefinement(page: page, entryIndex: index)
+    }
+
+    private func requestOCRCharacterRefinement(page: PDFPage, entryIndex: Int) {
+        guard contextReadingEnabled,
+              !markMode,
+              let callback = onOCRCharacterRefinementRequested,
+              !docSha.isEmpty,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0 else { return }
+
+        let source: ContextOCRSelectionSource
+        if let pinned = pinnedSnapshot(for: page) {
+            guard let pinnedSource = pinned.contextSource else { return }
+            source = pinnedSource
+        } else if let cached = cachedContextOCRSource(for: page, pageIndex: pageIndex) {
+            source = cached
+        } else {
+            return
+        }
+        guard source.page.documentSHA256 == docSha,
+              source.page.pageIndex == pageIndex,
+              source.entries.indices.contains(entryIndex) else { return }
+        let entry = source.entries[entryIndex]
+        guard source.page.lines.indices.contains(entry.lineIndex),
+              source.page.lines[entry.lineIndex].tokens.contains(where: { $0.geometryQuality != .verifiedCharacter }) else { return }
+
+        let request = ContextOCRRefinementRequest(documentSHA256: source.page.documentSHA256,
+                                                  pageIndex: pageIndex,
+                                                  blockID: entry.blockID,
+                                                  generation: contextReadingGeneration)
+        let target = OCRCharacterRefinementTarget(request)
+        guard ocrCharacterRefinementInFlight[target] == nil,
+              !completedOCRCharacterRefinements.contains(target) else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        failedOCRCharacterRefinementsUntil = failedOCRCharacterRefinementsUntil.filter { $0.value > now }
+        if let retryAt = failedOCRCharacterRefinementsUntil[target] {
+            guard retryAt <= now else { return }
+            failedOCRCharacterRefinementsUntil.removeValue(forKey: target)
+        }
+
+        ocrCharacterRefinementInFlight[target] = request.id
+        callback(request)
+    }
+
+    func finishOCRCharacterRefinement(_ request: ContextOCRRefinementRequest,
+                                      outcome: ContextOCRRefinementOutcome) {
+        let target = OCRCharacterRefinementTarget(request)
+        guard request.documentSHA256 == docSha,
+              request.generation == contextReadingGeneration,
+              contextReadingEnabled,
+              ocrCharacterRefinementInFlight[target] == request.id else { return }
+        ocrCharacterRefinementInFlight.removeValue(forKey: target)
+
+        switch outcome {
+        case .completed:
+            failedOCRCharacterRefinementsUntil.removeValue(forKey: target)
+            completedOCRCharacterRefinements.insert(target)
+            completedOCRCharacterRefinementOrder.removeAll { $0 == target }
+            completedOCRCharacterRefinementOrder.append(target)
+            while completedOCRCharacterRefinementOrder.count > 128 {
+                let expired = completedOCRCharacterRefinementOrder.removeFirst()
+                completedOCRCharacterRefinements.remove(expired)
+            }
+        case .cancelled:
+            failedOCRCharacterRefinementsUntil.removeValue(forKey: target)
+        case .failed:
+            failedOCRCharacterRefinementsUntil[target] = CFAbsoluteTimeGetCurrent() + 1.0
+        }
     }
 
     private func mediaBoxesMatch(_ expected: SourceRect, _ actual: SourceRect) -> Bool {
@@ -2860,6 +2980,11 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
         if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
+        if gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
+           let pdfView,
+           let hit = pageHit(touch.location(in: pdfView)) {
+            requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+        }
         return true
     }
 

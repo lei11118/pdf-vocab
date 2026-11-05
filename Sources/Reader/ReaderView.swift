@@ -30,6 +30,7 @@ struct ReaderView: View {
     @State private var contextReadingGeneration = 0
     @State private var contextOCRPage: ContextOCRPage?
     @State private var activeContextOCRRunID: UUID?
+    @State private var pendingOCRCharacterRefinement: PendingOCRCharacterRefinement?
     @State private var activeDocumentOCRRunID: UUID?
     /// v0.9.0(M4):标记 / 阅读模式(工具栏铅笔按钮或 Pencil Pro 挤压切换;持久记忆)
     /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
@@ -107,6 +108,7 @@ struct ReaderView: View {
     private var lifecycleContent: some View {
         pencilSyncContent
             .onChange(of: contextReadingEnabled) { _, enabled in
+                cancelPendingOCRCharacterRefinement()
                 contextReadingGeneration += 1
                 contextOCRPage = nil
                 readerHandle.coordinator?.setContextReadingMode(enabled, generation: contextReadingGeneration)
@@ -114,6 +116,14 @@ struct ReaderView: View {
                     self.cardContent = nil
                     translationRequest = nil
                 }
+            }
+            .onChange(of: currentPage) { _, page in
+                if pendingOCRCharacterRefinement?.initiatingViewPage != page {
+                    cancelPendingOCRCharacterRefinement()
+                }
+            }
+            .onChange(of: resolvedURL) { _, _ in
+                cancelPendingOCRCharacterRefinement()
             }
             .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
@@ -125,6 +135,7 @@ struct ReaderView: View {
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
                 UserDefaults.standard.set(on, forKey: "readerMarkMode")
                 DiagLog.log("reader: markMode=\(on) saved")
+                if on { cancelPendingOCRCharacterRefinement() }
             }
             .onChange(of: dockBounds) { _, size in
                 // v0.24.0:容器尺寸变化(旋转/分屏)时按归一化比例重新落位
@@ -176,6 +187,7 @@ struct ReaderView: View {
                 // v0.24.0:退出阅读只落盘,不再重置工具 —— 上次用什么笔、是否在书写,
                 // 下次进这本书原样恢复(用户反馈:回到主界面再进来工具被重置了)。
                 activeDocumentOCRRunID = nil
+                cancelPendingOCRCharacterRefinement()
                 ocrRunning = false
                 arcAnchor = nil
                 readerHandle.coordinator?.setMarkMode(false)
@@ -248,12 +260,94 @@ struct ReaderView: View {
     }
 
     private var contextPageOCRTaskKey: ContextPageOCRTaskKey? {
-        guard let resolvedURL else { return nil }
+        guard !markMode, let resolvedURL else { return nil }
         return ContextPageOCRTaskKey(documentSHA256: doc.sha256,
                                      url: resolvedURL,
                                      pageIndex: currentPage,
                                      contextReadingEnabled: contextReadingEnabled,
                                      generation: contextReadingGeneration)
+    }
+
+    private var contextOCRCharacterRefinementTaskKey: OCRCharacterRefinementTaskKey? {
+        guard !markMode,
+              contextReadingEnabled,
+              let resolvedURL,
+              let pending = pendingOCRCharacterRefinement,
+              pending.initiatingViewPage == currentPage,
+              pending.request.documentSHA256 == doc.sha256,
+              pending.request.generation == contextReadingGeneration else { return nil }
+        return OCRCharacterRefinementTaskKey(request: pending.request,
+                                             url: resolvedURL,
+                                             documentSHA256: doc.sha256,
+                                             contextReadingEnabled: contextReadingEnabled,
+                                             generation: contextReadingGeneration,
+                                             viewPage: currentPage)
+    }
+
+    private func cancelPendingOCRCharacterRefinement() {
+        guard let pending = pendingOCRCharacterRefinement else { return }
+        readerHandle.coordinator?.finishOCRCharacterRefinement(pending.request, outcome: .cancelled)
+        pendingOCRCharacterRefinement = nil
+    }
+
+    private func isCurrentOCRCharacterRefinement(_ key: OCRCharacterRefinementTaskKey) -> Bool {
+        guard !Task.isCancelled,
+              !markMode,
+              contextReadingEnabled,
+              resolvedURL == key.url,
+              doc.sha256 == key.documentSHA256,
+              contextReadingGeneration == key.generation,
+              currentPage == key.viewPage,
+              let pending = pendingOCRCharacterRefinement else { return false }
+        return pending.request == key.request && pending.initiatingViewPage == key.viewPage
+    }
+
+    private func runOCRCharacterRefinement(for key: OCRCharacterRefinementTaskKey) async {
+        var outcome: ContextOCRRefinementOutcome = .cancelled
+        defer {
+            readerHandle.coordinator?.finishOCRCharacterRefinement(key.request, outcome: outcome)
+            if pendingOCRCharacterRefinement?.request.id == key.request.id {
+                pendingOCRCharacterRefinement = nil
+            }
+        }
+
+        guard isCurrentOCRCharacterRefinement(key) else { return }
+        do {
+            let page = try await ContextOCRWorker.shared.refineContextLine(
+                url: key.url,
+                documentSHA256: key.documentSHA256,
+                pageIndex: key.request.pageIndex,
+                blockID: key.request.blockID,
+                db: store.db)
+            guard isCurrentOCRCharacterRefinement(key) else { return }
+
+            if let page {
+                guard readerHandle.coordinator?.installContextOCRPage(page, generation: key.generation) == true else {
+                    DiagLog.log("context OCR geometry: rejected install sha=\(key.documentSHA256.prefix(8)) page=\(key.request.pageIndex)")
+                    outcome = .failed
+                    return
+                }
+                if key.request.pageIndex == currentPage {
+                    contextOCRPage = page
+                    activeContextOCRRunID = nil
+                }
+            }
+            outcome = .completed
+        } catch is CancellationError {
+            outcome = .cancelled
+        } catch let error as OCRCharacterRefinementError {
+            if case .cancelled = error {
+                outcome = .cancelled
+            } else if !Task.isCancelled, isCurrentOCRCharacterRefinement(key) {
+                DiagLog.log("context OCR geometry: failed sha=\(key.documentSHA256.prefix(8)) page=\(key.request.pageIndex) block=\(key.request.blockID.prefix(12)) error=\(error.localizedDescription)")
+                outcome = .failed
+            }
+        } catch {
+            if !Task.isCancelled, isCurrentOCRCharacterRefinement(key) {
+                DiagLog.log("context OCR geometry: failed sha=\(key.documentSHA256.prefix(8)) page=\(key.request.pageIndex) block=\(key.request.blockID.prefix(12)) error=\(error.localizedDescription)")
+                outcome = .failed
+            }
+        }
     }
 
     private var documentOCRTaskKey: DocumentOCRTaskKey? {
@@ -960,6 +1054,23 @@ struct ReaderView: View {
                     contextReadingEnabled: contextReadingEnabled,
                     contextReadingGeneration: contextReadingGeneration,
                     contextOCRPage: contextOCRPage,
+                    onOCRCharacterRefinementRequested: { request in
+                        guard resolvedURL != nil,
+                              contextReadingEnabled,
+                              !markMode,
+                              request.documentSHA256 == doc.sha256,
+                              request.generation == contextReadingGeneration else {
+                            readerHandle.coordinator?.finishOCRCharacterRefinement(request, outcome: .cancelled)
+                            return
+                        }
+                        if let pending = pendingOCRCharacterRefinement,
+                           pending.request.id != request.id {
+                            readerHandle.coordinator?.finishOCRCharacterRefinement(pending.request, outcome: .cancelled)
+                        }
+                        pendingOCRCharacterRefinement = PendingOCRCharacterRefinement(
+                            request: request,
+                            initiatingViewPage: currentPage)
+                    },
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
                         guard !showGraph, !capturing else { return }
@@ -983,6 +1094,9 @@ struct ReaderView: View {
                         cardContent = .word(term)
                     },
                     onPageChanged: { page in
+                        if pendingOCRCharacterRefinement?.initiatingViewPage != page {
+                            cancelPendingOCRCharacterRefinement()
+                        }
                         currentPage = page
                         scheduleSave()
                     },
@@ -1016,6 +1130,7 @@ struct ReaderView: View {
                         scheduleSave()
                     },
                     onTeardown: {
+                        cancelPendingOCRCharacterRefinement()
                         saveProgressNow()
                     },
                     onTranslate: { text in
@@ -1090,6 +1205,10 @@ struct ReaderView: View {
             contextOCRPage = nil
             await runCurrentPageContextOCR(for: key, runID: runID)
         }
+        .task(id: contextOCRCharacterRefinementTaskKey, priority: .userInitiated) {
+            guard let key = contextOCRCharacterRefinementTaskKey else { return }
+            await runOCRCharacterRefinement(for: key)
+        }
         .task(id: documentOCRTaskKey, priority: .utility) {
             guard let key = documentOCRTaskKey else { return }
             await runOCROnce(for: key)
@@ -1121,6 +1240,20 @@ private struct ContextPageOCRTaskKey: Hashable, Sendable {
     let pageIndex: Int
     let contextReadingEnabled: Bool
     let generation: Int
+}
+
+private struct PendingOCRCharacterRefinement {
+    let request: ContextOCRRefinementRequest
+    let initiatingViewPage: Int
+}
+
+private struct OCRCharacterRefinementTaskKey: Hashable, Sendable {
+    let request: ContextOCRRefinementRequest
+    let url: URL
+    let documentSHA256: String
+    let contextReadingEnabled: Bool
+    let generation: Int
+    let viewPage: Int
 }
 
 private struct DocumentOCRTaskKey: Hashable, Sendable {

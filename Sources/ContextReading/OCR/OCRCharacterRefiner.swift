@@ -2,12 +2,12 @@ import Foundation
 import PDFKit
 import Vision
 
-struct OCRCharacterFastSpanEvidence: Equatable, Sendable {
+struct OCRCharacterFastSpanEvidence: Codable, Equatable, Sendable {
     let fastSpan: UTF16Span
     let pageRect: SourceRect?
 }
 
-struct OCRCharacterFastObservationEvidence: Equatable, Sendable {
+struct OCRCharacterFastObservationEvidence: Codable, Equatable, Sendable {
     let ordinal: Int
     let text: String
     let confidence: Double
@@ -15,19 +15,19 @@ struct OCRCharacterFastObservationEvidence: Equatable, Sendable {
     let characters: [OCRCharacterFastSpanEvidence]
 }
 
-enum OCRCharacterRefinementSource: String, Equatable, Sendable {
+enum OCRCharacterRefinementSource: String, Codable, Equatable, Sendable {
     case visionFast
     case mandatoryExactMapping
 }
 
-struct OCRCharacterRefinedBox: Equatable, Sendable {
+struct OCRCharacterRefinedBox: Codable, Equatable, Sendable {
     let sourceSpan: UTF16Span
     let actualRect: SourceRect
     let geometrySource: OCRCharacterRefinementSource
     let mappingSource: OCRCharacterRefinementSource
 }
 
-enum OCRCharacterRefinementFallback: Equatable, Sendable {
+enum OCRCharacterRefinementFallback: Codable, Equatable, Sendable {
     case invalidSourceGeometry
     case invalidRegion
     case textLimitExceeded
@@ -39,7 +39,7 @@ enum OCRCharacterRefinementFallback: Equatable, Sendable {
     case noTrustedCharacterBoxes
 }
 
-struct OCRCharacterRefinementResult: Equatable, Sendable {
+struct OCRCharacterRefinementResult: Codable, Equatable, Sendable {
     let sourceText: String
     let mediaBox: SourceRect
     let roi: SourceRect
@@ -74,6 +74,7 @@ enum OCRCharacterRefinementError: LocalizedError {
 /// Call synchronously while the owning worker holds the PDFPage; this type
 /// never stores or returns PDFKit or Vision objects.
 enum OCRCharacterRefiner {
+    static let algorithmVersion = 1
     static let maximumSpatialCandidates = 16
 
     /// Runs one fast Vision pass over a padded line ROI in canonical media space.

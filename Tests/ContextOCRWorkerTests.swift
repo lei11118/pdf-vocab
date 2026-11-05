@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 import PDFKit
 import UIKit
@@ -31,9 +32,53 @@ final class ContextOCRWorkerTests: XCTestCase {
             db: db)
 
         XCTAssertNil(result)
+        let refined = try await ContextOCRWorker.shared.refineContextLine(url: url,
+                                                                          documentSHA256: documentSHA256,
+                                                                          pageIndex: 0,
+                                                                          blockID: "native-block",
+                                                                          db: db)
+        XCTAssertNil(refined, "Native text pages must not enter the fast OCR path")
         XCTAssertEqual(try contextStore.load(documentSHA256: documentSHA256,
                                              pageIndex: 0,
                                              revision: ContextOCRPage.currentRevision), cachedPage)
+    }
+
+    func testMissingBlockDoesNotCreateOrRewriteContextPage() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared)
+        let url = try makePDFFile(text: nil)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let documentSHA256 = "missing-context-ocr-block-\(UUID().uuidString)"
+        try insertDocumentRecord(documentSHA256, pageCount: 1, hasTextLayer: false, db: db)
+        defer { try? deleteDocumentRecord(documentSHA256, db: db) }
+
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 612, height: 792))
+        let region = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 612, height: 792))
+        let lineRect = try XCTUnwrap(SourceRect(x: 40, y: 700, width: 200, height: 24))
+        let line = OCRLine(blockID: "present-block",
+                           candidates: [OCRCandidate(text: "scanned source line", confidence: 0.9)],
+                           regionRect: region,
+                           pageRect: lineRect,
+                           tokens: [],
+                           tokenGeometry: [])
+        let basePage = ContextOCRPage(documentSHA256: documentSHA256,
+                                      pageIndex: 0,
+                                      revision: ContextOCRPage.currentRevision,
+                                      mediaBox: media,
+                                      lines: [line])
+        let store = ContextOCRStore(db: db)
+        try store.save(basePage)
+
+        let result = try await ContextOCRWorker.shared.refineContextLine(url: url,
+                                                                         documentSHA256: documentSHA256,
+                                                                         pageIndex: 0,
+                                                                         blockID: "missing-block",
+                                                                         db: db)
+
+        XCTAssertNil(result)
+        XCTAssertEqual(try store.load(documentSHA256: documentSHA256,
+                                      pageIndex: 0,
+                                      revision: ContextOCRPage.currentRevision), basePage)
     }
 
     func testInvalidURLAndPageIndexThrowExplicitErrors() async throws {
@@ -153,6 +198,77 @@ final class ContextOCRWorkerTests: XCTestCase {
         XCTAssertTrue(OCRStore(db: db).words(docSha: documentSHA256, page: 0).isEmpty)
     }
 
+    func testPhotoOnlyPageRefinementPersistsOnlyDerivedGeometryAndReusesIt() async throws {
+        let db = try XCTUnwrap(AppDatabase.shared)
+        let sourceText = "charge + beta 3.2"
+        let url = try makePhotoOnlyPDFFile(text: sourceText)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let documentSHA256 = "context-ocr-refinement-worker-\(UUID().uuidString)"
+        try insertDocumentRecord(documentSHA256, pageCount: 1, hasTextLayer: false, db: db)
+        defer {
+            try? db.dbQueue.write { database in
+                try database.execute(sql: "DELETE FROM ocr_word WHERE docSha = ?", arguments: [documentSHA256])
+                try database.execute(sql: "DELETE FROM ocr_status WHERE docSha = ?", arguments: [documentSHA256])
+                try database.execute(sql: "DELETE FROM document WHERE sha256 = ?", arguments: [documentSHA256])
+            }
+        }
+
+        let pdfPage = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0))
+        XCTAssertTrue((pdfPage.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      "The fixture must contain only a raster image, without a searchable text layer")
+
+        let worker = ContextOCRWorker.shared
+        let recognizedBase = try await worker.recognizeContextPage(url: url,
+                                                                   documentSHA256: documentSHA256,
+                                                                   pageIndex: 0,
+                                                                   db: db)
+        let basePage = try XCTUnwrap(recognizedBase)
+        let baseLine = try XCTUnwrap(basePage.lines.first(where: {
+            !$0.blockID.isEmpty && !$0.sourceText.isEmpty && $0.pageRect != nil && !$0.tokens.isEmpty
+        }), "Accurate OCR should provide a source line with semantic tokens")
+        let baseWords = OCRStore(db: db).words(docSha: documentSHA256, page: 0)
+        XCTAssertFalse(baseWords.isEmpty, "The shared accurate pass should retain legacy word boxes")
+        XCTAssertFalse(baseLine.tokens.contains { $0.geometryQuality == .verifiedCharacter })
+
+        let refinedResult = try await worker.refineContextLine(url: url,
+                                                               documentSHA256: documentSHA256,
+                                                               pageIndex: 0,
+                                                               blockID: baseLine.blockID,
+                                                               db: db)
+        let refinedPage = try XCTUnwrap(refinedResult)
+        let refinedLine = try XCTUnwrap(refinedPage.lines.first(where: { $0.blockID == baseLine.blockID }))
+        XCTAssertTrue(refinedLine.tokens.contains { $0.geometryQuality == .verifiedCharacter },
+                      "The actor's fast OCR result should promote at least one token through the composer")
+        XCTAssertTrue(refinedLine.sourceText.utf16.elementsEqual(baseLine.sourceText.utf16))
+        XCTAssertEqual(refinedLine.candidates.count, baseLine.candidates.count)
+        for (oldCandidate, newCandidate) in zip(baseLine.candidates, refinedLine.candidates) {
+            XCTAssertTrue(newCandidate.text.utf16.elementsEqual(oldCandidate.text.utf16))
+            XCTAssertEqual(newCandidate.confidence, oldCandidate.confidence)
+        }
+        XCTAssertEqual(refinedLine.tokens.map(\.id), baseLine.tokens.map(\.id))
+        XCTAssertEqual(refinedLine.tokens.map(\.span), baseLine.tokens.map(\.span))
+
+        let contextStore = ContextOCRStore(db: db)
+        XCTAssertEqual(try contextStore.load(documentSHA256: documentSHA256,
+                                             pageIndex: 0,
+                                             revision: ContextOCRPage.currentRevision), basePage,
+                       "The derived page must not overwrite the accurate base OCR payload")
+        assertLegacyWords(baseWords, equalTo: OCRStore(db: db).words(docSha: documentSHA256, page: 0))
+
+        let cachedResult = try await worker.recognizeContextPage(url: url,
+                                                                 documentSHA256: documentSHA256,
+                                                                 pageIndex: 0,
+                                                                 db: db)
+        let cachedPage = try XCTUnwrap(cachedResult)
+        XCTAssertEqual(cachedPage, refinedPage,
+                       "A later page load should revalidate and compose the persisted character geometry")
+        XCTAssertEqual(try contextStore.load(documentSHA256: documentSHA256,
+                                             pageIndex: 0,
+                                             revision: ContextOCRPage.currentRevision), basePage)
+        assertLegacyWords(baseWords, equalTo: OCRStore(db: db).words(docSha: documentSHA256, page: 0))
+    }
+
     private func makePDFFile(text: String?) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ContextOCRWorker-\(UUID().uuidString).pdf")
@@ -167,6 +283,54 @@ final class ContextOCRWorkerTests: XCTestCase {
         }
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    private func makePhotoOnlyPDFFile(text: String) throws -> URL {
+        let pageBounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let baseline = CGPoint(x: 82, y: 406)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 52, nil)
+        let fontKey = NSAttributedString.Key(kCTFontAttributeName as String)
+        let attributedText = NSAttributedString(string: text, attributes: [fontKey: font])
+        let ctLine = CTLineCreateWithAttributedString(attributedText)
+        let nativePDF = UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
+            context.beginPage()
+            let cgContext = context.cgContext
+            cgContext.saveGState()
+            cgContext.translateBy(x: 0, y: pageBounds.height)
+            cgContext.scaleBy(x: 1, y: -1)
+            cgContext.textMatrix = .identity
+            cgContext.textPosition = baseline
+            cgContext.setFillColor(UIColor.black.cgColor)
+            CTLineDraw(ctLine, cgContext)
+            cgContext.restoreGState()
+        }
+        let nativePage = try XCTUnwrap(PDFDocument(data: nativePDF)?.page(at: 0))
+        let raster = nativePage.thumbnail(of: CGSize(width: pageBounds.width * 2,
+                                                     height: pageBounds.height * 2),
+                                          for: .mediaBox)
+        let photoPDF = UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
+            context.beginPage()
+            raster.draw(in: pageBounds)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ContextOCRWorker-photo-\(UUID().uuidString).pdf")
+        try photoPDF.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func assertLegacyWords(_ actual: [OCRWord],
+                                   equalTo expected: [OCRWord],
+                                   file: StaticString = #filePath,
+                                   line: UInt = #line) {
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        for (actualWord, expectedWord) in zip(actual, expected) {
+            XCTAssertEqual(actualWord.text, expectedWord.text, file: file, line: line)
+            XCTAssertEqual(actualWord.x, expectedWord.x, file: file, line: line)
+            XCTAssertEqual(actualWord.y, expectedWord.y, file: file, line: line)
+            XCTAssertEqual(actualWord.w, expectedWord.w, file: file, line: line)
+            XCTAssertEqual(actualWord.h, expectedWord.h, file: file, line: line)
+            XCTAssertEqual(actualWord.line, expectedWord.line, file: file, line: line)
+        }
     }
 
     private func insertDocumentRecord(_ documentSHA256: String,

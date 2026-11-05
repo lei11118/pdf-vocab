@@ -36,6 +36,7 @@ struct PDFKitView: UIViewRepresentable {
     var contextReadingEnabled: Bool = false
     var contextReadingGeneration: Int = 0
     var contextOCRPage: ContextOCRPage? = nil
+    var onOCRCharacterRefinementRequested: ((ContextOCRRefinementRequest) -> Void)? = nil
     /// v0.14.0:手写工具会话(浮动工具带驱动各页画布)
     var toolSession: PencilToolSession? = nil
     /// v0.15.0:挤压 → 弧形工具盘(回调笔尖坐标)
@@ -53,6 +54,7 @@ struct PDFKitView: UIViewRepresentable {
 
     func makeCoordinator() -> ReaderCoordinator {
         let coordinator = ReaderCoordinator(onPageChanged: onPageChanged, onSelectionInfo: onSelectionInfo)
+        coordinator.onOCRCharacterRefinementRequested = onOCRCharacterRefinementRequested
         coordinator.onTranslate = onTranslate
         coordinator.onReadingTick = onReadingTick
         coordinator.onTeardown = onTeardown
@@ -144,6 +146,7 @@ struct PDFKitView: UIViewRepresentable {
         if !pinching, abs(uiView.minScaleFactor - 1.0) > 0.001 { uiView.minScaleFactor = 1.0 }
         context.coordinator.onPageChanged = onPageChanged
         context.coordinator.onSelectionInfo = onSelectionInfo
+        context.coordinator.onOCRCharacterRefinementRequested = onOCRCharacterRefinementRequested
         context.coordinator.onTranslate = onTranslate
         context.coordinator.onReadingTick = onReadingTick
         context.coordinator.onTeardown = onTeardown

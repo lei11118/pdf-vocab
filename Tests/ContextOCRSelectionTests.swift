@@ -168,6 +168,192 @@ final class ContextOCRSelectionTests: XCTestCase {
                        "The master feature switch gates source installation")
     }
 
+    func testHoverRefinementRequestsDeduplicateAndRejectStaleNonces() throws {
+        let fixture = try makeBlankPDFView()
+        defer { fixture.close() }
+        let sha = "context-ocr-refine-dedupe-\(UUID().uuidString)"
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { _ in })
+        coordinator.pdfView = fixture.view
+        coordinator.docSha = sha
+        coordinator.setContextReadingMode(true, generation: 21)
+
+        var requests: [ContextOCRRefinementRequest] = []
+        let point = fixture.view.convert(CGPoint(x: 62, y: 190), from: fixture.page)
+        let hover = { coordinator.perform(NSSelectorFromString("handleHover:"), with: ContextOCRHover(point: point)) }
+
+        let firstPage = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                     blockID: "refine-row-one", text: "charge",
+                                     tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                           kind: .word, rect: CGRect(x: 40, y: 180, width: 44, height: 20))])
+        XCTAssertTrue(coordinator.installContextOCRPage(firstPage, generation: 21))
+
+        hover()
+        XCTAssertTrue(requests.isEmpty, "Without a callback the coordinator does not create a pending request")
+        coordinator.onOCRCharacterRefinementRequested = { requests.append($0) }
+        hover()
+        XCTAssertEqual(requests.count, 1, "Repeated hover for an in-flight line is coalesced")
+        let completed = requests[0]
+        coordinator.finishOCRCharacterRefinement(completed, outcome: .completed)
+        hover()
+        XCTAssertEqual(requests.count, 1, "Completed lines are not requested again")
+
+        let secondPage = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                      blockID: "refine-row-two", text: "charge",
+                                      tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                            kind: .word, rect: CGRect(x: 40, y: 180, width: 44, height: 20))])
+        XCTAssertTrue(coordinator.installContextOCRPage(secondPage, generation: 21))
+        hover()
+        XCTAssertEqual(requests.count, 2)
+        let cancelled = requests[1]
+        coordinator.finishOCRCharacterRefinement(cancelled, outcome: .cancelled)
+        hover()
+        XCTAssertEqual(requests.count, 3, "Cancellation releases the target for a new nonce")
+        let current = requests[2]
+
+        coordinator.finishOCRCharacterRefinement(cancelled, outcome: .completed)
+        hover()
+        XCTAssertEqual(requests.count, 3, "A stale nonce cannot clear a newer in-flight request")
+        coordinator.finishOCRCharacterRefinement(current, outcome: .cancelled)
+    }
+
+    func testRefinementRequestsRespectMarkModeMasterGenerationAndDocument() throws {
+        let fixture = try makeBlankPDFView()
+        defer { fixture.close() }
+        let firstSHA = "context-ocr-refine-gates-\(UUID().uuidString)"
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { _ in })
+        coordinator.pdfView = fixture.view
+        coordinator.docSha = firstSHA
+        coordinator.setContextReadingMode(true, generation: 31)
+
+        var requests: [ContextOCRRefinementRequest] = []
+        coordinator.onOCRCharacterRefinementRequested = { requests.append($0) }
+        let point = fixture.view.convert(CGPoint(x: 62, y: 190), from: fixture.page)
+        let hover = { coordinator.perform(NSSelectorFromString("handleHover:"), with: ContextOCRHover(point: point)) }
+        let page = try makePage(sha: firstSHA, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                blockID: "refine-row", text: "charge",
+                                tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                      kind: .word, rect: CGRect(x: 40, y: 180, width: 44, height: 20))])
+        XCTAssertTrue(coordinator.installContextOCRPage(page, generation: 31))
+
+        coordinator.setMarkMode(true)
+        hover()
+        XCTAssertTrue(requests.isEmpty, "Mark mode does not request character refinement")
+        coordinator.setMarkMode(false)
+        hover()
+        XCTAssertEqual(requests.count, 1)
+        let markModeRequest = requests[0]
+
+        coordinator.setContextReadingMode(false, generation: 32)
+        coordinator.finishOCRCharacterRefinement(markModeRequest, outcome: .completed)
+        hover()
+        XCTAssertEqual(requests.count, 1, "The master switch gates refinement requests")
+
+        coordinator.setContextReadingMode(true, generation: 33)
+        XCTAssertTrue(coordinator.installContextOCRPage(page, generation: 33))
+        hover()
+        XCTAssertEqual(requests.count, 2)
+        let oldGenerationRequest = requests[1]
+
+        coordinator.setContextReadingMode(true, generation: 34)
+        XCTAssertTrue(coordinator.installContextOCRPage(page, generation: 34))
+        hover()
+        XCTAssertEqual(requests.count, 3)
+        let currentGenerationRequest = requests[2]
+        coordinator.finishOCRCharacterRefinement(oldGenerationRequest, outcome: .completed)
+        hover()
+        XCTAssertEqual(requests.count, 3, "A previous generation cannot finish the current nonce")
+        coordinator.finishOCRCharacterRefinement(currentGenerationRequest, outcome: .completed)
+
+        let oldDocumentPage = try makePage(sha: firstSHA, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                           blockID: "refine-row-old-document", text: "charge",
+                                           tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                                 kind: .word, rect: CGRect(x: 40, y: 180, width: 44, height: 20))])
+        XCTAssertTrue(coordinator.installContextOCRPage(oldDocumentPage, generation: 34))
+        hover()
+        XCTAssertEqual(requests.count, 4)
+        let oldDocumentRequest = requests[3]
+
+        let secondSHA = "context-ocr-refine-new-doc-\(UUID().uuidString)"
+        coordinator.docSha = secondSHA
+        coordinator.setContextReadingMode(true, generation: 35)
+        let newDocumentPage = try makePage(sha: secondSHA, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                           blockID: "refine-row-new-document", text: "charge",
+                                           tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                                 kind: .word, rect: CGRect(x: 40, y: 180, width: 44, height: 20))])
+        XCTAssertTrue(coordinator.installContextOCRPage(newDocumentPage, generation: 35))
+        hover()
+        XCTAssertEqual(requests.count, 5)
+        let newDocumentRequest = requests[4]
+        coordinator.finishOCRCharacterRefinement(oldDocumentRequest, outcome: .completed)
+        hover()
+        XCTAssertEqual(requests.count, 5, "A previous document cannot clear the current request")
+        coordinator.finishOCRCharacterRefinement(newDocumentRequest, outcome: .cancelled)
+    }
+
+    func testVerifiedGeometryInstallDoesNotMovePinnedSelectionAndLateBasePreservesIt() throws {
+        let fixture = try makeBlankPDFView()
+        defer { fixture.close() }
+        let sha = "context-ocr-refine-pinned-\(UUID().uuidString)"
+        var events: [SelectionInfo?] = []
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { events.append($0) })
+        coordinator.pdfView = fixture.view
+        coordinator.docSha = sha
+        coordinator.setContextReadingMode(true, generation: 41)
+
+        let tokenRect = CGRect(x: 40, y: 180, width: 44, height: 20)
+        let base = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                blockID: "verified-row", text: "charge",
+                                tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                      kind: .word, rect: tokenRect)])
+        XCTAssertTrue(coordinator.installContextOCRPage(base, generation: 41))
+        let point = fixture.view.convert(CGPoint(x: 62, y: 190), from: fixture.page)
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: point))
+        let pinned = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        XCTAssertEqual(pinned.displaySurface, "charge")
+        let eventCount = events.count
+        let highlightBounds = fixture.page.annotations.map(\.bounds)
+
+        let baseLine = try XCTUnwrap(base.lines.first)
+        let token = try XCTUnwrap(baseLine.tokens.first).withGeometryQuality(.verifiedCharacter)
+        let characterRect = try XCTUnwrap(SourceRect(rect: CGRect(x: 43, y: 181, width: 6, height: 18)))
+        let verifiedLine = OCRLine(blockID: baseLine.blockID,
+                                   candidates: baseLine.candidates,
+                                   regionRect: baseLine.regionRect,
+                                   pageRect: baseLine.pageRect,
+                                   tokens: [token],
+                                   tokenGeometry: [SourceTokenGeometry(tokenID: token.id,
+                                                                       span: token.span,
+                                                                       rect: characterRect,
+                                                                       quality: .verifiedCharacter)])
+        let verifiedPage = ContextOCRPage(documentSHA256: sha,
+                                          pageIndex: 0,
+                                          revision: base.revision,
+                                          mediaBox: base.mediaBox,
+                                          lines: [verifiedLine])
+        XCTAssertTrue(coordinator.installContextOCRPage(verifiedPage, generation: 41))
+        XCTAssertEqual(events.count, eventCount, "A cache-only refined install must not emit selection callbacks")
+        XCTAssertEqual(fixture.page.annotations.map(\.bounds), highlightBounds,
+                       "Refining geometry must not move the active selection highlight")
+
+        coordinator.dismissSelection()
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: point))
+        let refinedSelection = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        XCTAssertEqual(refinedSelection.tokens.map(\.geometryQuality), [.verifiedCharacter])
+
+        let lateBase = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                    blockID: "verified-row", text: "charge",
+                                    tokens: [TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6),
+                                                          kind: .word, rect: tokenRect)])
+        let countBeforeLateBase = events.count
+        XCTAssertTrue(coordinator.installContextOCRPage(lateBase, generation: 41))
+        XCTAssertEqual(events.count, countBeforeLateBase)
+        coordinator.dismissSelection()
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: point))
+        let afterLateBase = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        XCTAssertEqual(afterLateBase.tokens.map(\.geometryQuality), [.verifiedCharacter],
+                       "A late word-level page cannot downgrade verified geometry")
+    }
+
     func testSharedOCRWordGeometryCoalescesTokensWithoutInventingCharacterBoxes() throws {
         let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
         let shared = CGRect(x: 50, y: 180, width: 34, height: 20)
