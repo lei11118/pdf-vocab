@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("实验功能")
                 } footer: {
-                    Text("默认关闭。开启后使用新的文字与扫描页选词卡；扫描页识别质量仍在验证中，语境译义和数学识别暂不可用。关闭后使用原有选词与整句卡片。")
+                    Text("默认关闭。开启后可试用 iPadOS 26.4+ 的系统 Token 语境候选；未对齐时可回到词典释义。数学识别暂未开放。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)

@@ -177,6 +177,149 @@ final class SentenceContextBuilderTests: XCTestCase {
                                                   pageIndex: 0,
                                                   blockID: "block"))
     }
+
+    func testNativeBuilderUsesSelectedRepeatedOccurrenceAndPageRelativeRanges() throws {
+        let source = "Charge first. Charge again?"
+        let ns = source as NSString
+        let first = ns.range(of: "Charge")
+        let second = ns.range(of: "Charge",
+                              options: [],
+                              range: NSRange(location: NSMaxRange(first),
+                                             length: ns.length - NSMaxRange(first)))
+        let selected = try XCTUnwrap(UTF16Span(range: second, in: source))
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "Charge",
+                                                                        documentSHA256: "native-repeat",
+                                                                        pageIndex: 4))
+
+        XCTAssertEqual(context.text, "Charge again?")
+        XCTAssertEqual(context.sourceSpan.location, second.location)
+        XCTAssertEqual(context.selectedSourceSpans, [selected])
+        XCTAssertEqual(context.selectedDisplaySpans, [UTF16Span(location: 0, length: selected.length)])
+        XCTAssertEqual(context.kind, .completeSentence)
+    }
+
+    func testNativeBuilderNormalizesOneLineBreakWithoutChangingUTF16Offsets() throws {
+        let source = "A sentence continues\non the next line."
+        let selectionRange = (source as NSString).range(of: "continues")
+        let selected = try XCTUnwrap(UTF16Span(range: selectionRange, in: source))
+
+        XCTAssertNil(NativeSentenceContextBuilder.build(sourceText: source,
+                                                        selectedSourceSpans: [selected],
+                                                        displaySurface: "continues",
+                                                        documentSHA256: "native-wrap",
+                                                        pageIndex: 0),
+                   "A line break needs PDF geometry validation before it can be joined")
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "continues",
+                                                                        documentSHA256: "native-wrap",
+                                                                        pageIndex: 0,
+                                                                        allowsLineBreaks: true))
+        XCTAssertEqual(context.text, "A sentence continues on the next line.")
+        XCTAssertEqual(context.sourceSpan.substring(in: source), "A sentence continues\non the next line.")
+        XCTAssertEqual(context.selectedSourceSpans, [selected])
+        XCTAssertEqual(context.selectedDisplaySpans.first?.location,
+                       selectionRange.location - context.sourceSpan.location)
+
+        let crlfSource = "A sentence continues\r\non the next line."
+        let crlfRange = (crlfSource as NSString).range(of: "continues")
+        let crlfSelection = try XCTUnwrap(UTF16Span(range: crlfRange, in: crlfSource))
+        let crlfContext = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: crlfSource,
+                                                                            selectedSourceSpans: [crlfSelection],
+                                                                            displaySurface: "continues",
+                                                                            documentSHA256: "native-crlf",
+                                                                            pageIndex: 0,
+                                                                            allowsLineBreaks: true))
+        XCTAssertEqual(crlfContext.text, "A sentence continues  on the next line.")
+        XCTAssertEqual(crlfContext.sourceSpan.location, 0)
+        XCTAssertEqual(crlfContext.selectedSourceSpans, [crlfSelection])
+    }
+
+    func testNativeBuilderRejectsBlankLineAndUntrustedColumnGeometry() throws {
+        let source = "A sentence begins\n \nand then ends."
+        let ns = source as NSString
+        let first = try XCTUnwrap(UTF16Span(range: ns.range(of: "begins"), in: source))
+        let last = try XCTUnwrap(UTF16Span(range: ns.range(of: "ends"), in: source))
+        XCTAssertNil(NativeSentenceContextBuilder.build(sourceText: source,
+                                                        selectedSourceSpans: [first, last],
+                                                        displaySurface: "begins ends",
+                                                        documentSHA256: "native-blank-line",
+                                                        pageIndex: 0,
+                                                        allowsLineBreaks: true))
+
+        XCTAssertTrue(NativeSentenceContextBuilder.hasTrustedAdjacentLineGeometry([
+            CGRect(x: 40, y: 200, width: 180, height: 16),
+            CGRect(x: 42, y: 180, width: 140, height: 16)
+        ]))
+        XCTAssertFalse(NativeSentenceContextBuilder.hasTrustedAdjacentLineGeometry([
+            CGRect(x: 35, y: 200, width: 180, height: 16),
+            CGRect(x: 430, y: 180, width: 160, height: 16)
+        ]), "Separate columns cannot be joined")
+        XCTAssertFalse(NativeSentenceContextBuilder.hasTrustedAdjacentLineGeometry([
+            CGRect(x: 40, y: 250, width: 180, height: 16),
+            CGRect(x: 42, y: 180, width: 140, height: 16)
+        ]), "A large vertical jump is not an adjacent row")
+    }
+
+    func testNativeBuilderKeepsEmojiAndCombiningMarkUTF16Coordinates() throws {
+        let source = "😀 Cafe\u{0301} first. 😀 Cafe\u{0301} second."
+        let ns = source as NSString
+        let selectedRange = ns.range(of: "Cafe\u{0301}", options: .backwards)
+        let sentenceRange = ns.range(of: "😀 Cafe\u{0301} second.", options: .backwards)
+        let selected = try XCTUnwrap(UTF16Span(range: selectedRange, in: source))
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "Cafe\u{0301}",
+                                                                        documentSHA256: "native-unicode",
+                                                                        pageIndex: 1))
+        XCTAssertEqual(context.sourceSpan.location, sentenceRange.location)
+        XCTAssertEqual(context.sourceSpan.length, sentenceRange.length)
+        XCTAssertEqual(context.selectedDisplaySpans,
+                       [UTF16Span(location: selectedRange.location - sentenceRange.location,
+                                  length: selectedRange.length)])
+        XCTAssertEqual(context.text, "😀 Cafe\u{0301} second.")
+    }
+
+    func testNativeBuilderRejectsSelectionDisplayMismatch() throws {
+        let source = "A charge appears here."
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "charge"), in: source))
+        XCTAssertNil(NativeSentenceContextBuilder.build(sourceText: source,
+                                                        selectedSourceSpans: [selected],
+                                                        displaySurface: "change",
+                                                        documentSHA256: "native-mismatch",
+                                                        pageIndex: 0))
+    }
+
+    func testNativeBuilderCropsLongPageAndEnforcesSentenceLimit() throws {
+        let prefix = String(repeating: "Earlier. ", count: 600)
+        let source = prefix + "Charge second."
+        let sourceLength = (source as NSString).length
+        XCTAssertGreaterThan(sourceLength, OCRCharacterAligner.maximumUTF16Units)
+        let selectedRange = (source as NSString).range(of: "Charge", options: .backwards)
+        let selected = try XCTUnwrap(UTF16Span(range: selectedRange, in: source))
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "Charge",
+                                                                        documentSHA256: "native-long-page",
+                                                                        pageIndex: 0))
+        XCTAssertEqual(context.text, "Charge second.")
+        XCTAssertEqual(context.sourceSpan.location, selectedRange.location)
+
+        let longSentence = "A " + String(repeating: "word ", count: 410) + "end."
+        let longSelection = try XCTUnwrap(UTF16Span(range: (longSentence as NSString).range(of: "word"),
+                                                   in: longSentence))
+        XCTAssertNil(NativeSentenceContextBuilder.build(sourceText: longSentence,
+                                                        selectedSourceSpans: [longSelection],
+                                                        displaySurface: "word",
+                                                        documentSHA256: "native-long-sentence",
+                                                        pageIndex: 0))
+    }
 }
 
 private extension UTF16Span {

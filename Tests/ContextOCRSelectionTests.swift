@@ -6,6 +6,69 @@ import XCTest
 
 @MainActor
 final class ContextOCRSelectionTests: XCTestCase {
+    func testOCRSelectionCarriesSameLineSentenceContextAndKeepsFragmentsIncomplete() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let completePage = try makePage(sha: "ocr-sentence", pageIndex: 0, mediaBox: media,
+                                        blockID: "sentence-row", text: "A complete sentence.",
+                                        tokens: [
+                                            TokenFixture(text: "complete", span: UTF16Span(location: 2, length: 8), kind: .word,
+                                                         rect: CGRect(x: 70, y: 180, width: 70, height: 18))
+                                        ])
+        let completeSource = try XCTUnwrap(ContextOCRSelectionSource(page: completePage))
+        let completeSelection = try XCTUnwrap(completeSource.contextualSelection(for: 0...0, generation: 1))
+        let completeContext = try XCTUnwrap(completeSelection.sentenceContext)
+        XCTAssertEqual(completeContext.kind, .completeSentence)
+        XCTAssertEqual(completeContext.text, "A complete sentence.")
+        XCTAssertEqual(completeContext.selectedSourceSpans, completeSelection.sourceSpans)
+        XCTAssertEqual(completeContext.sourceSpan, UTF16Span(location: 0, length: ("A complete sentence." as NSString).length))
+
+        let fragmentPage = try makePage(sha: "ocr-fragment", pageIndex: 0, mediaBox: media,
+                                        blockID: "fragment-row", text: "charge",
+                                        tokens: [
+                                            TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6), kind: .word,
+                                                         rect: CGRect(x: 70, y: 180, width: 54, height: 18))
+                                        ])
+        let fragmentSource = try XCTUnwrap(ContextOCRSelectionSource(page: fragmentPage))
+        let fragmentSelection = try XCTUnwrap(fragmentSource.contextualSelection(for: 0...0, generation: 2))
+        XCTAssertEqual(fragmentSelection.sentenceContext?.kind, .fragment)
+    }
+
+    func testOCRMultilineSelectionDoesNotClaimSentenceContext() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        func makeLine(blockID: String, text: String, tokenText: String, y: Double) throws -> OCRLine {
+            let span = UTF16Span(location: 0, length: (tokenText as NSString).length)
+            let token = SourceToken(documentSHA256: "ocr-multiline",
+                                    pageIndex: 0,
+                                    span: span,
+                                    sourceSurface: tokenText,
+                                    kind: .word,
+                                    blockID: blockID,
+                                    geometryQuality: .word)
+            let rect = try XCTUnwrap(SourceRect(x: 40, y: y, width: 70, height: 18))
+            return OCRLine(blockID: blockID,
+                           candidates: [OCRCandidate(text: text, confidence: 0.95)],
+                           regionRect: media,
+                           pageRect: rect,
+                           tokens: [token],
+                           tokenGeometry: [SourceTokenGeometry(tokenID: token.id,
+                                                               span: span,
+                                                               rect: rect,
+                                                               quality: .word)])
+        }
+        let page = ContextOCRPage(documentSHA256: "ocr-multiline",
+                                  pageIndex: 0,
+                                  revision: ContextOCRPage.currentRevision,
+                                  mediaBox: media,
+                                  lines: [try makeLine(blockID: "row-1", text: "One row.", tokenText: "One", y: 200),
+                                          try makeLine(blockID: "row-2", text: "Second row.", tokenText: "Second", y: 180)])
+
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let selection = try XCTUnwrap(source.contextualSelection(for: 0...1, generation: 3))
+        XCTAssertEqual(selection.displaySurface, "One\nSecond")
+        XCTAssertNil(selection.sentenceContext,
+                     "The initial OCR path declines cross-line context until adjacent-row geometry can be verified")
+    }
+
     func testCoordinatorPinsCompleteOCRSourceAcrossRefreshAndHoverKeepsAnchor() throws {
         let fixture = try makeBlankPDFView()
 
@@ -50,6 +113,8 @@ final class ContextOCRSelectionTests: XCTestCase {
         XCTAssertEqual(repeatedWord.displaySurface, "charge")
         XCTAssertEqual(repeatedWord.tokens.map(\.sourceSurface), ["charge"])
         XCTAssertEqual(repeatedWord.sourceSpans, [UTF16Span(location: 7, length: 6)])
+        XCTAssertEqual(repeatedWord.sentenceContext?.selectedSourceSpans, repeatedWord.sourceSpans)
+        XCTAssertEqual(repeatedWord.sentenceContext?.kind, .fragment)
 
         let startHandle = try XCTUnwrap(fixture.view.subviews.compactMap { $0 as? SelectionHandleView }
             .first { $0.isStart })

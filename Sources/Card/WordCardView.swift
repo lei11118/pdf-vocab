@@ -64,6 +64,7 @@ struct WordCardPanel: View {
 /// to the existing dictionary card. No source sentence or translation is shown.
 struct ContextualCardView: View {
     @Environment(\.readerPanelClose) private var panelClose
+    @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     let selection: ContextualSelection
     let onClose: () -> Void
     var vocab: CardVocabBridge? = nil
@@ -102,12 +103,8 @@ struct ContextualCardView: View {
                         }
                         .padding(.trailing, panelClose == nil ? 0 : 44)
 
-                        Label("尚无可验证的语境译义", systemImage: "text.book.closed")
-                            .font(.callout)
-                            .foregroundStyle(DS.foreground2)
-                            .padding(DS.Space.m)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(DS.background2, in: RoundedRectangle(cornerRadius: DS.Radius.regular, style: .continuous))
+                        ContextualTranslationTaskView(selection: selection,
+                                                      isEnabled: contextReadingEnabled)
 
                         Button("查看词典释义") {
                             showingDictionary = true

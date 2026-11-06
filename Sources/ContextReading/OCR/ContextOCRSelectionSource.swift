@@ -132,12 +132,26 @@ struct ContextOCRSelectionSource: Sendable {
         }
 
         guard !sourceSpans.isEmpty, !selectedTokens.isEmpty else { return nil }
+        let sentenceContext: SentenceContext? = {
+            guard first.lineIndex == last.lineIndex,
+                  sourceSpans.count == 1,
+                  first.lineIndex >= 0, first.lineIndex < page.lines.count else { return nil }
+            let line = page.lines[first.lineIndex]
+            return SentenceContextBuilder.build(sourceText: line.sourceText,
+                                                 sourceStartUTF16Offset: 0,
+                                                 displayText: line.sourceText,
+                                                 selectedSourceSpans: sourceSpans,
+                                                 documentSHA256: page.documentSHA256,
+                                                 pageIndex: page.pageIndex,
+                                                 blockID: line.blockID)
+        }()
         return ContextualSelection(documentSHA256: page.documentSHA256,
                                    pageIndex: page.pageIndex,
                                    sourceSpans: sourceSpans,
                                    tokens: selectedTokens,
                                    displaySurface: displayLines.joined(separator: "\n"),
-                                   generation: generation)
+                                   generation: generation,
+                                   sentenceContext: sentenceContext)
     }
 
     func fullLineContext(for range: ClosedRange<Int>) -> String? {

@@ -36,18 +36,36 @@ enum ContextSelectionRouter {
                                         documentSHA256: documentSHA256,
                                         pageIndex: pageIndex,
                                         geometryRevision: SelectionGeometry.contextGeometryRevision(for: page))
-        return resolve(canonical: canonical,
-                       sourceSpans: sourceSpans,
-                       displaySurface: displaySurface,
-                       geometryQuality: geometryQuality,
-                       generation: generation)
+        guard var contextual = resolve(canonical: canonical,
+                                       sourceSpans: sourceSpans,
+                                       displaySurface: displaySurface,
+                                       geometryQuality: geometryQuality,
+                                       generation: generation,
+                                       allowsMultilineSentenceContext: true) else { return nil }
+        guard let candidate = contextual.sentenceContext,
+              let rawCandidate = candidate.sourceSpan.substring(in: sourceText),
+              containsLineBreak(rawCandidate) else { return contextual }
+        guard let lineSpans = NativeSentenceContextBuilder.lineSpans(in: sourceText,
+                                                                      sourceSpan: candidate.sourceSpan) else {
+            contextual.sentenceContext = nil
+            return contextual
+        }
+        let lineBoxes = lineSpans.compactMap { lineBounds(for: $0, sourceText: sourceText, page: page) }
+        guard isTrustedMultilineLayout(sourceText: sourceText,
+                                       candidate: candidate,
+                                       lineBounds: lineBoxes) else {
+            contextual.sentenceContext = nil
+            return contextual
+        }
+        return contextual
     }
 
     static func resolve(canonical: CanonicalContent,
                         sourceSpans: [UTF16Span],
                         displaySurface: String,
                         geometryQuality: SourceGeometryQuality,
-                        generation: Int) -> ContextualSelection? {
+                        generation: Int,
+                        allowsMultilineSentenceContext: Bool = false) -> ContextualSelection? {
         guard !sourceSpans.isEmpty,
               !displaySurface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
@@ -76,17 +94,27 @@ enum ContextSelectionRouter {
                                      sourceSpans: sourceSpans,
                                      displaySurface: displaySurface,
                                      geometryQuality: geometryQuality,
-                                     generation: generation)
+                                     generation: generation,
+                                     allowsMultilineSentenceContext: allowsMultilineSentenceContext)
             }
             selectedTokens = [token.withGeometryQuality(geometryQuality)]
         }
 
+        let sentenceContext = NativeSentenceContextBuilder.build(
+            sourceText: canonical.sourceText,
+            selectedSourceSpans: sourceSpans,
+            displaySurface: displaySurface,
+            documentSHA256: canonical.documentSHA256,
+            pageIndex: canonical.pageIndex,
+            allowsLineBreaks: allowsMultilineSentenceContext
+        )
         return ContextualSelection(documentSHA256: canonical.documentSHA256,
                                    pageIndex: canonical.pageIndex,
                                    sourceSpans: sourceSpans,
                                    tokens: selectedTokens,
                                    displaySurface: displaySurface,
-                                   generation: generation)
+                                   generation: generation,
+                                   sentenceContext: sentenceContext)
     }
 
     static func clearCache() {
@@ -94,6 +122,17 @@ enum ContextSelectionRouter {
         contentCache.removeAll(keepingCapacity: false)
         cacheOrder.removeAll(keepingCapacity: false)
         cacheLock.unlock()
+    }
+
+    static func isTrustedMultilineLayout(sourceText: String,
+                                         candidate: SentenceContext,
+                                         lineBounds: [CGRect]) -> Bool {
+        guard let rawCandidate = candidate.sourceSpan.substring(in: sourceText),
+              containsLineBreak(rawCandidate),
+              let lineSpans = NativeSentenceContextBuilder.lineSpans(in: sourceText,
+                                                                    sourceSpan: candidate.sourceSpan),
+              lineSpans.count == lineBounds.count else { return false }
+        return NativeSentenceContextBuilder.hasTrustedAdjacentLineGeometry(lineBounds)
     }
 
     private static func canonicalContent(sourceText: String,
@@ -131,10 +170,11 @@ enum ContextSelectionRouter {
     }
 
     private static func fallbackToken(canonical: CanonicalContent,
-                                       sourceSpans: [UTF16Span],
-                                       displaySurface: String,
-                                       geometryQuality: SourceGeometryQuality,
-                                       generation: Int) -> ContextualSelection? {
+                                      sourceSpans: [UTF16Span],
+                                      displaySurface: String,
+                                      geometryQuality: SourceGeometryQuality,
+                                      generation: Int,
+                                      allowsMultilineSentenceContext: Bool) -> ContextualSelection? {
         guard sourceSpans.count == 1,
               let span = sourceSpans.first,
               let composedRange = span.composedCharacterRange(in: canonical.sourceText),
@@ -147,12 +187,21 @@ enum ContextSelectionRouter {
                                sourceSurface: rawSurface,
                                kind: SemanticTokenizer.kind(of: displaySurface),
                                geometryQuality: geometryQuality)
+        let sentenceContext = NativeSentenceContextBuilder.build(
+            sourceText: canonical.sourceText,
+            selectedSourceSpans: sourceSpans,
+            displaySurface: displaySurface,
+            documentSHA256: canonical.documentSHA256,
+            pageIndex: canonical.pageIndex,
+            allowsLineBreaks: allowsMultilineSentenceContext
+        )
         return ContextualSelection(documentSHA256: canonical.documentSHA256,
                                    pageIndex: canonical.pageIndex,
                                    sourceSpans: sourceSpans,
                                    tokens: [seed],
                                    displaySurface: displaySurface,
-                                   generation: generation)
+                                   generation: generation,
+                                   sentenceContext: sentenceContext)
     }
 
     private static func contains(_ container: UTF16Span, _ candidate: UTF16Span) -> Bool {
@@ -163,5 +212,22 @@ enum ContextSelectionRouter {
 
     private static func nonWhitespaceContent(of source: String) -> String {
         String(source.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
+    }
+
+    private static func lineBounds(for lineSpan: UTF16Span,
+                                   sourceText: String,
+                                   page: PDFPage) -> CGRect? {
+        guard let range = lineSpan.nsRange(in: sourceText), range.length > 0 else { return nil }
+        guard let selection = page.selection(for: range) else { return nil }
+        let lineSelections = selection.selectionsByLine()
+        // A source row that wraps into several visual rows is ambiguous here;
+        // retain the word selection and omit sentence context.
+        guard lineSelections.count == 1 else { return nil }
+        let bounds = lineSelections[0].bounds(for: page)
+        return SelectionGeometry.isValid(bounds) ? bounds : nil
+    }
+
+    private static func containsLineBreak(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.newlines.contains($0) }
     }
 }

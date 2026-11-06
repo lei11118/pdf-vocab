@@ -440,7 +440,10 @@ struct ReaderView: View {
                 if !focusMode && !markMode { readerActionRail }
             }
             .overlay {
-                ReaderSafeAreaMaterialOverlay()
+                ReaderSafeAreaGaussianBlurOverlay(
+                    pdfViewProvider: { readerHandle.coordinator?.pdfView },
+                    isSceneActive: scenePhase == .active
+                )
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
             }
@@ -1247,55 +1250,6 @@ struct ReaderView: View {
         guard !suppressSave else { return }
         guard let state = readerHandle.coordinator?.captureReadingState() else { return }
         try? store.saveReadingState(state, for: doc.sha256)
-    }
-}
-
-/// Extends the PDF behind the device insets while adding only native material
-/// under the system status and home-indicator areas.
-private struct ReaderSafeAreaMaterialOverlay: UIViewRepresentable {
-    func makeUIView(context: Context) -> ReaderSystemMaterialInsetsView {
-        ReaderSystemMaterialInsetsView()
-    }
-
-    func updateUIView(_ uiView: ReaderSystemMaterialInsetsView, context: Context) {}
-}
-
-private final class ReaderSystemMaterialInsetsView: UIView {
-    // UIKit's systemMaterial is the native equivalent of SwiftUI regularMaterial.
-    private let topMaterial = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-    private let bottomMaterial = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        backgroundColor = .clear
-        for material in [topMaterial, bottomMaterial] {
-            material.isUserInteractionEnabled = false
-            addSubview(material)
-        }
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        setNeedsLayout()
-    }
-
-    override func safeAreaInsetsDidChange() {
-        super.safeAreaInsetsDidChange()
-        setNeedsLayout()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let insets = window?.safeAreaInsets ?? safeAreaInsets
-        let topHeight = min(bounds.height, max(insets.top, 0))
-        let bottomHeight = min(max(bounds.height - topHeight, 0), max(insets.bottom, 0))
-        topMaterial.frame = CGRect(x: bounds.minX, y: bounds.minY,
-                                   width: bounds.width, height: topHeight)
-        bottomMaterial.frame = CGRect(x: bounds.minX, y: bounds.maxY - bottomHeight,
-                                      width: bounds.width, height: bottomHeight)
     }
 }
 

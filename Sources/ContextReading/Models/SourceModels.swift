@@ -169,6 +169,7 @@ struct ContextualSelection: Equatable, Sendable {
     let tokens: [SourceToken]
     let displaySurface: String
     let generation: Int
+    var sentenceContext: SentenceContext? = nil
 
     var primaryToken: SourceToken? { tokens.first }
 }

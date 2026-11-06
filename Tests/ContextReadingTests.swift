@@ -133,6 +133,47 @@ final class ContextReadingModelTests: XCTestCase {
         XCTAssertEqual(routed.tokens[0].geometryQuality, .word)
         XCTAssertFalse(routed.tokens.contains { $0.sourceSurface == "next" })
     }
+
+    func testSelectionDisplayMismatchRetainsSelectionWithoutSentenceContext() throws {
+        let source = "Charge first sentence."
+        let canonical = SemanticTokenizer.canonicalize(source, documentSHA256: "display-mismatch", pageIndex: 0)
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "Charge"), in: source))
+
+        let routed = try XCTUnwrap(ContextSelectionRouter.resolve(canonical: canonical,
+                                                                  sourceSpans: [selected],
+                                                                  displaySurface: "Change",
+                                                                  geometryQuality: .word,
+                                                                  generation: 1))
+
+        XCTAssertEqual(routed.displaySurface, "Change")
+        XCTAssertEqual(routed.sourceSpans, [selected])
+        XCTAssertNil(routed.sentenceContext,
+                     "A display correction that changes selected non-whitespace characters cannot seed translation")
+    }
+
+    func testRouterRejectsMultilineSentenceAcrossPDFColumns() throws {
+        let source = "A sentence continues\non the next line."
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "continues"), in: source))
+        let candidate = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                          selectedSourceSpans: [selected],
+                                                                          displaySurface: "continues",
+                                                                          documentSHA256: "native-columns",
+                                                                          pageIndex: 0,
+                                                                          allowsLineBreaks: true))
+
+        XCTAssertTrue(ContextSelectionRouter.isTrustedMultilineLayout(sourceText: source,
+                                                                       candidate: candidate,
+                                                                       lineBounds: [
+                                                                           CGRect(x: 40, y: 200, width: 180, height: 16),
+                                                                           CGRect(x: 42, y: 180, width: 140, height: 16)
+                                                                       ]))
+        XCTAssertFalse(ContextSelectionRouter.isTrustedMultilineLayout(sourceText: source,
+                                                                        candidate: candidate,
+                                                                        lineBounds: [
+                                                                            CGRect(x: 35, y: 200, width: 180, height: 16),
+                                                                            CGRect(x: 430, y: 180, width: 160, height: 16)
+                                                                        ]))
+    }
 }
 
 private extension NSRange {

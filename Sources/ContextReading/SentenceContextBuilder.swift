@@ -6,9 +6,9 @@ enum SentenceContextKind: Equatable, Sendable {
     case fragment
 }
 
-/// A single-line sentence candidate tied to the exact OCR source and display
-/// ranges that produced it. Source spans retain the caller-provided UTF-16
-/// coordinate system; display spans are relative to `displayLineText`.
+/// A sentence candidate tied to its exact source and display ranges. Source
+/// spans retain the caller-provided UTF-16 coordinate system; display spans
+/// are relative to `displayLineText`.
 struct SentenceContext: Equatable, Sendable {
     let documentSHA256: String
     let pageIndex: Int
@@ -242,7 +242,7 @@ enum SentenceContextBuilder {
         return container.location <= candidate.location && candidateEnd <= containerEnd
     }
 
-    private static func isCompleteSentence(_ text: String) -> Bool {
+    static func isCompleteSentence(_ text: String) -> Bool {
         guard let first = text.first,
               let initialScalar = first.unicodeScalars.first,
               CharacterSet.uppercaseLetters.contains(initialScalar) else { return false }
@@ -268,5 +268,252 @@ enum SentenceContextBuilder {
 
     private static func rawUTF16(_ text: String) -> [UInt16] {
         Array(text.utf16)
+    }
+}
+
+/// Builds a native PDF sentence from the page's exact source ranges. PDFKit
+/// ranges stay page-relative; only CR/LF characters are changed to equal-width
+/// spaces in the text sent to the sentence service.
+enum NativeSentenceContextBuilder {
+    static let maximumSentenceUTF16Units = 2_048
+
+    static func build(sourceText: String,
+                      selectedSourceSpans: [UTF16Span],
+                      displaySurface: String,
+                      documentSHA256: String,
+                      pageIndex: Int,
+                      allowsLineBreaks: Bool = false) -> SentenceContext? {
+        let source = sourceText as NSString
+        guard source.length > 0,
+              !documentSHA256.isEmpty, pageIndex >= 0,
+              !selectedSourceSpans.isEmpty,
+              !displaySurface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        let orderedSpans = selectedSourceSpans.sorted {
+            $0.location == $1.location ? $0.length < $1.length : $0.location < $1.location
+        }
+        var previousEnd = -1
+        for span in orderedSpans {
+            guard span.length > 0,
+                  let end = span.endExclusive,
+                  end <= source.length,
+                  span.composedCharacterRange(in: sourceText) != nil,
+                  span.location >= previousEnd else { return nil }
+            previousEnd = end
+        }
+
+        guard selectionMatchesDisplay(orderedSpans,
+                                      sourceText: sourceText,
+                                      displaySurface: displaySurface),
+              let selectedStart = orderedSpans.first?.location,
+              let selectedEnd = orderedSpans.compactMap(\.endExclusive).max(),
+              selectedEnd - selectedStart <= maximumSentenceUTF16Units else { return nil }
+
+        let windowStart = max(0, selectedStart - maximumSentenceUTF16Units)
+        let (unboundedEnd, overflow) = selectedEnd.addingReportingOverflow(maximumSentenceUTF16Units)
+        guard !overflow else { return nil }
+        let windowEnd = min(source.length, unboundedEnd)
+        guard let windowRange = composedRange(from: windowStart,
+                                              to: windowEnd,
+                                              in: sourceText),
+              windowRange.length > 0 else { return nil }
+        let rawWindow = source.substring(with: windowRange)
+        let windowText = replacingLineBreaks(in: rawWindow)
+        let windowNSString = windowText as NSString
+        let localSelections = orderedSpans.map {
+            UTF16Span(location: $0.location - windowRange.location, length: $0.length)
+        }
+
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = windowText
+        var sentenceRanges: [NSRange] = []
+        tokenizer.enumerateTokens(in: windowText.startIndex..<windowText.endIndex) { tokenRange, _ in
+            let range = NSRange(tokenRange, in: windowText)
+            if range.location != NSNotFound, range.length > 0 {
+                sentenceRanges.append(range)
+            }
+            return true
+        }
+        let containing = sentenceRanges.filter { range in
+            localSelections.allSatisfy { contains(range, $0) }
+        }
+        guard containing.count == 1,
+              let tokenizedRange = containing.first,
+              !(tokenizedRange.location == 0 && windowRange.location > 0),
+              !(NSMaxRange(tokenizedRange) == windowNSString.length && NSMaxRange(windowRange) < source.length),
+              let coreRange = trimmedRange(tokenizedRange, in: windowText),
+              localSelections.allSatisfy({ contains(coreRange, $0) }) else { return nil }
+
+        let globalCoreRange = NSRange(location: windowRange.location + coreRange.location,
+                                      length: coreRange.length)
+        guard globalCoreRange.length <= maximumSentenceUTF16Units,
+              let sourceSpan = UTF16Span(range: globalCoreRange, in: sourceText),
+              let rawSentence = sourceSpan.substring(in: sourceText),
+              !hasBlankLine(in: sourceText, span: sourceSpan) else { return nil }
+
+        let sourceContainsLineBreak = rawSentence.unicodeScalars.contains {
+            CharacterSet.newlines.contains($0)
+        }
+        guard !sourceContainsLineBreak || allowsLineBreaks else { return nil }
+
+        let normalizedSentence = windowNSString.substring(with: coreRange)
+
+        let selectedDisplaySpans = selectedSourceSpans.compactMap { span -> UTF16Span? in
+            guard span.location >= globalCoreRange.location,
+                  let end = span.endExclusive,
+                  end <= NSMaxRange(globalCoreRange) else { return nil }
+            return UTF16Span(location: span.location - globalCoreRange.location,
+                             length: span.length)
+        }
+        guard selectedDisplaySpans.count == selectedSourceSpans.count else { return nil }
+
+        let displaySpan = UTF16Span(location: 0, length: globalCoreRange.length)
+        return SentenceContext(documentSHA256: documentSHA256,
+                               pageIndex: pageIndex,
+                               blockID: "native-page-\(pageIndex)",
+                               text: normalizedSentence,
+                               displayLineText: normalizedSentence,
+                               displaySentenceText: normalizedSentence,
+                               sourceSpan: sourceSpan,
+                               displaySpan: displaySpan,
+                               selectedSourceSpans: selectedSourceSpans,
+                               selectedDisplaySpans: selectedDisplaySpans,
+                               kind: SentenceContextBuilder.isCompleteSentence(normalizedSentence)
+                                ? .completeSentence : .fragment)
+    }
+
+    /// True only when each extracted source row is geometrically adjacent to
+    /// the previous row and remains in the same horizontal column.
+    static func hasTrustedAdjacentLineGeometry(_ lineBounds: [CGRect]) -> Bool {
+        guard lineBounds.count >= 2,
+              lineBounds.allSatisfy(isValidGeometry) else { return false }
+        for pair in zip(lineBounds, lineBounds.dropFirst()) {
+            let previous = pair.0
+            let next = pair.1
+            let minimumHeight = min(previous.height, next.height)
+            let maximumHeight = max(previous.height, next.height)
+            let downwardBaselineDelta = previous.midY - next.midY
+            guard downwardBaselineDelta > minimumHeight * 0.3,
+                  downwardBaselineDelta <= maximumHeight * 2.4 else { return false }
+
+            let minimumWidth = min(previous.width, next.width)
+            let horizontalOverlap = max(0, min(previous.maxX, next.maxX) - max(previous.minX, next.minX))
+            let overlapRatio = horizontalOverlap / minimumWidth
+            let leftEdgeDrift = abs(previous.minX - next.minX)
+            guard overlapRatio >= 0.25,
+                  leftEdgeDrift <= maximumHeight * 2 || overlapRatio >= 0.6 else {
+                return false
+            }
+        }
+        return true
+    }
+
+    static func lineSpans(in sourceText: String, sourceSpan: UTF16Span) -> [UTF16Span]? {
+        guard let range = sourceSpan.nsRange(in: sourceText), range.length > 0 else { return nil }
+        let source = sourceText as NSString
+        let end = NSMaxRange(range)
+        var lineStart = range.location
+        var offset = lineStart
+        var spans: [UTF16Span] = []
+        while offset < end {
+            let unit = source.character(at: offset)
+            guard unit == 0x000A || unit == 0x000D else {
+                offset += 1
+                continue
+            }
+            spans.append(UTF16Span(location: lineStart, length: offset - lineStart))
+            let isCRLF = unit == 0x000D && offset + 1 < end && source.character(at: offset + 1) == 0x000A
+            offset += isCRLF ? 2 : 1
+            lineStart = offset
+        }
+        spans.append(UTF16Span(location: lineStart, length: end - lineStart))
+        return spans
+    }
+
+    private static func selectionMatchesDisplay(_ spans: [UTF16Span],
+                                                sourceText: String,
+                                                displaySurface: String) -> Bool {
+        let sourceScalars = spans.compactMap { $0.substring(in: sourceText) }
+            .flatMap { text in
+                text.unicodeScalars
+                    .filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+                    .map { $0.value }
+            }
+        let displayScalars = displaySurface.unicodeScalars
+            .filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+            .map(\.value)
+        return sourceScalars == displayScalars
+    }
+
+    private static func replacingLineBreaks(in text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.map { scalar in
+            scalar.value == 0x000A || scalar.value == 0x000D ? Unicode.Scalar(0x20)! : scalar
+        }))
+    }
+
+    private static func composedRange(from start: Int, to end: Int, in text: String) -> NSRange? {
+        let nsText = text as NSString
+        guard start >= 0, end > start, end <= nsText.length else { return nil }
+        var lower = start
+        var upper = end
+        if lower > 0, lower < nsText.length {
+            lower = nsText.rangeOfComposedCharacterSequence(at: lower).location
+        }
+        if upper > 0, upper < nsText.length {
+            let sequence = nsText.rangeOfComposedCharacterSequence(at: upper - 1)
+            upper = NSMaxRange(sequence)
+        }
+        return upper > lower ? NSRange(location: lower, length: upper - lower) : nil
+    }
+
+    private static func trimmedRange(_ range: NSRange, in text: String) -> NSRange? {
+        let nsText = text as NSString
+        guard range.location >= 0, range.length > 0,
+              range.location <= nsText.length,
+              range.length <= nsText.length - range.location else { return nil }
+        let nonWhitespace = CharacterSet.whitespacesAndNewlines.inverted
+        let first = nsText.rangeOfCharacter(from: nonWhitespace, options: [], range: range)
+        let last = nsText.rangeOfCharacter(from: nonWhitespace, options: .backwards, range: range)
+        guard first.location != NSNotFound, last.location != NSNotFound else { return nil }
+        let end = NSMaxRange(last)
+        return end > first.location ? NSRange(location: first.location, length: end - first.location) : nil
+    }
+
+    private static func contains(_ container: NSRange, _ candidate: UTF16Span) -> Bool {
+        guard let candidateEnd = candidate.endExclusive else { return false }
+        return container.location <= candidate.location && candidateEnd <= NSMaxRange(container)
+    }
+
+    private static func hasBlankLine(in sourceText: String, span: UTF16Span) -> Bool {
+        guard let range = span.nsRange(in: sourceText) else { return true }
+        let source = (sourceText as NSString).substring(with: range)
+        var currentLine: [Unicode.Scalar] = []
+        var hasSeenBreak = false
+        var previousWasCR = false
+        for scalar in source.unicodeScalars {
+            if scalar.value == 0x000A || scalar.value == 0x000D {
+                if scalar.value == 0x000A && previousWasCR {
+                    previousWasCR = false
+                    continue
+                }
+                if hasSeenBreak && currentLine.allSatisfy({ CharacterSet.whitespaces.contains($0) }) {
+                    return true
+                }
+                currentLine.removeAll(keepingCapacity: true)
+                hasSeenBreak = true
+                previousWasCR = scalar.value == 0x000D
+            } else {
+                currentLine.append(scalar)
+                previousWasCR = false
+            }
+        }
+        return false
+    }
+
+    private static func isValidGeometry(_ rect: CGRect) -> Bool {
+        !rect.isNull && !rect.isInfinite
+            && rect.minX.isFinite && rect.maxX.isFinite
+            && rect.minY.isFinite && rect.maxY.isFinite
+            && rect.width > 0 && rect.height > 0
     }
 }
