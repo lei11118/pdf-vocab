@@ -69,6 +69,9 @@ private struct ReaderSentenceTranslationContent: View {
                 else if let failure { Text(failure) }
                 else if translated.isEmpty { ProgressView("正在端侧翻译…") }
                 else { Text(translated).textSelection(.enabled) }
+                if cached == nil {
+                    OfflineTranslationPreparationView().padding(.top, DS.Space.xs)
+                }
             }.font(DS.Fonts.body).lineSpacing(4).frame(maxWidth:.infinity,alignment:.leading).padding(DS.Space.m)
         }.background { if cached == nil { if #available(iOS 18.0, *) { SentenceTranslationTask(text:text,onResult:{translated = $0},onError:{failure = $0}) } } }
             .onAppear { if #unavailable(iOS 18.0) { failure = "端侧翻译需要 iPadOS 18 或更高版本" } }
