@@ -151,12 +151,12 @@ struct ContextualTranslationRequest: Equatable, Sendable {
             phraseGroup = nil
         }
         let selectedIDs = phraseGroup.map { [$0.id] } ?? selectedIndices.map { tokens[$0].id }
-        let selectedPhrase = phraseGroup?.sourceSurface ?? selectedPhrase
+        let resolvedSelectedPhrase = phraseGroup?.sourceSurface ?? selectedPhrase
         return ContextualTranslationRequest(sentenceText: context.text,
                                             tokens: tokens,
                                             selectedTokenIDs: selectedIDs,
                                             selectedSourceSpans: localSelections,
-                                            selectedSourcePhrase: selectedPhrase,
+                                            selectedSourcePhrase: resolvedSelectedPhrase,
                                             selectedPhraseGroup: phraseGroup)
     }
 
