@@ -130,10 +130,14 @@ final class OfflineTranslationPreparationModel: ObservableObject {
             to: Locale.Language(identifier: StandaloneSentenceTranslationCache.targetLanguageIdentifier)
         )
         switch status {
-        case .installed: .installed
-        case .supported: .supported
-        case .unsupported: .unsupported
-        @unknown default: .unsupported
+        case .installed:
+            return OfflineTranslationAvailability.installed
+        case .supported:
+            return OfflineTranslationAvailability.supported
+        case .unsupported:
+            return OfflineTranslationAvailability.unsupported
+        @unknown default:
+            return OfflineTranslationAvailability.unsupported
         }
     }
 }
