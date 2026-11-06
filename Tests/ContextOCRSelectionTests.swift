@@ -121,6 +121,119 @@ final class ContextOCRSelectionTests: XCTestCase {
         XCTAssertEqual(refreshed.tokens.first?.blockID, "replacement-row")
     }
 
+    func testOCRHoverAnnotationTracksCurrentRectAndCleansOnExitCancelAndModeChanges() throws {
+        let fixture = try makeBlankPDFView()
+        defer { fixture.close() }
+        let sha = "context-ocr-hover-annotation-\(UUID().uuidString)"
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { _ in })
+        coordinator.pdfView = fixture.view
+        coordinator.docSha = sha
+        coordinator.hapticsEnabled = false
+        coordinator.setContextReadingMode(true, generation: 7)
+        coordinator.installGestures(on: fixture.view)
+
+        let source = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
+                                  blockID: "hover-row", text: "charge charge",
+                                  tokens: [
+                                    TokenFixture(text: "charge", span: UTF16Span(location: 0, length: 6), kind: .word,
+                                                 rect: CGRect(x: 40, y: 180, width: 44, height: 20)),
+                                    TokenFixture(text: "charge", span: UTF16Span(location: 7, length: 6), kind: .word,
+                                                 rect: CGRect(x: 100, y: 180, width: 44, height: 20))
+                                  ])
+        XCTAssertTrue(coordinator.installContextOCRPage(source, generation: 7))
+        let words = try XCTUnwrap(ContextOCRSelectionSource(page: source)?.words)
+        let firstRect = OCRService.pageRect(from: words[0], pageBounds: fixture.page.bounds(for: .mediaBox))
+        let secondRect = OCRService.pageRect(from: words[1], pageBounds: fixture.page.bounds(for: .mediaBox))
+        let firstPoint = fixture.view.convert(CGPoint(x: 62, y: 190), from: fixture.page)
+        let secondPoint = fixture.view.convert(CGPoint(x: 122, y: 190), from: fixture.page)
+        var hoverAnchors: [CGPoint] = []
+        var hoverEndCount = 0
+        coordinator.onHoverUpdate = { _, _, anchor in hoverAnchors.append(anchor) }
+        coordinator.onHoverEnd = { hoverEndCount += 1 }
+
+        func hover(_ point: CGPoint, state: UIGestureRecognizer.State = .changed) {
+            let gesture = ContextOCRHover(point: point)
+            gesture.testState = state
+            coordinator.perform(NSSelectorFromString("handleHover:"), with: gesture)
+        }
+
+        hover(firstPoint, state: .began)
+        let firstAnnotation = try XCTUnwrap(fixture.page.annotations.first)
+        XCTAssertEqual(firstAnnotation.bounds, firstRect)
+        XCTAssertEqual(fixture.page.annotations.count, 1)
+        hover(firstPoint)
+        XCTAssertEqual(fixture.page.annotations.count, 1, "Repeated updates for one page rectangle reuse the transient annotation")
+        XCTAssertTrue(fixture.page.annotations.first === firstAnnotation)
+
+        hover(secondPoint)
+        XCTAssertEqual(fixture.page.annotations.count, 1, "Moving over the same lemma replaces its old rectangle")
+        XCTAssertEqual(try XCTUnwrap(fixture.page.annotations.first).bounds, secondRect)
+        XCTAssertNotEqual(hoverAnchors.first?.x, hoverAnchors.last?.x,
+                          "The definition anchor follows the new occurrence of the same lemma")
+
+        hover(fixture.view.convert(CGPoint(x: 330, y: 250), from: fixture.page))
+        XCTAssertTrue(fixture.page.annotations.isEmpty, "Leaving OCR text removes the transient annotation")
+
+        hover(firstPoint, state: .began)
+        hover(firstPoint, state: .cancelled)
+        XCTAssertTrue(fixture.page.annotations.isEmpty, "Cancellation removes the transient annotation")
+
+        hover(firstPoint, state: .began)
+        coordinator.setMarkMode(true)
+        XCTAssertTrue(fixture.page.annotations.isEmpty, "Switching to writing mode clears hover state")
+        coordinator.setMarkMode(false)
+        hover(firstPoint, state: .began)
+        coordinator.setContextReadingMode(false, generation: 8)
+        XCTAssertTrue(fixture.page.annotations.isEmpty, "Switching OCR reading mode clears hover state")
+        XCTAssertGreaterThan(hoverEndCount, 0)
+
+        let savedData = try XCTUnwrap(fixture.document.dataRepresentation())
+        let reopened = try XCTUnwrap(PDFDocument(data: savedData))
+        XCTAssertTrue(try XCTUnwrap(reopened.page(at: 0)).annotations.isEmpty,
+                       "Cleared hover annotations are not present in serialized PDF data")
+    }
+
+    func testNativeHoverForSameLemmaMovesAnnotationAcrossOccurrences() throws {
+        let fixture = try makeNativeTextPDFView()
+        defer { fixture.close() }
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { _ in })
+        coordinator.pdfView = fixture.view
+        coordinator.docSha = "native-hover-annotation-\(UUID().uuidString)"
+        coordinator.hapticsEnabled = false
+        coordinator.installGestures(on: fixture.view)
+
+        let text = try XCTUnwrap(fixture.page.string) as NSString
+        let firstCandidate = text.range(of: "charge")
+        let firstRange = try XCTUnwrap(firstCandidate.location == NSNotFound ? nil : firstCandidate)
+        let secondStart = NSMaxRange(firstRange)
+        let secondCandidate = text.range(of: "charge", options: [],
+                                         range: NSRange(location: secondStart, length: text.length - secondStart))
+        let secondRange = try XCTUnwrap(secondCandidate.location == NSNotFound ? nil : secondCandidate)
+        let firstWord = try XCTUnwrap(fixture.page.selection(for: firstRange))
+        let secondWord = try XCTUnwrap(fixture.page.selection(for: secondRange))
+        let firstPoint = fixture.view.convert(CGPoint(x: firstWord.bounds(for: fixture.page).midX,
+                                                       y: firstWord.bounds(for: fixture.page).midY),
+                                              from: fixture.page)
+        let secondPoint = fixture.view.convert(CGPoint(x: secondWord.bounds(for: fixture.page).midX,
+                                                        y: secondWord.bounds(for: fixture.page).midY),
+                                               from: fixture.page)
+        var anchors: [CGPoint] = []
+        coordinator.onHoverUpdate = { _, _, anchor in anchors.append(anchor) }
+        func hover(_ point: CGPoint) {
+            coordinator.perform(NSSelectorFromString("handleHover:"), with: ContextOCRHover(point: point))
+        }
+
+        hover(firstPoint)
+        XCTAssertEqual(fixture.page.annotations.count, 1)
+        let firstAnnotationRect = try XCTUnwrap(fixture.page.annotations.first).bounds
+        hover(secondPoint)
+        XCTAssertEqual(fixture.page.annotations.count, 1)
+        let secondAnnotationRect = try XCTUnwrap(fixture.page.annotations.first).bounds
+        XCTAssertNotEqual(firstAnnotationRect, secondAnnotationRect,
+                          "The same native word at a different position must move its yellow hint")
+        XCTAssertNotEqual(anchors.first?.x, anchors.last?.x)
+    }
+
     func testInstallRejectsStaleGenerationDocumentPageMediaAndRevision() throws {
         let fixture = try makeBlankPDFView()
         defer { fixture.close() }
@@ -569,6 +682,34 @@ final class ContextOCRSelectionTests: XCTestCase {
         return PDFViewFixture(document: document, page: page, view: view, window: window,
                               controller: controller, previousKeyWindow: previous, mediaBox: actualMediaBox)
     }
+
+    private func makeNativeTextPDFView() throws -> PDFViewFixture {
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            ("charge        charge" as NSString).draw(at: CGPoint(x: 40, y: 180),
+                                                       withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let actualMediaBox = try XCTUnwrap(SourceRect(rect: page.bounds(for: .mediaBox)))
+        let view = VocabPDFView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        controller.view = view
+        window.frame = view.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        view.displayMode = .singlePage
+        view.document = document
+        view.scaleFactor = 1.5
+        view.layoutDocumentView()
+        view.go(to: page)
+        return PDFViewFixture(document: document, page: page, view: view, window: window,
+                              controller: controller, previousKeyWindow: previous, mediaBox: actualMediaBox)
+    }
 }
 
 private struct TokenFixture {
@@ -638,8 +779,9 @@ private final class ContextOCRHandlePan: UIPanGestureRecognizer {
 
 @MainActor
 private final class ContextOCRHover: UIHoverGestureRecognizer {
-    private let point: CGPoint
+    var point: CGPoint
+    var testState: UIGestureRecognizer.State = .began
     init(point: CGPoint) { self.point = point; super.init(target: nil, action: nil) }
-    override var state: UIGestureRecognizer.State { get { .began } set {} }
+    override var state: UIGestureRecognizer.State { get { testState } set { testState = newValue } }
     override func location(in view: UIView?) -> CGPoint { point }
 }

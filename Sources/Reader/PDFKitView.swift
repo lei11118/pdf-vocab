@@ -118,6 +118,7 @@ struct PDFKitView: UIViewRepresentable {
             DiagLog.log("pdf.open: failed file=\(url.lastPathComponent)")
             DispatchQueue.main.async { onLoadFailed() }
         }
+        view.installReadingEdgeInsets()
         return view
     }
 
@@ -171,6 +172,7 @@ struct PDFKitView: UIViewRepresentable {
             context.coordinator.installContextOCRPage(contextOCRPage,
                                                       generation: contextReadingGeneration)
         }
+        (uiView as? VocabPDFView)?.installReadingEdgeInsets()
     }
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: ReaderCoordinator) {

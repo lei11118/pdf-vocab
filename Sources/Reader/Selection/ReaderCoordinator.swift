@@ -106,7 +106,7 @@ final class ReaderCoordinator: NSObject {
     var onHoverUpdate: ((String, String, CGPoint) -> Void)?
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
-    private var hoverEntry: (page: PDFPage, annotation: PDFAnnotation)?
+    private var hoverEntry: (page: PDFPage, rect: CGRect, annotation: PDFAnnotation)?
 
     /// v0.11.0(M6):扫描版 OCR 取词
     var ocrStore: OCRStore?
@@ -987,12 +987,19 @@ final class ReaderCoordinator: NSObject {
                 let text = words[index].text
                 let term = WordPicker.firstLexicalWord(in:text) ?? text
                 let key = VocabStore.normalizedKey(term)
-                if !key.isEmpty {
-                    let rect = pdfView.convert(OCRService.pageRect(from:words[index],pageBounds:hit.page.bounds(for:.mediaBox)),from:hit.page)
-                    hoverKey = key
-                    onHoverUpdate?(term,key,CGPoint(x:rect.midX,y:rect.minY))
+                guard !key.isEmpty,
+                      let pageRect = hoverPageRect(for: hit.page, ocrWord: words[index]) else {
+                    clearHover()
                     return
                 }
+                let rectChanged = setHoverAnnotation(page: hit.page, rect: pageRect)
+                let keyChanged = key != hoverKey
+                hoverKey = key
+                if keyChanged || rectChanged {
+                    let rect = pdfView.convert(pageRect, from: hit.page)
+                    onHoverUpdate?(term,key,CGPoint(x:rect.midX,y:rect.minY))
+                }
+                return
             }
             guard let hit = pageHit(viewPoint),
                   let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
@@ -1007,12 +1014,17 @@ final class ReaderCoordinator: NSObject {
                 clearHover()
                 return
             }
-            if key != hoverKey {
-                hoverKey = key
-                setHoverAnnotation(page: hit.page, word: word)
-                let wordRect = pdfView.convert(SelectionGeometry.placedBounds(of:word,on:hit.page), from: hit.page)
+            guard let pageRect = hoverPageRect(for: hit.page, selection: word) else {
+                clearHover()
+                return
+            }
+            let rectChanged = setHoverAnnotation(page: hit.page, rect: pageRect)
+            let keyChanged = key != hoverKey
+            hoverKey = key
+            if keyChanged || rectChanged {
+                let wordRect = pdfView.convert(pageRect, from: hit.page)
                 onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
-                DiagLog.log("hover: 「\(term)」")
+                if keyChanged { DiagLog.log("hover: 「\(term)」") }
             }
         case .ended, .cancelled, .failed:
             clearHover()
@@ -1021,14 +1033,46 @@ final class ReaderCoordinator: NSObject {
         }
     }
 
-    private func setHoverAnnotation(page: PDFPage, word: PDFSelection) {
+    private func hoverPageRect(for page: PDFPage,
+                               selection: PDFSelection? = nil,
+                               ocrWord: OCRWord? = nil) -> CGRect? {
+        let candidate: CGRect
+        if let selection {
+            candidate = SelectionGeometry.placedBounds(of: selection, on: page)
+        } else if let ocrWord {
+            candidate = OCRService.pageRect(from: ocrWord, pageBounds: page.bounds(for: .mediaBox))
+        } else {
+            return nil
+        }
+        let pageBounds = page.bounds(for: .mediaBox)
+        guard SelectionGeometry.isValid(candidate),
+              SelectionGeometry.isValid(pageBounds) else { return nil }
+        let clipped = candidate.intersection(pageBounds)
+        return SelectionGeometry.isValid(clipped) ? clipped : nil
+    }
+
+    @discardableResult
+    private func setHoverAnnotation(page: PDFPage, rect: CGRect) -> Bool {
+        if let entry = hoverEntry,
+           entry.page === page,
+           Self.hoverRectsMatch(entry.rect, rect) {
+            return false
+        }
         removeHoverAnnotation()
-        let rect = word.bounds(for: page)
-        guard SelectionGeometry.isValid(rect) else { return }
+        guard SelectionGeometry.isValid(rect) else { return false }
         let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
         annotation.color = UIColor.systemYellow.withAlphaComponent(0.28)
         page.addAnnotation(annotation)
-        hoverEntry = (page, annotation)
+        hoverEntry = (page, rect, annotation)
+        return true
+    }
+
+    private static func hoverRectsMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        let tolerance: CGFloat = 0.5
+        return abs(lhs.minX - rhs.minX) <= tolerance
+            && abs(lhs.minY - rhs.minY) <= tolerance
+            && abs(lhs.width - rhs.width) <= tolerance
+            && abs(lhs.height - rhs.height) <= tolerance
     }
 
     private func removeHoverAnnotation() {
@@ -2160,10 +2204,12 @@ final class ReaderCoordinator: NSObject {
         if autoScrollView == nil {
             autoScrollView = PencilTouchIsolation.scrollViews(in: pdfView).first
         }
-        guard let scroll = autoScrollView, scroll.contentSize.height > scroll.bounds.height else { return }
+        guard let scroll = autoScrollView else { return }
+        let minY = -scroll.adjustedContentInset.top
+        let maxY = max(minY, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        guard maxY > minY else { return }
         let dt = max(link.targetTimestamp - link.timestamp, 1.0 / 120.0)
-        let maxY = max(scroll.contentSize.height - scroll.bounds.height, 0)
-        let next = min(max(scroll.contentOffset.y + autoScrollSpeed * CGFloat(dt), 0), maxY)
+        let next = min(max(scroll.contentOffset.y + autoScrollSpeed * CGFloat(dt), minY), maxY)
         guard abs(next - scroll.contentOffset.y) > 0.1 else { return }
         scroll.contentOffset = CGPoint(x: scroll.contentOffset.x, y: next)
     }
@@ -2880,7 +2926,9 @@ final class ReaderCoordinator: NSObject {
         } else if touchViewPoint.y > height - edge {
             speed = (touchViewPoint.y - (height - edge)) / edge * 7
         }
-        let canScroll = sv.contentSize.height > sv.bounds.height + 1
+        let availableContentHeight = sv.contentSize.height
+            + sv.adjustedContentInset.top + sv.adjustedContentInset.bottom
+        let canScroll = availableContentHeight > sv.bounds.height + 1
         if abs(speed) > 0.5, canScroll {
             autoscrollSpeed = speed
             if autoscrollLink == nil {

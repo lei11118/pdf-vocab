@@ -27,6 +27,51 @@ final class ReaderRouteUITests:XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+    func testReaderCanvasAndOverlayRootStayFullBleedAcrossOrientations() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let document = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
+        if document.waitForExistence(timeout:10) { document.tap() }
+
+        let canvasRoot = app.descendants(matching:.any).matching(identifier:"reader.canvas-root").firstMatch
+        let pdfCanvas = app.descendants(matching:.any).matching(identifier:"reader.pdf-canvas").firstMatch
+        let topAction = app.buttons["更多"].firstMatch
+        let bottomMode = app.buttons["标记模式"].firstMatch
+        XCTAssertTrue(canvasRoot.waitForExistence(timeout:20))
+        XCTAssertTrue(pdfCanvas.waitForExistence(timeout:10))
+        XCTAssertTrue(topAction.waitForExistence(timeout:10))
+        XCTAssertTrue(bottomMode.waitForExistence(timeout:10))
+
+        for (orientation, name) in [(UIDeviceOrientation.portrait,"reader-canvas-portrait"),
+                                    (.landscapeLeft,"reader-canvas-landscape")] {
+            XCUIDevice.shared.orientation = orientation
+            let ready = NSPredicate { _,_ in
+                let frame = app.frame
+                let expected = orientation == .portrait ? frame.height > frame.width : frame.width > frame.height
+                return expected && canvasRoot.exists && pdfCanvas.exists
+            }
+            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:app)],timeout:10),.completed)
+
+            let rootFrame = canvasRoot.frame
+            let pdfFrame = pdfCanvas.frame
+            XCTAssertEqual(pdfFrame.minX,rootFrame.minX,accuracy:1)
+            XCTAssertEqual(pdfFrame.minY,rootFrame.minY,accuracy:1)
+            XCTAssertEqual(pdfFrame.width,rootFrame.width,accuracy:2)
+            XCTAssertEqual(pdfFrame.height,rootFrame.height,accuracy:2)
+            XCTAssertEqual(rootFrame.minY,app.frame.minY,accuracy:1,"PDF and coordinate overlays reach the top system inset")
+            XCTAssertEqual(rootFrame.maxY,app.frame.maxY,accuracy:1,"PDF and coordinate overlays reach the bottom system inset")
+            XCTAssertGreaterThan(topAction.frame.minY,rootFrame.minY,"Top reader controls remain inside the safe area")
+            XCTAssertLessThan(bottomMode.frame.maxY,rootFrame.maxY,"The bottom dock remains inside the safe area")
+
+            let screenshot = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+            screenshot.name = name
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+        }
+        XCUIDevice.shared.orientation = .portrait
+    }
     func testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen() {
         let app = XCUIApplication()
         app.launchArguments = ["--gesture-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
