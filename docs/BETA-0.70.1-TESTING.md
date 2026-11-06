@@ -2,7 +2,7 @@
 
 版本：`0.70.1`（build `119`）
 
-用途：内部测试版。CI 与真机结果尚待本次验证流程回填；本文中的检查项不代表已经通过。
+用途：内部测试版。CI 结果已记录；真机清单仍待实际设备验证。
 
 ## 本次改动
 
@@ -21,9 +21,9 @@
 
 | 检查项 | 结果 |
 |---|---|
-| 完整 `test-ink`（单元及 UI 回归） | 待本次 CI 回填 |
-| 同 SHA `build-ipa` | 待本次 CI 回填 |
-| IPA SHA-256 | 待本次 CI 回填 |
+| 完整 `test-ink`（单元及 UI 回归） | [run 42159708324](https://github.com/lei11118/pdf-vocab/actions/runs/42159708324) 成功：187 个单元测试 + 5 个 UI 测试，共 192 项、0 失败 |
+| `build-ipa` | [run 42159718867](https://github.com/lei11118/pdf-vocab/actions/runs/42159718867) 成功；与 `test-ink` 同源代码 SHA：`76f4b92b50536bc2c84c7e9cf7b2f816c3797bf0` |
+| IPA SHA-256 | `E007C67BE977087D27208278CF928DECC5379CA974AF91D1B3D00B06C3A06018` |
 
 ## 真机回归清单
 
