@@ -11,8 +11,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.70.1"
-    CURRENT_PROJECT_VERSION: "119"
+    MARKETING_VERSION: "0.70.2"
+    CURRENT_PROJECT_VERSION: "120"
 
 packages:
   GRDB:
