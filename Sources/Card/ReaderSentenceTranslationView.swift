@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import Translation
 
@@ -44,8 +45,19 @@ struct SentenceTranslationRequest: Equatable {
 struct ReaderSentenceTranslationView: View {
     let text: String
     var cached: String? = nil
+
+    var body: some View {
+        ReaderSentenceTranslationContent(text: text, cached: cached)
+            .id(Data(text.utf8))
+    }
+}
+
+private struct ReaderSentenceTranslationContent: View {
+    let text: String
+    let cached: String?
     @State private var translated = ""
     @State private var failure: String?
+
     var body: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:16) {
@@ -69,9 +81,109 @@ struct SentenceTranslationTask: View {
     let onError: (String) -> Void
     var body: some View {
         Color.clear.frame(width:0,height:0)
-            .translationTask(source:Locale.Language(identifier:"en"),target:Locale.Language(identifier:"zh-Hans")) { session in
-                do { onResult(try await session.translate(text).targetText) }
-                catch { onError("翻译失败：\(error.localizedDescription)") }
+            .translationTask(source:Locale.Language(identifier:StandaloneSentenceTranslationCache.sourceLanguageIdentifier),
+                             target:Locale.Language(identifier:StandaloneSentenceTranslationCache.targetLanguageIdentifier)) { session in
+                do {
+                    try Task.checkCancellation()
+                    if let cached = await StandaloneSentenceTranslationCache.shared.translation(for: text) {
+                        try Task.checkCancellation()
+                        onResult(cached)
+                        return
+                    }
+
+                    // Keep the TranslationSession inside this callback. It is
+                    // supplied by SwiftUI and must not be retained by the cache.
+                    let result = try await session.translate(text).targetText
+                    try Task.checkCancellation()
+                    try await StandaloneSentenceTranslationCache.shared.store(result, for: text)
+                    try Task.checkCancellation()
+                    onResult(result)
+                } catch {
+                    guard !(error is CancellationError), !Task.isCancelled else { return }
+                    onError("翻译失败：\(error.localizedDescription)")
+                }
             }
+            .id(Data(text.utf8))
+    }
+}
+
+/// A bounded cache for the standalone sentence-translation route. It is
+/// intentionally independent from the context-reading feature switch and
+/// complete-sentence validation used by `SentenceTranslationService`.
+actor StandaloneSentenceTranslationCache {
+    static let shared = StandaloneSentenceTranslationCache()
+    static let maximumCachedEntries = 32
+    static let maximumOutputUTF16Units = 8_192
+    static let sourceLanguageIdentifier = "en"
+    static let targetLanguageIdentifier = "zh-Hans"
+    static let backendVersion = "apple-translation-session-v1"
+
+    private struct CacheKey: Hashable {
+        let textUTF8: [UInt8]
+        let sourceLanguageIdentifier: String
+        let targetLanguageIdentifier: String
+        let backendVersion: String
+    }
+
+    private let maximumCachedEntries: Int
+    private var values: [CacheKey: String] = [:]
+    private var recency: [CacheKey] = []
+
+    init(maximumCachedEntries: Int = StandaloneSentenceTranslationCache.maximumCachedEntries) {
+        self.maximumCachedEntries = max(0, maximumCachedEntries)
+    }
+
+    func translation(for text: String) -> String? {
+        let key = key(for: text)
+        guard let value = values[key] else { return nil }
+        touch(key)
+        return value
+    }
+
+    func store(_ translation: String, for text: String) throws {
+        try Task.checkCancellation()
+        guard !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw StandaloneSentenceTranslationCacheError.emptyTranslation
+        }
+        guard (translation as NSString).length <= Self.maximumOutputUTF16Units else {
+            throw StandaloneSentenceTranslationCacheError.outputTooLong(maximumUTF16Units: Self.maximumOutputUTF16Units)
+        }
+        guard maximumCachedEntries > 0 else { return }
+
+        let key = key(for: text)
+        values[key] = translation
+        touch(key)
+        while recency.count > maximumCachedEntries {
+            let evicted = recency.removeFirst()
+            values.removeValue(forKey: evicted)
+        }
+    }
+
+    var cachedEntryCount: Int { values.count }
+
+    private func key(for text: String) -> CacheKey {
+        CacheKey(textUTF8: Array(text.utf8),
+                 sourceLanguageIdentifier: Self.sourceLanguageIdentifier,
+                 targetLanguageIdentifier: Self.targetLanguageIdentifier,
+                 backendVersion: Self.backendVersion)
+    }
+
+    private func touch(_ key: CacheKey) {
+        recency.removeAll { $0 == key }
+        recency.append(key)
+    }
+}
+
+enum StandaloneSentenceTranslationCacheError: Error, Equatable, LocalizedError {
+    case emptyTranslation
+    case outputTooLong(maximumUTF16Units: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyTranslation:
+            return "翻译服务返回了空译文。"
+        case .outputTooLong(let maximumUTF16Units):
+            return "译文超过了 \(maximumUTF16Units) 个 UTF-16 单元限制。"
+        }
     }
 }
