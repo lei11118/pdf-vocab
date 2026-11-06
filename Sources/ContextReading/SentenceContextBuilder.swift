@@ -185,7 +185,7 @@ enum SentenceContextBuilder {
             guard grapheme.span.location >= sourceSpan.location,
                   let graphemeEnd = grapheme.span.endExclusive,
                   graphemeEnd <= sourceEnd else { continue }
-            guard isWhitespace(grapheme.surface) else {
+            if !isWhitespace(grapheme.surface) {
                 guard let displayIndex = sourceToDisplay[sourceIndex] else { return nil }
                 mappedDisplayIndices.append(displayIndex)
             }
