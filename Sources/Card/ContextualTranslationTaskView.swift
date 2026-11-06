@@ -8,7 +8,7 @@ struct ContextualTranslationTaskView: View {
     let selection: ContextualSelection
     let isEnabled: Bool
 
-    private enum State: Equatable {
+    private enum TranslationState: Equatable {
         case disabled
         case checking
         case needsPreparation
@@ -19,7 +19,7 @@ struct ContextualTranslationTaskView: View {
         case failed(String)
     }
 
-    @State private var state: State = .checking
+    @State private var state: TranslationState = .checking
     @State private var configuration: TranslationSession.Configuration?
     @State private var activeRequest: ContextualTranslationRequest?
     @State private var activeSelection: ContextualSelection?

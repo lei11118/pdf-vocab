@@ -261,8 +261,8 @@ enum ContextualTranslationAlignment {
         for run in attributed.runs {
             guard let id = run[ContextualTranslationTokenIDAttribute.self] else { continue }
             guard expectedIDs.contains(id) else { throw ContextualTranslationError.unknownTokenID }
-            guard let lower = String.Index(run.range.lowerBound, within: attributed),
-                  let upper = String.Index(run.range.upperBound, within: attributed) else {
+            guard let lower = String.Index(run.range.lowerBound, within: attributedText),
+                  let upper = String.Index(run.range.upperBound, within: attributedText) else {
                 throw ContextualTranslationError.invalidTargetRange
             }
             let range = NSRange(lower..<upper, in: attributedText)
