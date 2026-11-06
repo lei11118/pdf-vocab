@@ -86,10 +86,21 @@ final class GlyphSelectionTests: XCTestCase {
                                                        documentSHA256: "openstax-phrase-fixture",
                                                        pageIndex: pageIndex)
         var didRoutePhrase = false
+        var diagnostics: [String: Int] = [:]
+        func record(_ stage: String) {
+            diagnostics[stage, default: 0] += 1
+        }
 
         for seedToken in canonical.tokens.prefix(100) where seedToken.kind == .word {
-            guard let seedRange = seedToken.span.nsRange(in: source),
-                  let seedSelection = page.selection(for: seedRange) else { continue }
+            record("seed_attempt")
+            guard let seedRange = seedToken.span.nsRange(in: source) else {
+                record("invalid_seed_range")
+                continue
+            }
+            guard let seedSelection = page.selection(for: seedRange) else {
+                record("seed_pdf_selection")
+                continue
+            }
             let display = SelectionGeometry.lookupText(for: seedSelection)
             guard let seedContext = ContextSelectionRouter.route(selection: seedSelection,
                                                                  page: page,
@@ -97,28 +108,136 @@ final class GlyphSelectionTests: XCTestCase {
                                                                  pageIndex: pageIndex,
                                                                  displaySurface: display,
                                                                  geometryQuality: .word,
-                                                                 generation: 7),
-                  let sentenceContext = seedContext.sentenceContext,
-                  let selectedSpan = seedContext.sourceSpans.first,
-                  let phrase = VerifiedPhraseGroupResolver.resolve(in: sentenceContext,
-                                                                    selectedSourceSpans: [selectedSpan],
-                                                                    sourceText: source,
-                                                                    exactPhraseExists: { _ in true }),
-                  let phraseRange = phrase.sourceSpan.nsRange(in: source),
-                  let phraseSelection = page.selection(for: phraseRange),
-                  SelectionGeometry.sourceRanges(of: phraseSelection, on: page) == [phraseRange],
-                  phraseSelection.pages.count == 1,
-                  phraseSelection.pages.first === page,
-                  phraseSelection.selectionsByLine().count == 1,
-                  SelectionGeometry.isValid(SelectionGeometry.placedBounds(of: phraseSelection, on: page)),
-                  let routed = ContextSelectionRouter.route(selection: phraseSelection,
+                                                                 generation: 7) else {
+                record("seed_route")
+                continue
+            }
+            guard let sentenceContext = seedContext.sentenceContext else {
+                record("seed_context_missing")
+                continue
+            }
+            guard let selectedSpan = seedContext.sourceSpans.first else {
+                record("seed_source_span_missing")
+                continue
+            }
+            guard let phrase = VerifiedPhraseGroupResolver.resolve(in: sentenceContext,
+                                                                   selectedSourceSpans: [selectedSpan],
+                                                                   sourceText: source,
+                                                                   exactPhraseExists: { _ in true }) else {
+                record("resolver_miss")
+                continue
+            }
+            guard let phraseRange = phrase.sourceSpan.nsRange(in: source) else {
+                record("invalid_phrase_range")
+                continue
+            }
+            guard let phraseSelection = page.selection(for: phraseRange) else {
+                record("phrase_pdf_selection")
+                continue
+            }
+            guard SelectionGeometry.sourceRanges(of: phraseSelection, on: page) == [phraseRange] else {
+                record("phrase_source_ranges_mismatch")
+                continue
+            }
+            guard phraseSelection.pages.count == 1,
+                  phraseSelection.pages.first === page else {
+                record("phrase_page_mismatch")
+                continue
+            }
+            guard phraseSelection.selectionsByLine().count == 1 else {
+                record("phrase_multiple_visual_lines")
+                continue
+            }
+            guard SelectionGeometry.isValid(SelectionGeometry.placedBounds(of: phraseSelection, on: page)) else {
+                record("phrase_invalid_bounds")
+                continue
+            }
+            guard let routed = ContextSelectionRouter.route(selection: phraseSelection,
                                                             page: page,
                                                             documentSHA256: "openstax-phrase-fixture",
                                                             pageIndex: pageIndex,
                                                             displaySurface: phrase.sourceSurface,
                                                             geometryQuality: .word,
                                                             generation: 7,
-                                                            verifiedPhraseGroupSpan: phrase.sourceSpan) else { continue }
+                                                            verifiedPhraseGroupSpan: phrase.sourceSpan) else {
+                record("group_route")
+                guard let groupContextual = ContextSelectionRouter.resolve(canonical: canonical,
+                                                                           sourceSpans: [phrase.sourceSpan],
+                                                                           displaySurface: phrase.sourceSurface,
+                                                                           geometryQuality: .word,
+                                                                           generation: 7,
+                                                                           allowsMultilineSentenceContext: true,
+                                                                           verifiedPhraseGroupSpan: phrase.sourceSpan) else {
+                    record("group_resolve")
+                    continue
+                }
+                guard let groupSentenceContext = groupContextual.sentenceContext else {
+                    record("group_sentence_context_missing")
+                    continue
+                }
+                guard groupContextual.sourceSpans == [phrase.sourceSpan] else {
+                    record("group_route_source_span_mismatch")
+                    continue
+                }
+                guard groupSentenceContext.selectedSourceSpans == [phrase.sourceSpan] else {
+                    record("group_context_selection_span_mismatch")
+                    continue
+                }
+                guard groupContextual.tokens.count >= 2 else {
+                    record("group_route_token_count")
+                    continue
+                }
+                guard groupContextual.tokens.allSatisfy({ $0.kind == .word }) else {
+                    record("group_route_token_kind")
+                    continue
+                }
+                guard let rawSentence = groupSentenceContext.sourceSpan.substring(in: source) else {
+                    record("group_context_source_span_invalid")
+                    continue
+                }
+                if rawSentence.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) {
+                    guard let lineSpans = NativeSentenceContextBuilder.lineSpans(in: source,
+                                                                                 sourceSpan: groupSentenceContext.sourceSpan) else {
+                        record("group_line_spans_missing")
+                        continue
+                    }
+                    var lineBounds: [CGRect] = []
+                    var lineBoundsFailure: String?
+                    for lineSpan in lineSpans {
+                        guard let lineRange = lineSpan.nsRange(in: source) else {
+                            lineBoundsFailure = "group_line_range_invalid"
+                            break
+                        }
+                        guard let lineSelection = page.selection(for: lineRange) else {
+                            lineBoundsFailure = "group_line_selection_missing"
+                            break
+                        }
+                        let lineSelections = lineSelection.selectionsByLine()
+                        guard lineSelections.count == 1 else {
+                            lineBoundsFailure = "group_line_selection_multiline"
+                            break
+                        }
+                        let bounds = lineSelections[0].bounds(for: page)
+                        guard SelectionGeometry.isValid(bounds) else {
+                            lineBoundsFailure = "group_line_bounds_invalid"
+                            break
+                        }
+                        lineBounds.append(bounds)
+                    }
+                    if let lineBoundsFailure {
+                        record(lineBoundsFailure)
+                        continue
+                    }
+                    guard ContextSelectionRouter.isTrustedMultilineLayout(sourceText: source,
+                                                                          candidate: groupSentenceContext,
+                                                                          lineBounds: lineBounds) else {
+                        record("group_multiline_geometry_untrusted")
+                        continue
+                    }
+                }
+                record("route_rejected_after_resolve_geometry")
+                continue
+            }
 
             XCTAssertEqual(routed.verifiedPhraseGroupSpan, phrase.sourceSpan)
             XCTAssertEqual(routed.sourceSpans, [phrase.sourceSpan])
@@ -129,6 +248,10 @@ final class GlyphSelectionTests: XCTestCase {
             break
         }
 
+        if !didRoutePhrase {
+            let summary = diagnostics.keys.sorted().map { "\($0)=\(diagnostics[$0] ?? 0)" }.joined(separator: " ")
+            print("PHRASE_ROUTE_DIAGNOSTICS \(summary)")
+        }
         XCTAssertTrue(didRoutePhrase, "Expected an exact word-group range to survive PDFKit selection and routing")
     }
 
