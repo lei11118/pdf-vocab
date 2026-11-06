@@ -336,8 +336,14 @@ final class ContextOCRSelectionTests: XCTestCase {
                        "Refining geometry must not move the active selection highlight")
 
         coordinator.dismissSelection()
-        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: point))
-        let refinedSelection = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        let refinedPoint = fixture.view.convert(CGPoint(x: 46, y: 190), from: fixture.page)
+        let eventCountBeforeRefinedTap = events.count
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: refinedPoint))
+        XCTAssertEqual(events.count, eventCountBeforeRefinedTap + 1,
+                       "Tapping refined geometry must emit a fresh selection event")
+        let refinedInfo = try XCTUnwrap(events.dropFirst(eventCountBeforeRefinedTap).compactMap { $0 }.last)
+        XCTAssertEqual(refinedInfo.text, "charge")
+        let refinedSelection = try XCTUnwrap(refinedInfo.contextual)
         XCTAssertEqual(refinedSelection.tokens.map(\.geometryQuality), [.verifiedCharacter])
 
         let lateBase = try makePage(sha: sha, pageIndex: 0, mediaBox: fixture.mediaBox,
@@ -348,8 +354,13 @@ final class ContextOCRSelectionTests: XCTestCase {
         XCTAssertTrue(coordinator.installContextOCRPage(lateBase, generation: 41))
         XCTAssertEqual(events.count, countBeforeLateBase)
         coordinator.dismissSelection()
-        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: point))
-        let afterLateBase = try XCTUnwrap(events.compactMap { $0 }.last?.contextual)
+        let eventCountBeforeLateBaseTap = events.count
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: ContextOCRTap(point: refinedPoint))
+        XCTAssertEqual(events.count, eventCountBeforeLateBaseTap + 1,
+                       "Tapping after the late base must emit a fresh selection event")
+        let afterLateBaseInfo = try XCTUnwrap(events.dropFirst(eventCountBeforeLateBaseTap).compactMap { $0 }.last)
+        XCTAssertEqual(afterLateBaseInfo.text, "charge")
+        let afterLateBase = try XCTUnwrap(afterLateBaseInfo.contextual)
         XCTAssertEqual(afterLateBase.tokens.map(\.geometryQuality), [.verifiedCharacter],
                        "A late word-level page cannot downgrade verified geometry")
     }
