@@ -1,7 +1,7 @@
 # v0.70.2-beta 测试说明
 
 版本：`0.70.2`（build `120`）
-用途：内部测试版。CI 回归和 IPA 构建结果待本次提交完成后回填；真机检查仍需使用 iPad。
+用途：内部测试版。CI 完整回归和未签名 IPA 构建已完成；真机检查仍需使用 iPad。
 
 ## 本次改动
 
@@ -17,14 +17,15 @@
 
 ## 自动回归和 IPA
 
-本次完整 `test-ink` 和 `build-ipa` 均须由同一提交 SHA 触发。CI 结束后回填准确结果、测试数、源 SHA、IPA SHA-256 及下载产物信息。
+完整 `test-ink` 和 `build-ipa` 均由同一提交 SHA `35c9b05520d7511dfdee76348efa6f516aed3d7b` 触发。
 
 | 检查项 | 结果 |
 |---|---|
-| 完整 `test-ink`（单元/集成及 UI 回归） | 待 CI 完成 |
-| `build-ipa`（与 `test-ink` 同一源 SHA） | 待 CI 完成 |
-| IPA SHA-256 | 待构建完成后回填 |
-| UIReview portrait/landscape 截图 | 待导出并人工审阅 |
+| 完整 `test-ink`（单元/集成及 UI 回归） | [run 42172727928](https://github.com/lei11118/pdf-vocab/actions/runs/42172727928)：success；195 单元/集成测试 + 6 UI 测试，共 201 项，0 failures。`OfflineTranslationPreparationTests` 为 4/4，Reader 画布横竖屏用例通过。 |
+| `build-ipa`（与 `test-ink` 同一源 SHA） | [run 42172740816](https://github.com/lei11118/pdf-vocab/actions/runs/42172740816)：success；未签名 IPA 验证通过。 |
+| IPA | `PdfVocab-unsigned.ipa`；47,962,300 bytes；version `0.70.2` / build `120`；arm64；ZIP CRC 检查通过。 |
+| IPA SHA-256 | `B7C7E27BF2361E24EF8CE3B3AF6A1C6260C90947C6786C7A664DE1D648E2EFC0` |
+| UIReview portrait/landscape 截图 | [run 42172727928 的 UIReview artifact](https://github.com/lei11118/pdf-vocab/actions/runs/42172727928)：`reader-canvas-portrait_0_D422596B-2023-4863-92FF-1EC3CD5C1D60.png`、`reader-canvas-landscape_0_3EF3AD4E-E2D5-4CB1-B66C-3AB02BC48986.png`；截图已导出并由主脑人工审阅，顶/底系统材质与 chrome 位置通过，坐标断言通过。 |
 
 ## 真机检查清单
 
