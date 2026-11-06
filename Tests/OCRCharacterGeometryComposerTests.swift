@@ -17,7 +17,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
         let output = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: boxes)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: boxes)])
         let updatedLine = try XCTUnwrap(output.lines.first)
         let updatedToken = try XCTUnwrap(updatedLine.tokens.first)
         let updatedGeometry = try XCTUnwrap(updatedLine.tokenGeometry.first)
@@ -44,7 +44,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         let page = try makePage(text: "ab", tokens: [
             token("ab", at: 0, kind: .word, quality: .word, rect: wordFrame)
         ])
-        let result = refinement(for: page, boxes: [
+        let result = try refinement(for: page, boxes: [
             try characterBox(UTF16Span(location: 0, length: 1), CGRect(x: 54, y: 104, width: 8, height: 12))
         ])
 
@@ -71,7 +71,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
         let output = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: boxes)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: boxes)])
 
         XCTAssertEqual(output, page,
                        "A shared accurate word box is one atomic component; no partial fine/coarse mix is allowed")
@@ -97,7 +97,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
         let output = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: boxes)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: boxes)])
         let line = try XCTUnwrap(output.lines.first)
 
         XCTAssertEqual(line.tokens.map(\.geometryQuality), Array(repeating: .verifiedCharacter, count: 4))
@@ -120,7 +120,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
         let output = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: boxes)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: boxes)])
 
         XCTAssertEqual(output, page,
                        "The accurate shared parent includes the unknown source hole, so no member is refined alone")
@@ -132,7 +132,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         ]
         let fullyRefined = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: fullCoverage)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: fullCoverage)])
         XCTAssertEqual(fullyRefined.lines[0].tokens.map(\.geometryQuality),
                        Array(repeating: .verifiedCharacter, count: 3))
         XCTAssertEqual(fullyRefined.lines[0].tokenGeometry.count, 3,
@@ -151,7 +151,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
         let output = OCRCharacterGeometryComposer.apply(
             page: page,
-            refinementsByBlockID: ["row": refinement(for: page, boxes: boxes)])
+            refinementsByBlockID: ["row": try refinement(for: page, boxes: boxes)])
         let line = try XCTUnwrap(output.lines.first)
 
         XCTAssertEqual(line.tokens.map(\.geometryQuality), [.verifiedCharacter, .verifiedCharacter])
@@ -212,7 +212,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         for boxes in oneCharacterCases {
             XCTAssertEqual(OCRCharacterGeometryComposer.apply(
                 page: oneCharacterPage,
-                refinementsByBlockID: ["row": refinement(for: oneCharacterPage, boxes: boxes)]), oneCharacterPage)
+                refinementsByBlockID: ["row": try refinement(for: oneCharacterPage, boxes: boxes)]), oneCharacterPage)
         }
 
         let twoCharacterPage = try makePage(text: "ab", tokens: [
@@ -225,7 +225,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         ]
         XCTAssertEqual(OCRCharacterGeometryComposer.apply(
             page: twoCharacterPage,
-            refinementsByBlockID: ["row": refinement(for: twoCharacterPage, boxes: nearlyDuplicate)]),
+            refinementsByBlockID: ["row": try refinement(for: twoCharacterPage, boxes: nearlyDuplicate)]),
             twoCharacterPage,
             "Distinct source characters cannot share one indistinguishable box")
     }
@@ -268,7 +268,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
 
             XCTAssertEqual(OCRCharacterGeometryComposer.apply(
                 page: page,
-                refinementsByBlockID: ["row": refinement(for: page, boxes: [box])]), page)
+                refinementsByBlockID: ["row": try refinement(for: page, boxes: [box])]), page)
         }
     }
 
@@ -280,7 +280,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         let canonicallyEquivalentButDifferentUTF16 = "e\u{301}"
         let box = try characterBox(UTF16Span(location: 0, length: 1),
                                    CGRect(x: 54, y: 104, width: 8, height: 12))
-        let wrongRaw = refinement(for: page,
+        let wrongRaw = try refinement(for: page,
                                   boxes: [box],
                                   sourceText: canonicallyEquivalentButDifferentUTF16)
         XCTAssertEqual(OCRCharacterGeometryComposer.apply(page: page,
@@ -308,7 +308,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
                                               lines: [wrongSurfaceLine])
         XCTAssertEqual(OCRCharacterGeometryComposer.apply(
             page: wrongSurfacePage,
-            refinementsByBlockID: ["row": refinement(for: wrongSurfacePage, boxes: [box])]), wrongSurfacePage)
+            refinementsByBlockID: ["row": try refinement(for: wrongSurfacePage, boxes: [box])]), wrongSurfacePage)
     }
 
     func testMergePreservesLateVerifiedGeometryAndRetainsNewVerifiedLines() throws {
@@ -397,7 +397,7 @@ final class OCRCharacterGeometryComposerTests: XCTestCase {
         ]
         let existing = OCRCharacterGeometryComposer.apply(
             page: base,
-            refinementsByBlockID: ["row": refinement(for: base, boxes: verifiedBoxes)])
+            refinementsByBlockID: ["row": try refinement(for: base, boxes: verifiedBoxes)])
 
         let merged = OCRCharacterGeometryComposer.mergePreservingVerifiedGeometry(existing: existing,
                                                                                    incoming: base)

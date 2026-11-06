@@ -247,9 +247,11 @@ final class OCRCharacterGeometryStoreTests: XCTestCase {
             try database.execute(sql: "DELETE FROM document WHERE sha256 = ?",
                                  arguments: [fixture.page.documentSHA256])
         }
-        let remaining = try Int.fetchOne(db.dbQueue,
-                                         sql: "SELECT COUNT(*) FROM ocr_character_geometry WHERE docSha = ?",
-                                         arguments: [fixture.page.documentSHA256]) ?? 0
+        let remaining = try db.dbQueue.read { database in
+            try Int.fetchOne(database,
+                             sql: "SELECT COUNT(*) FROM ocr_character_geometry WHERE docSha = ?",
+                             arguments: [fixture.page.documentSHA256]) ?? 0
+        }
         XCTAssertEqual(remaining, 0, "Deleting the owning document must cascade derived cache rows")
         XCTAssertEqual(legacyStore.words(docSha: fixture.page.documentSHA256, page: 0).map(\.text), ["word"],
                        "The derived cache must not delete or rewrite legacy OCR rows")
