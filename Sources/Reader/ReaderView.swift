@@ -100,7 +100,9 @@ struct ReaderView: View {
     }
 
     var body: some View {
-        lifecycleContent.accessibilityIdentifier("reader.document")
+        lifecycleContent
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("reader.document")
     }
 
     // v0.16.0:把原来 20+ 个修饰符的一条长链拆成几段(CI 实测 body 单表达式
@@ -617,6 +619,7 @@ struct ReaderView: View {
                         .background(DS.background4, in: Circle())
                 }
                 .accessibilityLabel("更多")
+                .accessibilityIdentifier("reader.more-menu")
             }
             .frame(maxWidth: 900)
             .padding(8)
@@ -781,6 +784,7 @@ struct ReaderView: View {
             // PDFKit and every coordinate-based overlay share this full-bleed root;
             // the reader chrome remains composed by chromeContent in the safe area.
             .ignoresSafeArea()
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("reader.canvas-root")
     }
 
@@ -1156,7 +1160,6 @@ struct ReaderView: View {
                     }
                 )
                 .id(pdfLoadAttempt)
-                .accessibilityIdentifier("reader.pdf-canvas")
             } else {
                 VStack(spacing: 10) {
                     ProgressView()

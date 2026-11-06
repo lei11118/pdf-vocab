@@ -81,6 +81,7 @@ struct PDFKitView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PDFView {
         let view = VocabPDFView()
+        view.accessibilityIdentifier = "reader.pdf-canvas"
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical

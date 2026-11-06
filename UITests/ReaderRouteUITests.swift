@@ -34,10 +34,15 @@ final class ReaderRouteUITests:XCTestCase {
         app.launch()
         let document = app.buttons.containing(.staticText,identifier:"Reader-route-audit").firstMatch
         if document.waitForExistence(timeout:10) { document.tap() }
+        _ = app.staticTexts["A function relates an input to an output."].waitForExistence(timeout:10)
+        let initialScreenshot = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+        initialScreenshot.name = "reader-canvas-before-assertions"
+        initialScreenshot.lifetime = .keepAlways
+        add(initialScreenshot)
 
         let canvasRoot = app.descendants(matching:.any).matching(identifier:"reader.canvas-root").firstMatch
         let pdfCanvas = app.descendants(matching:.any).matching(identifier:"reader.pdf-canvas").firstMatch
-        let topAction = app.buttons["更多"].firstMatch
+        let topAction = app.buttons.matching(identifier:"reader.more-menu").firstMatch
         let bottomMode = app.buttons["标记模式"].firstMatch
         XCTAssertTrue(canvasRoot.waitForExistence(timeout:20))
         XCTAssertTrue(pdfCanvas.waitForExistence(timeout:10))
