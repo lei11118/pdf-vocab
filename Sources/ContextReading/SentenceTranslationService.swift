@@ -27,6 +27,7 @@ actor SentenceTranslationService {
     private var cache: [CacheKey: String] = [:]
     private var cacheOrder: [CacheKey] = []
     private var cacheGeneration = 0
+    private var requestGeneration = 0
 
     init(maximumCachedEntries: Int = SentenceTranslationService.defaultMaximumCachedEntries,
          isEnabled: @escaping @Sendable () -> Bool = { FeatureFlags.contextReadingEnabled() }) {
@@ -39,6 +40,7 @@ actor SentenceTranslationService {
                    targetLanguageIdentifier: String,
                    backendVersion: String,
                    using translator: @escaping Translator) async throws -> String {
+        let requestGeneration = self.requestGeneration
         try Task.checkCancellation()
         guard isEnabled() else { throw SentenceTranslationServiceError.disabled }
         guard sentence.kind == .completeSentence,
@@ -73,9 +75,15 @@ actor SentenceTranslationService {
                                           sourceLanguageIdentifier,
                                           targetLanguageIdentifier)
         } catch {
+            guard requestGeneration == self.requestGeneration else {
+                throw SentenceTranslationServiceError.staleRequest
+            }
             if Task.isCancelled { throw CancellationError() }
             guard isEnabled() else { throw SentenceTranslationServiceError.disabled }
             throw error
+        }
+        guard requestGeneration == self.requestGeneration else {
+            throw SentenceTranslationServiceError.staleRequest
         }
         try Task.checkCancellation()
         guard isEnabled() else { throw SentenceTranslationServiceError.disabled }
@@ -101,6 +109,10 @@ actor SentenceTranslationService {
         cache.removeAll(keepingCapacity: false)
         cacheOrder.removeAll(keepingCapacity: false)
         cacheGeneration &+= 1
+    }
+
+    func invalidatePendingRequests() {
+        requestGeneration &+= 1
     }
 
     var cachedEntryCount: Int { cache.count }
@@ -136,6 +148,7 @@ enum SentenceTranslationServiceError: Error, Equatable, LocalizedError {
     case emptyTranslation
     case outputTooLong(maximumUTF16Units: Int)
     case languagePairMismatch
+    case staleRequest
 
     var errorDescription: String? {
         switch self {
@@ -155,6 +168,8 @@ enum SentenceTranslationServiceError: Error, Equatable, LocalizedError {
             return "The translation exceeds the \(maximumUTF16Units)-unit limit."
         case .languagePairMismatch:
             return "The translation request does not match the TranslationSession language pair."
+        case .staleRequest:
+            return "The translation request was invalidated before it completed."
         }
     }
 }

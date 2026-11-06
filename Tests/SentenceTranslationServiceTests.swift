@@ -11,7 +11,8 @@ final class SentenceTranslationServiceTests: XCTestCase {
         XCTAssertFalse(FeatureFlags.contextReadingEnabled(in: defaults))
         let calls = TranslationCallRecorder()
         let service = SentenceTranslationService(isEnabled: {
-            FeatureFlags.contextReadingEnabled(in: defaults)
+            guard let defaults = UserDefaults(suiteName: suite) else { return false }
+            return FeatureFlags.contextReadingEnabled(in: defaults)
         })
         let translator: SentenceTranslationService.Translator = { text, source, target in
             await calls.record(text, source: source, target: target)
@@ -264,7 +265,8 @@ final class SentenceTranslationServiceTests: XCTestCase {
         defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
 
         let service = SentenceTranslationService(isEnabled: {
-            FeatureFlags.contextReadingEnabled(in: defaults)
+            guard let defaults = UserDefaults(suiteName: suite) else { return false }
+            return FeatureFlags.contextReadingEnabled(in: defaults)
         })
         let started = AsyncLatch()
         let release = AsyncLatch()
@@ -297,6 +299,96 @@ final class SentenceTranslationServiceTests: XCTestCase {
         XCTAssertEqual(cacheCount, 0)
         let callCount = await calls.count
         XCTAssertEqual(callCount, 1)
+    }
+
+    func testInvalidatingPendingRequestRejectsOldResultAndAllowsNewRequest() async throws {
+        let suite = "SentenceTranslationServiceTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
+
+        let service = SentenceTranslationService(isEnabled: {
+            guard let defaults = UserDefaults(suiteName: suite) else { return false }
+            return FeatureFlags.contextReadingEnabled(in: defaults)
+        })
+        let started = AsyncLatch()
+        let release = AsyncLatch()
+        let calls = TranslationCallRecorder()
+        let oldTranslator: SentenceTranslationService.Translator = { text, source, target in
+            await calls.record(text, source: source, target: target)
+            await started.open()
+            await release.wait()
+            return "stale result"
+        }
+        let context = sentence("A sentence with an invalidated request.")
+        let oldTask = Task {
+            try await service.translate(context,
+                                       sourceLanguageIdentifier: "en",
+                                       targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1",
+                                       using: oldTranslator)
+        }
+
+        await started.wait()
+        defaults.set(false, forKey: FeatureFlags.contextReadingEnabledKey)
+        await service.invalidatePendingRequests()
+        defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
+        await release.open()
+
+        do {
+            _ = try await oldTask.value
+            XCTFail("An invalidated request must not return its translation")
+        } catch let error as SentenceTranslationServiceError {
+            XCTAssertEqual(error, .staleRequest)
+        }
+        let cacheCountAfterInvalidation = await service.cachedEntryCount
+        XCTAssertEqual(cacheCountAfterInvalidation, 0)
+
+        let newTranslator: SentenceTranslationService.Translator = { text, source, target in
+            await calls.record(text, source: source, target: target)
+            return "fresh result"
+        }
+        let freshResult = try await service.translate(context,
+                                                     sourceLanguageIdentifier: "en",
+                                                     targetLanguageIdentifier: "zh-Hans",
+                                                     backendVersion: "test-v1",
+                                                     using: newTranslator)
+        XCTAssertEqual(freshResult, "fresh result")
+        let finalCallCount = await calls.count
+        XCTAssertEqual(finalCallCount, 2)
+        let finalCacheCount = await service.cachedEntryCount
+        XCTAssertEqual(finalCacheCount, 1)
+    }
+
+    func testInvalidatingPendingRequestSuppressesItsFailure() async throws {
+        let service = SentenceTranslationService(isEnabled: { true })
+        let started = AsyncLatch()
+        let release = AsyncLatch()
+        let translator: SentenceTranslationService.Translator = { _, _, _ in
+            await started.open()
+            await release.wait()
+            throw ExpectedTranslationFailure.failed
+        }
+        let task = Task {
+            try await service.translate(sentence("A sentence with a failed stale request."),
+                                        sourceLanguageIdentifier: "en",
+                                        targetLanguageIdentifier: "zh-Hans",
+                                        backendVersion: "test-v1",
+                                        using: translator)
+        }
+
+        await started.wait()
+        await service.invalidatePendingRequests()
+        await release.open()
+
+        do {
+            _ = try await task.value
+            XCTFail("An invalidated request must not expose the translator failure")
+        } catch let error as SentenceTranslationServiceError {
+            XCTAssertEqual(error, .staleRequest)
+        }
+        let cacheCount = await service.cachedEntryCount
+        XCTAssertEqual(cacheCount, 0)
     }
 
     func testClearingDuringTranslationPreventsTheInFlightResultFromRefillingCache() async throws {
