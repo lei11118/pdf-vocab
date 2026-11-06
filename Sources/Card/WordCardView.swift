@@ -69,6 +69,7 @@ struct ContextualCardView: View {
     let onClose: () -> Void
     var vocab: CardVocabBridge? = nil
     @State private var showingDictionary = false
+    @StateObject private var translationDriver = ContextualTranslationDriver()
 
     var body: some View {
         Group {
@@ -104,7 +105,8 @@ struct ContextualCardView: View {
                         .padding(.trailing, panelClose == nil ? 0 : 44)
 
                         ContextualTranslationTaskView(selection: selection,
-                                                      isEnabled: contextReadingEnabled)
+                                                      isEnabled: contextReadingEnabled,
+                                                      driver: translationDriver)
 
                         Button("查看词典释义") {
                             showingDictionary = true

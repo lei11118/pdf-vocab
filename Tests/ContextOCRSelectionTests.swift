@@ -33,6 +33,47 @@ final class ContextOCRSelectionTests: XCTestCase {
         XCTAssertEqual(fragmentSelection.sentenceContext?.kind, .fragment)
     }
 
+    func testVerifiedOCRPhraseGroupStaysOnOneLineAndRejectsColumnGap() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let page = try makePage(sha: "ocr-phrase", pageIndex: 0, mediaBox: media,
+                                blockID: "phrase-row", text: "take off now.", tokens: [
+                                    TokenFixture(text: "take", span: UTF16Span(location: 0, length: 4), kind: .word,
+                                                 rect: CGRect(x: 50, y: 180, width: 34, height: 20)),
+                                    TokenFixture(text: "off", span: UTF16Span(location: 5, length: 3), kind: .word,
+                                                 rect: CGRect(x: 89, y: 180, width: 25, height: 20)),
+                                    TokenFixture(text: "now", span: UTF16Span(location: 9, length: 3), kind: .word,
+                                                 rect: CGRect(x: 119, y: 180, width: 32, height: 20))
+                                ])
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let base = try XCTUnwrap(source.contextualSelection(for: 0...0, generation: 1))
+        let sentence = try XCTUnwrap(base.sentenceContext)
+        let group = try XCTUnwrap(VerifiedPhraseGroupResolver.resolve(in: sentence,
+                                                                       selectedSourceSpans: base.sourceSpans,
+                                                                       sourceText: page.lines[0].sourceText,
+                                                                       exactPhraseExists: { $0 == "take off" }))
+
+        XCTAssertEqual(source.entryRange(for: group.sourceSpan, containing: 0), 0...1)
+        let grouped = try XCTUnwrap(source.contextualSelection(for: 0...1,
+                                                               generation: 1,
+                                                               verifiedPhraseGroupSpan: group.sourceSpan))
+        XCTAssertEqual(grouped.verifiedPhraseGroupSpan, group.sourceSpan)
+        XCTAssertEqual(grouped.tokens.map(\.sourceSurface), ["take", "off"])
+        XCTAssertEqual(grouped.sourceSpans, [group.sourceSpan])
+
+        let columnPage = try makePage(sha: "ocr-phrase-columns", pageIndex: 0, mediaBox: media,
+                                      blockID: "phrase-columns", text: "take off now.", tokens: [
+                                          TokenFixture(text: "take", span: UTF16Span(location: 0, length: 4), kind: .word,
+                                                       rect: CGRect(x: 50, y: 180, width: 34, height: 20)),
+                                          TokenFixture(text: "off", span: UTF16Span(location: 5, length: 3), kind: .word,
+                                                       rect: CGRect(x: 230, y: 180, width: 25, height: 20)),
+                                          TokenFixture(text: "now", span: UTF16Span(location: 9, length: 3), kind: .word,
+                                                       rect: CGRect(x: 260, y: 180, width: 32, height: 20))
+                                      ])
+        let columnSource = try XCTUnwrap(ContextOCRSelectionSource(page: columnPage))
+        XCTAssertNil(columnSource.entryRange(for: group.sourceSpan, containing: 0),
+                     "A dictionary phrase may not span separated OCR columns")
+    }
+
     func testOCRMultilineSelectionDoesNotClaimSentenceContext() throws {
         let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
         func makeLine(blockID: String, text: String, tokenText: String, y: Double) throws -> OCRLine {
@@ -98,7 +139,7 @@ final class ContextOCRSelectionTests: XCTestCase {
 
         let secondChargePoint = fixture.view.convert(CGPoint(x: 122, y: 190), from: fixture.page)
         var hover: (term: String, anchor: CGPoint)?
-        coordinator.onHoverUpdate = { term, _, anchor in hover = (term, anchor) }
+        coordinator.onHoverUpdate = { term, _, anchor, _ in hover = (term, anchor) }
         coordinator.perform(NSSelectorFromString("handleHover:"), with: ContextOCRHover(point: secondChargePoint))
         XCTAssertEqual(hover?.term, "charge")
         let secondWord = try XCTUnwrap(ContextOCRSelectionSource(page: original)?.words.dropFirst().first)
@@ -213,7 +254,7 @@ final class ContextOCRSelectionTests: XCTestCase {
         let secondPoint = fixture.view.convert(CGPoint(x: 122, y: 190), from: fixture.page)
         var hoverAnchors: [CGPoint] = []
         var hoverEndCount = 0
-        coordinator.onHoverUpdate = { _, _, anchor in hoverAnchors.append(anchor) }
+        coordinator.onHoverUpdate = { _, _, anchor, _ in hoverAnchors.append(anchor) }
         coordinator.onHoverEnd = { hoverEndCount += 1 }
 
         func hover(_ point: CGPoint, state: UIGestureRecognizer.State = .changed) {
@@ -283,7 +324,7 @@ final class ContextOCRSelectionTests: XCTestCase {
                                                         y: secondWord.bounds(for: fixture.page).midY),
                                                from: fixture.page)
         var anchors: [CGPoint] = []
-        coordinator.onHoverUpdate = { _, _, anchor in anchors.append(anchor) }
+        coordinator.onHoverUpdate = { _, _, anchor, _ in anchors.append(anchor) }
         func hover(_ point: CGPoint) {
             coordinator.perform(NSSelectorFromString("handleHover:"), with: ContextOCRHover(point: point))
         }

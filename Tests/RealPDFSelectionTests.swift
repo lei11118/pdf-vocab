@@ -76,6 +76,62 @@ final class GlyphSelectionTests: XCTestCase {
         XCTAssertTrue(routed.tokens.allSatisfy { $0.span.substring(in: source) == $0.sourceSurface })
     }
 
+    func testVerifiedPhraseGroupRoutesThroughExactPDFKitRange() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let pageIndex = 0
+        let page = try XCTUnwrap(document.page(at: pageIndex))
+        let source = try XCTUnwrap(page.string)
+        let canonical = SemanticTokenizer.canonicalize(source,
+                                                       documentSHA256: "openstax-phrase-fixture",
+                                                       pageIndex: pageIndex)
+        var didRoutePhrase = false
+
+        for seedToken in canonical.tokens.prefix(100) where seedToken.kind == .word {
+            guard let seedRange = seedToken.span.nsRange(in: source),
+                  let seedSelection = page.selection(for: seedRange) else { continue }
+            let display = SelectionGeometry.lookupText(for: seedSelection)
+            guard let seedContext = ContextSelectionRouter.route(selection: seedSelection,
+                                                                 page: page,
+                                                                 documentSHA256: "openstax-phrase-fixture",
+                                                                 pageIndex: pageIndex,
+                                                                 displaySurface: display,
+                                                                 geometryQuality: .word,
+                                                                 generation: 7),
+                  let sentenceContext = seedContext.sentenceContext,
+                  let selectedSpan = seedContext.sourceSpans.first,
+                  let phrase = VerifiedPhraseGroupResolver.resolve(in: sentenceContext,
+                                                                    selectedSourceSpans: [selectedSpan],
+                                                                    sourceText: source,
+                                                                    exactPhraseExists: { _ in true }),
+                  let phraseRange = phrase.sourceSpan.nsRange(in: source),
+                  let phraseSelection = page.selection(for: phraseRange),
+                  SelectionGeometry.sourceRanges(of: phraseSelection, on: page) == [phraseRange],
+                  phraseSelection.pages.count == 1,
+                  phraseSelection.pages.first === page,
+                  phraseSelection.selectionsByLine().count == 1,
+                  SelectionGeometry.isValid(SelectionGeometry.placedBounds(of: phraseSelection, on: page)),
+                  let routed = ContextSelectionRouter.route(selection: phraseSelection,
+                                                            page: page,
+                                                            documentSHA256: "openstax-phrase-fixture",
+                                                            pageIndex: pageIndex,
+                                                            displaySurface: phrase.sourceSurface,
+                                                            geometryQuality: .word,
+                                                            generation: 7,
+                                                            verifiedPhraseGroupSpan: phrase.sourceSpan) else { continue }
+
+            XCTAssertEqual(routed.verifiedPhraseGroupSpan, phrase.sourceSpan)
+            XCTAssertEqual(routed.sourceSpans, [phrase.sourceSpan])
+            XCTAssertGreaterThanOrEqual(routed.tokens.count, 2)
+            XCTAssertTrue(routed.tokens.allSatisfy { $0.kind == .word && $0.geometryQuality == .word })
+            XCTAssertEqual(phrase.sourceSpan.substring(in: source), phrase.sourceSurface)
+            didRoutePhrase = true
+            break
+        }
+
+        XCTAssertTrue(didRoutePhrase, "Expected an exact word-group range to survive PDFKit selection and routing")
+    }
+
     func testEveryVisibleCharacterHasAnAlignedSelection() throws {
         struct Hit: Decodable { let page: Int; let text: String; let point: [Double] }
         let bundle = Bundle(for:Self.self)

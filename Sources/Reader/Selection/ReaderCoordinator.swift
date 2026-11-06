@@ -103,10 +103,11 @@ final class ReaderCoordinator: NSObject {
     /// v0.11.0(M4-B):悬停预览 + 触觉(由 PDFKitView 注入,跟随设置页开关)
     var hoverPreviewEnabled = true
     var hapticsEnabled = true
-    var onHoverUpdate: ((String, String, CGPoint) -> Void)?
+    var onHoverUpdate: ((String, String, CGPoint, ContextualSelection?) -> Void)?
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
     private var hoverEntry: (page: PDFPage, rect: CGRect, annotation: PDFAnnotation)?
+    private var verifiedPhraseLookup: VerifiedPhraseGroupLookup?
 
     /// v0.11.0(M6):扫描版 OCR 取词
     var ocrStore: OCRStore?
@@ -230,10 +231,12 @@ final class ReaderCoordinator: NSObject {
 
     init(
         onPageChanged: @escaping (Int) -> Void,
-        onSelectionInfo: @escaping (SelectionInfo?) -> Void
+        onSelectionInfo: @escaping (SelectionInfo?) -> Void,
+        phraseLookup: VerifiedPhraseGroupLookup? = nil
     ) {
         self.onPageChanged = onPageChanged
         self.onSelectionInfo = onSelectionInfo
+        verifiedPhraseLookup = phraseLookup
     }
 
     deinit {
@@ -268,6 +271,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 文档加载完成后调用(压制内置手势 + 挂滚动观察 + 恢复阅读位置)
     func documentDidLoad(_ document: PDFDocument) {
+        clearHover()
         // v0.40.2:文档装载后 documentView 才存在 —— 单画布在这里补挂,并补做旧墨迹迁移
         inkSurface?.ensureAttached()
         loadSurfaceInkIfNeeded(docSha: surfaceDocSha ?? "")
@@ -339,6 +343,7 @@ final class ReaderCoordinator: NSObject {
 
     private func documentDidChange() {
         guard let pdfView else { return }
+        clearHover()
         if let doc = pdfView.document {
             DiagLog.log("docChanged: \(doc.pageCount) pages")
         }
@@ -981,56 +986,237 @@ final class ReaderCoordinator: NSObject {
         switch gesture.state {
         case .began, .changed:
             let viewPoint = gesture.location(in: pdfView)
-            if let hit = pageHit(viewPoint), let words = ocrWords(for:hit.page),
-               let index = ocrWordIndex(at:hit.point,on:hit.page) {
-                requestOCRCharacterRefinement(page: hit.page, entryIndex: index)
-                let text = words[index].text
-                let term = WordPicker.firstLexicalWord(in:text) ?? text
-                let key = VocabStore.normalizedKey(term)
-                guard !key.isEmpty,
-                      let pageRect = hoverPageRect(for: hit.page, ocrWord: words[index]) else {
+            if let hit = pageHit(viewPoint),
+               let word = SelectionGeometry.initialWord(on: hit.page, at: hit.point),
+               let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty, text.count <= 40 {
+                let target = hoverContextForNativeWord(selection: word,
+                                                       page: hit.page,
+                                                       displaySurface: text)
+                let term = target.phraseSurface ?? WordPicker.firstLexicalWord(in: text) ?? text
+                let query = VocabStore.normalizedKey(term)
+                guard !query.isEmpty,
+                      let rect = hoverPageRect(for: hit.page, selection: target.selection) else {
                     clearHover()
                     return
                 }
-                let rectChanged = setHoverAnnotation(page: hit.page, rect: pageRect)
-                let keyChanged = key != hoverKey
-                hoverKey = key
-                if keyChanged || rectChanged {
-                    let rect = pdfView.convert(pageRect, from: hit.page)
-                    onHoverUpdate?(term,key,CGPoint(x:rect.midX,y:rect.minY))
+                publishHover(term: term,
+                             query: query,
+                             page: hit.page,
+                             rect: rect,
+                             contextual: target.contextual)
+                return
+            }
+
+            if let hit = pageHit(viewPoint), let words = ocrWords(for: hit.page),
+               let index = ocrWordIndex(at: hit.point, on: hit.page) {
+                requestOCRCharacterRefinement(page: hit.page, entryIndex: index)
+                let text = words[index].text
+                let target = hoverContextForOCR(page: hit.page, index: index)
+                let term = target?.phraseSurface ?? WordPicker.firstLexicalWord(in: text) ?? text
+                let query = VocabStore.normalizedKey(term)
+                guard !query.isEmpty,
+                      let rect = target?.rect ?? hoverPageRect(for: hit.page, ocrWord: words[index]) else {
+                    clearHover()
+                    return
                 }
+                publishHover(term: term,
+                             query: query,
+                             page: hit.page,
+                             rect: rect,
+                             contextual: target?.contextual)
                 return
             }
-            guard let hit = pageHit(viewPoint),
-                  let word = SelectionGeometry.initialWord(on:hit.page,at:hit.point),
-                  let text = word.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty, text.count <= 40 else {
-                clearHover()
-                return
-            }
-            let term = WordPicker.firstLexicalWord(in: text) ?? text
-            let key = VocabStore.normalizedKey(term)
-            guard !key.isEmpty else {
-                clearHover()
-                return
-            }
-            guard let pageRect = hoverPageRect(for: hit.page, selection: word) else {
-                clearHover()
-                return
-            }
-            let rectChanged = setHoverAnnotation(page: hit.page, rect: pageRect)
-            let keyChanged = key != hoverKey
-            hoverKey = key
-            if keyChanged || rectChanged {
-                let wordRect = pdfView.convert(pageRect, from: hit.page)
-                onHoverUpdate?(term, key, CGPoint(x: wordRect.midX, y: wordRect.minY))
-                if keyChanged { DiagLog.log("hover: 「\(term)」") }
-            }
+            clearHover()
         case .ended, .cancelled, .failed:
             clearHover()
         default:
             break
         }
+    }
+
+    private func publishHover(term: String,
+                              query: String,
+                              page: PDFPage,
+                              rect: CGRect,
+                              contextual: ContextualSelection?) {
+        let rectChanged = setHoverAnnotation(page: page, rect: rect)
+        let occurrenceKey = hoverOccurrenceKey(term: term,
+                                               page: page,
+                                               rect: rect,
+                                               contextual: contextual)
+        let keyChanged = occurrenceKey != hoverKey
+        hoverKey = occurrenceKey
+        guard keyChanged || rectChanged,
+              let pdfView else { return }
+        let viewRect = pdfView.convert(rect, from: page)
+        onHoverUpdate?(term, query, CGPoint(x: viewRect.midX, y: viewRect.minY), contextual)
+        if keyChanged { DiagLog.log("hover: 「\(term)」") }
+    }
+
+    private func hoverContextForNativeWord(selection: PDFSelection,
+                                           page: PDFPage,
+                                           displaySurface: String)
+        -> (selection: PDFSelection, contextual: ContextualSelection?, phraseSurface: String?) {
+        guard contextReadingEnabled,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0,
+              let base = ContextSelectionRouter.route(selection: selection,
+                                                      page: page,
+                                                      documentSHA256: docSha,
+                                                      pageIndex: pageIndex,
+                                                      displaySurface: displaySurface,
+                                                      geometryQuality: .word,
+                                                      generation: contextReadingGeneration) else {
+            return (selection, nil, nil)
+        }
+        if let expansion = verifiedNativePhraseExpansion(seed: selection,
+                                                         page: page,
+                                                         baseContextual: base) {
+            return (expansion.selection, expansion.contextual, expansion.phrase.sourceSurface)
+        }
+        return (selection, base, nil)
+    }
+
+    private func hoverContextForOCR(page: PDFPage, index: Int)
+        -> (rect: CGRect?, contextual: ContextualSelection?, phraseSurface: String?)? {
+        guard contextReadingEnabled,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0 else { return nil }
+        let source = pinnedSnapshot(for: page)?.contextSource
+            ?? cachedContextOCRSource(for: page, pageIndex: pageIndex)
+        guard let source,
+              index >= 0, index < source.entries.count,
+              source.page.lines.indices.contains(source.entries[index].lineIndex),
+              let base = source.contextualSelection(for: index...index,
+                                                    generation: contextReadingGeneration) else { return nil }
+        if let expansion = verifiedOCRPhraseExpansion(page: page, index: index) {
+            let rects = source.entries[expansion.range].map {
+                OCRService.pageRect(from: $0.word, pageBounds: page.bounds(for: .mediaBox))
+            }
+            guard let first = rects.first else { return (nil, base, nil) }
+            let union = rects.dropFirst().reduce(first) { $0.union($1) }
+            return (SelectionGeometry.isValid(union) ? union : first,
+                    expansion.contextual,
+                    expansion.phrase.sourceSurface)
+        }
+        let rect = OCRService.pageRect(from: source.entries[index].word,
+                                       pageBounds: page.bounds(for: .mediaBox))
+        return (rect, base, nil)
+    }
+
+    private func cachedPhraseGroup(in context: SentenceContext,
+                                   selectedSourceSpans: [UTF16Span],
+                                   sourceText: String) -> VerifiedPhraseGroup? {
+        if verifiedPhraseLookup == nil {
+            verifiedPhraseLookup = VerifiedPhraseGroupLookup(
+                dictionaryRevision: { DictionaryStore.shared.exactPhraseLookupRevision },
+                exactPhraseExists: { DictionaryStore.shared.hasEnabledExactPhrase($0) }
+            )
+        }
+        return verifiedPhraseLookup?.resolve(in: context,
+                                             selectedSourceSpans: selectedSourceSpans,
+                                             sourceText: sourceText)
+    }
+
+    private func verifiedNativePhraseExpansion(seed: PDFSelection,
+                                               page: PDFPage,
+                                               geometryQuality: SourceGeometryQuality = .word,
+                                               baseContextual: ContextualSelection? = nil)
+        -> (selection: PDFSelection, phrase: VerifiedPhraseGroup, contextual: ContextualSelection)? {
+        guard let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0,
+              let sourceText = page.string,
+              let contextual = baseContextual
+                ?? ContextSelectionRouter.route(selection: seed,
+                                                page: page,
+                                                documentSHA256: docSha,
+                                                pageIndex: pageIndex,
+                                                displaySurface: SelectionGeometry.lookupText(for: seed),
+                                                geometryQuality: geometryQuality,
+                                                generation: contextReadingGeneration),
+              let sentenceContext = contextual.sentenceContext,
+              contextual.sourceSpans.count == 1,
+              let selectedSpan = contextual.sourceSpans.first,
+              let phrase = cachedPhraseGroup(in: sentenceContext,
+                                             selectedSourceSpans: [selectedSpan],
+                                             sourceText: sourceText),
+              let phraseRange = phrase.sourceSpan.nsRange(in: sourceText),
+              let phraseSelection = page.selection(for: phraseRange),
+              phraseSelection.pages.count == 1,
+              phraseSelection.pages.first === page,
+              SelectionGeometry.isSane(phraseSelection, maxPages: 1, maxChars: 80),
+              SelectionGeometry.sourceRanges(of: phraseSelection, on: page) == [phraseRange],
+              phraseSelection.selectionsByLine().count == 1,
+              SelectionGeometry.isValid(SelectionGeometry.placedBounds(of: phraseSelection, on: page)),
+              let expanded = ContextSelectionRouter.route(selection: phraseSelection,
+                                                          page: page,
+                                                          documentSHA256: docSha,
+                                                          pageIndex: pageIndex,
+                                                          displaySurface: phrase.sourceSurface,
+                                                          geometryQuality: .word,
+                                                          generation: contextReadingGeneration,
+                                                          verifiedPhraseGroupSpan: phrase.sourceSpan),
+              expanded.verifiedPhraseGroupSpan == phrase.sourceSpan,
+              hasAdjacentNativeTokenGeometry(expanded.tokens, on: page) else { return nil }
+        return (phraseSelection, phrase, expanded)
+    }
+
+    private func hasAdjacentNativeTokenGeometry(_ tokens: [SourceToken], on page: PDFPage) -> Bool {
+        let ordered = tokens.sorted { $0.span.location < $1.span.location }
+        guard ordered.count >= 2, ordered.allSatisfy({ $0.kind == .word }) else { return false }
+        let rects: [CGRect] = ordered.compactMap { token in
+            guard let range = token.span.nsRange(in: page.string ?? ""),
+                  let selection = page.selection(for: range),
+                  selection.pages.count == 1,
+                  selection.pages.first === page,
+                  selection.selectionsByLine().count == 1 else { return nil }
+            let rect = SelectionGeometry.placedBounds(of: selection, on: page)
+            return SelectionGeometry.isValid(rect) ? rect : nil
+        }
+        guard rects.count == ordered.count else { return false }
+        for pair in zip(rects, rects.dropFirst()) {
+            let maximumHeight = max(pair.0.height, pair.1.height)
+            let horizontalGap = pair.1.minX - pair.0.maxX
+            guard pair.1.midX > pair.0.midX,
+                  abs(pair.0.midY - pair.1.midY) <= maximumHeight * 0.6,
+                  horizontalGap >= -maximumHeight * 0.35,
+                  horizontalGap <= maximumHeight * 1.5 else { return false }
+        }
+        return true
+    }
+
+    private func verifiedOCRPhraseExpansion(page: PDFPage, index: Int)
+        -> (range: ClosedRange<Int>, phrase: VerifiedPhraseGroup, contextual: ContextualSelection)? {
+        guard contextReadingEnabled,
+              let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0,
+              let source = pinnedSnapshot(for: page)?.contextSource
+                ?? cachedContextOCRSource(for: page, pageIndex: pageIndex),
+              source.entries.indices.contains(index),
+              source.page.lines.indices.contains(source.entries[index].lineIndex),
+              let base = source.contextualSelection(for: index...index,
+                                                    generation: contextReadingGeneration),
+              let sentenceContext = base.sentenceContext,
+              let selectedSpan = base.sourceSpans.first,
+              let phrase = cachedPhraseGroup(in: sentenceContext,
+                                             selectedSourceSpans: [selectedSpan],
+                                             sourceText: source.page.lines[source.entries[index].lineIndex].sourceText),
+              let range = source.entryRange(for: phrase.sourceSpan, containing: index),
+              let contextual = source.contextualSelection(for: range,
+                                                         generation: contextReadingGeneration,
+                                                         verifiedPhraseGroupSpan: phrase.sourceSpan) else { return nil }
+        return (range, phrase, contextual)
+    }
+
+    private func hoverOccurrenceKey(term: String,
+                                    page: PDFPage,
+                                    rect: CGRect,
+                                    contextual: ContextualSelection?) -> String {
+        let location: String
+        if let contextual {
+            let spans = contextual.sourceSpans.map { "\($0.location):\($0.length)" }.joined(separator: ",")
+            location = "\(contextual.documentSHA256)|\(contextual.pageIndex)|\(contextual.generation)|\(spans)"
+        } else {
+            location = "\(ObjectIdentifier(page))|\(NSCoder.string(for: rect))"
+        }
+        return "\(term)|\(location)"
     }
 
     private func hoverPageRect(for page: PDFPage,
@@ -1083,6 +1269,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     func clearHover() {
+        verifiedPhraseLookup?.clear()
         guard hoverKey != "" || hoverEntry != nil else { return }
         hoverKey = ""
         removeHoverAnnotation()
@@ -1328,7 +1515,10 @@ final class ReaderCoordinator: NSObject {
     }
 
     /// OCR 词框选区(词粒度,范围 = 锚词…拖动词);与文字层路径共用高亮 / 拖柄 / 菜单。
-    private func applyOCRSelection(page: PDFPage, range: ClosedRange<Int>, src: String) {
+    private func applyOCRSelection(page: PDFPage,
+                                   range: ClosedRange<Int>,
+                                   src: String,
+                                   verifiedPhraseGroupSpan: UTF16Span? = nil) {
         guard let pdfView else { return }
         let snapshot: PinnedOCRSelectionSnapshot?
         let words: [OCRWord]
@@ -1348,7 +1538,9 @@ final class ReaderCoordinator: NSObject {
         if contextReadingEnabled, let snapshot,
            snapshot.generation == contextReadingGeneration,
            let source = snapshot.contextSource {
-            guard let selection = source.contextualSelection(for: range, generation: snapshot.generation) else { return }
+            guard let selection = source.contextualSelection(for: range,
+                                                             generation: snapshot.generation,
+                                                             verifiedPhraseGroupSpan: verifiedPhraseGroupSpan) else { return }
             contextual = selection
             text = selection.displaySurface
         } else {
@@ -1576,15 +1768,41 @@ final class ReaderCoordinator: NSObject {
             : nil
         if let selection = wordSeed ?? characterSeed {
             DiagLog.log("selection.result: source=\(source) text=「\(SelectionGeometry.logSnippet(selection.string ?? ""))」")
-            applySelection(selection, src: source, contextRoute: contextReadingEnabled,
-                           geometryQuality: wordSeed != nil ? .word : .approximate)
+            let geometryQuality: SourceGeometryQuality = wordSeed != nil ? .word : .approximate
+            let phraseExpansion = source == "doubleTap" && contextReadingEnabled
+                ? verifiedNativePhraseExpansion(seed: selection,
+                                                page: hit.page,
+                                                geometryQuality: geometryQuality)
+                : nil
+            if let phraseExpansion {
+                DiagLog.log("context.phrase.expand=pdf")
+                applySelection(phraseExpansion.selection,
+                               src: source,
+                               contextRoute: true,
+                               geometryQuality: .word,
+                               verifiedPhraseGroupSpan: phraseExpansion.phrase.sourceSpan)
+            } else {
+                applySelection(selection,
+                               src: source,
+                               contextRoute: contextReadingEnabled,
+                               geometryQuality: geometryQuality)
+            }
             refreshHandles()
             presentMenu()
             if hapticsEnabled { PencilHaptics.selectionCompleted(at: viewPoint) }
             return true
         }
         if let idx = ocrWordIndex(at: hit.point, on: hit.page) {
-            applyOCRSelection(page: hit.page, range: idx...idx, src: source)
+            if source == "doubleTap", contextReadingEnabled,
+               let expansion = verifiedOCRPhraseExpansion(page: hit.page, index: idx) {
+                DiagLog.log("context.phrase.expand=ocr")
+                applyOCRSelection(page: hit.page,
+                                  range: expansion.range,
+                                  src: source,
+                                  verifiedPhraseGroupSpan: expansion.phrase.sourceSpan)
+            } else {
+                applyOCRSelection(page: hit.page, range: idx...idx, src: source)
+            }
             refreshHandles()
             presentMenu()
             return true
@@ -1613,7 +1831,8 @@ final class ReaderCoordinator: NSObject {
     private func applySelection(_ selection: PDFSelection,
                                 src: String,
                                 contextRoute: Bool = false,
-                                geometryQuality: SourceGeometryQuality = .approximate) {
+                                geometryQuality: SourceGeometryQuality = .approximate,
+                                verifiedPhraseGroupSpan: UTF16Span? = nil) {
         let text = SelectionGeometry.lookupText(for:selection)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
@@ -1652,7 +1871,8 @@ final class ReaderCoordinator: NSObject {
                                                 pageIndex: pageIndex,
                                                 displaySurface: text,
                                                 geometryQuality: geometryQuality,
-                                                generation: contextReadingGeneration)
+                                                generation: contextReadingGeneration,
+                                                verifiedPhraseGroupSpan: verifiedPhraseGroupSpan)
         }()
         onSelectionInfo(SelectionInfo(
             text: display,

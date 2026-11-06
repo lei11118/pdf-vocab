@@ -309,10 +309,15 @@ enum NativeSentenceContextBuilder {
               let selectedEnd = orderedSpans.compactMap(\.endExclusive).max(),
               selectedEnd - selectedStart <= maximumSentenceUTF16Units else { return nil }
 
-        let windowStart = max(0, selectedStart - maximumSentenceUTF16Units)
+        guard let paragraphRange = paragraphRange(around: orderedSpans, in: sourceText) else {
+            return reject("selection-crosses-blank-line")
+        }
+        let paragraphEnd = NSMaxRange(paragraphRange)
+        let windowStart = max(paragraphRange.location,
+                              max(0, selectedStart - maximumSentenceUTF16Units))
         let (unboundedEnd, overflow) = selectedEnd.addingReportingOverflow(maximumSentenceUTF16Units)
         guard !overflow else { return nil }
-        let windowEnd = min(source.length, unboundedEnd)
+        let windowEnd = min(paragraphEnd, unboundedEnd)
         guard let windowRange = composedRange(from: windowStart,
                                               to: windowEnd,
                                               in: sourceText),
@@ -339,22 +344,25 @@ enum NativeSentenceContextBuilder {
         }
         guard containing.count == 1,
               let tokenizedRange = containing.first,
-              !(tokenizedRange.location == 0 && windowRange.location > 0),
-              !(NSMaxRange(tokenizedRange) == windowNSString.length && NSMaxRange(windowRange) < source.length),
+              !(tokenizedRange.location == 0 && windowRange.location > paragraphRange.location),
+              !(NSMaxRange(tokenizedRange) == windowNSString.length && NSMaxRange(windowRange) < paragraphEnd),
               let coreRange = trimmedRange(tokenizedRange, in: windowText),
-              localSelections.allSatisfy({ contains(coreRange, $0) }) else { return nil }
+              localSelections.allSatisfy({ contains(coreRange, $0) }) else {
+            return reject("sentence-boundary-ambiguous")
+        }
 
         let globalCoreRange = NSRange(location: windowRange.location + coreRange.location,
                                       length: coreRange.length)
         guard globalCoreRange.length <= maximumSentenceUTF16Units,
               let sourceSpan = UTF16Span(range: globalCoreRange, in: sourceText),
-              let rawSentence = sourceSpan.substring(in: sourceText),
-              !hasBlankLine(in: sourceText, span: sourceSpan) else { return nil }
+              let rawSentence = sourceSpan.substring(in: sourceText) else { return nil }
 
         let sourceContainsLineBreak = rawSentence.unicodeScalars.contains {
             CharacterSet.newlines.contains($0)
         }
-        guard !sourceContainsLineBreak || allowsLineBreaks else { return nil }
+        guard !sourceContainsLineBreak || allowsLineBreaks else {
+            return reject("multiline-needs-geometry")
+        }
 
         let normalizedSentence = windowNSString.substring(with: coreRange)
 
@@ -380,6 +388,60 @@ enum NativeSentenceContextBuilder {
                                selectedDisplaySpans: selectedDisplaySpans,
                                kind: SentenceContextBuilder.isCompleteSentence(normalizedSentence)
                                 ? .completeSentence : .fragment)
+    }
+
+    private static func paragraphRange(around spans: [UTF16Span], in sourceText: String) -> NSRange? {
+        let source = sourceText as NSString
+        guard let selectedStart = spans.map(\.location).min(),
+              let selectedEnd = spans.compactMap(\.endExclusive).max(),
+              selectedEnd > selectedStart else { return nil }
+        var paragraphStart = 0
+        var paragraphEnd = source.length
+        var lineStart = 0
+
+        while lineStart < source.length {
+            var lineEnd = lineStart
+            while lineEnd < source.length {
+                let unit = source.character(at: lineEnd)
+                if unit == 0x000A || unit == 0x000D { break }
+                lineEnd += 1
+            }
+            var breakEnd = lineEnd
+            if breakEnd < source.length {
+                let unit = source.character(at: breakEnd)
+                breakEnd += 1
+                if unit == 0x000D, breakEnd < source.length, source.character(at: breakEnd) == 0x000A {
+                    breakEnd += 1
+                }
+            }
+            let lineText = source.substring(with: NSRange(location: lineStart, length: lineEnd - lineStart))
+            let isBlankLine = lineText.unicodeScalars.allSatisfy {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }
+            if isBlankLine, breakEnd > lineEnd {
+                if lineStart < selectedEnd && breakEnd > selectedStart {
+                    return nil
+                }
+                if lineStart < selectedStart {
+                    paragraphStart = breakEnd
+                } else if lineStart >= selectedEnd {
+                    paragraphEnd = lineStart
+                    break
+                }
+            }
+            if lineEnd == source.length { break }
+            lineStart = breakEnd
+        }
+
+        guard paragraphStart <= selectedStart,
+              selectedEnd <= paragraphEnd,
+              paragraphEnd > paragraphStart else { return nil }
+        return NSRange(location: paragraphStart, length: paragraphEnd - paragraphStart)
+    }
+
+    private static func reject(_ category: String) -> SentenceContext? {
+        DiagLog.log("context.native.reject=\(category)")
+        return nil
     }
 
     /// True only when each extracted source row is geometrically adjacent to

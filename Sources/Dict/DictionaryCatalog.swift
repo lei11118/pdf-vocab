@@ -52,6 +52,7 @@ extension DictionaryStore {
         var ids = Set(UserDefaults.standard.stringArray(forKey: "dictionary.disabled.v1") ?? [])
         if enabled { ids.remove(id) } else { ids.insert(id) }
         UserDefaults.standard.set(ids.sorted(), forKey: "dictionary.disabled.v1")
+        noteExactPhraseCatalogChanged()
         NotificationCenter.default.post(name: .dictionarySelectionChanged, object: nil)
     }
 

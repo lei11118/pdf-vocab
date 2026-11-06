@@ -26,9 +26,14 @@ final class DictionaryStore: @unchecked Sendable {
     private var scienceQueue: DatabaseQueue?
     private var wordnetQueue: DatabaseQueue?
     private let lock = NSRecursiveLock()
+    private var exactPhraseLookupRevisionStorage = 0
 
     var isAvailable: Bool { lock.lock(); defer { lock.unlock() }; return builtinQueue != nil || scienceQueue != nil || wordnetQueue != nil || !imports.isEmpty }
     var hasUserDictionary: Bool { userQueue != nil }
+    var exactPhraseLookupRevision: Int {
+        lock.lock(); defer { lock.unlock() }
+        return exactPhraseLookupRevisionStorage
+    }
 
     private init() {
         if let url = Bundle.main.url(forResource: "ecdict", withExtension: "sqlite") {
@@ -73,6 +78,58 @@ final class DictionaryStore: @unchecked Sendable {
     func reloadUserDictionary() {
         lock.lock(); defer { lock.unlock() }
         loadUserDictionary()
+        exactPhraseLookupRevisionStorage &+= 1
+    }
+
+    /// Lightweight exact phrase check used by bounded selection expansion.
+    /// It reads only existence keys from enabled sources and never aggregates
+    /// full dictionary entries or definitions.
+    func hasEnabledExactPhrase(_ rawPhrase: String) -> Bool {
+        let key = rawPhrase.split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .lowercased()
+        guard !key.isEmpty, key.count <= 40 else { return false }
+        lock.lock(); defer { lock.unlock() }
+
+        for (id, queue) in imports where isEnabled(id) {
+            if Self.hasExactDictionaryEntry(in: queue, key: key) { return true }
+        }
+        if let scienceQueue {
+            let domains = (try? scienceQueue.read { db in
+                try String.fetchAll(db,
+                                    sql: "SELECT domain FROM dict WHERE word = ? ORDER BY domain",
+                                    arguments: [key])
+            }) ?? []
+            for domain in domains where isEnabled("science.\(domain)") {
+                return true
+            }
+        }
+        if isEnabled("builtin"), Self.hasExactDictionaryEntry(in: builtinQueue, key: key) {
+            return true
+        }
+        if isEnabled("wordnet"), let wordnetQueue {
+            let exists = (try? wordnetQueue.read { db in
+                try Int.fetchOne(db,
+                                 sql: "SELECT 1 FROM membership WHERE lemma = ? LIMIT 1",
+                                 arguments: [key]) != nil
+            }) ?? false
+            if exists { return true }
+        }
+        return false
+    }
+
+    func noteExactPhraseCatalogChanged() {
+        lock.lock(); defer { lock.unlock() }
+        exactPhraseLookupRevisionStorage &+= 1
+    }
+
+    private static func hasExactDictionaryEntry(in queue: DatabaseQueue?, key: String) -> Bool {
+        guard let queue else { return false }
+        return (try? queue.read { db in
+            try Int.fetchOne(db,
+                             sql: "SELECT 1 FROM dict WHERE word = ? LIMIT 1",
+                             arguments: [key]) != nil
+        }) ?? false
     }
 
     func userDictionaryName() -> String? {

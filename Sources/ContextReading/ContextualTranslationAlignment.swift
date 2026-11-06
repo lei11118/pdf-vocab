@@ -8,6 +8,14 @@ struct ContextualTranslationToken: Equatable, Sendable {
     let sourceSurface: String
 }
 
+/// An explicitly verified multiword phrase, aligned as one semantic unit
+/// while the underlying word tokens remain available in the same request.
+struct ContextualTranslationPhraseGroup: Equatable, Sendable {
+    let id: String
+    let sourceSpan: UTF16Span
+    let sourceSurface: String
+}
+
 /// A validated, sentence-local request. The sentence is sent to Translation,
 /// while only the selected token range is ever returned to the card.
 struct ContextualTranslationRequest: Equatable, Sendable {
@@ -16,10 +24,12 @@ struct ContextualTranslationRequest: Equatable, Sendable {
     let selectedTokenIDs: [String]
     let selectedSourceSpans: [UTF16Span]
     let selectedSourcePhrase: String
+    let selectedPhraseGroup: ContextualTranslationPhraseGroup?
 
     static let maximumInputUTF16Units = 2_048
 
-    static func make(from context: SentenceContext) throws -> ContextualTranslationRequest {
+    static func make(from context: SentenceContext,
+                     verifiedPhraseGroupSpan: UTF16Span? = nil) throws -> ContextualTranslationRequest {
         guard context.kind == .completeSentence else { throw ContextualTranslationError.incompleteSentence }
         guard !context.text.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) else {
             throw ContextualTranslationError.incompleteSentence
@@ -39,6 +49,24 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         }
 
         let localSelections = try localSelectionSpans(in: context)
+        let localPhraseGroupSpan: UTF16Span?
+        if let verifiedPhraseGroupSpan {
+            guard context.selectedSourceSpans == [verifiedPhraseGroupSpan],
+                  verifiedPhraseGroupSpan.location >= context.sourceSpan.location,
+                  let verifiedEnd = verifiedPhraseGroupSpan.endExclusive,
+                  verifiedEnd <= (context.sourceSpan.endExclusive ?? -1) else {
+                throw ContextualTranslationError.invalidSelection
+            }
+            let local = UTF16Span(location: verifiedPhraseGroupSpan.location - context.sourceSpan.location,
+                                  length: verifiedPhraseGroupSpan.length)
+            guard local.composedCharacterRange(in: context.text) != nil,
+                  localSelections == [local] else {
+                throw ContextualTranslationError.invalidSelection
+            }
+            localPhraseGroupSpan = local
+        } else {
+            localPhraseGroupSpan = nil
+        }
         let canonical = SemanticTokenizer.canonicalize(context.text,
                                                        documentSHA256: context.documentSHA256,
                                                        pageIndex: context.pageIndex,
@@ -96,12 +124,40 @@ struct ContextualTranslationRequest: Equatable, Sendable {
                                         sourceSpan: token.span,
                                         sourceSurface: token.sourceSurface)
         }
-        let selectedIDs = selectedIndices.map { tokens[$0].id }
+        let phraseGroup: ContextualTranslationPhraseGroup?
+        if let localPhraseGroupSpan {
+            guard selectedIndices.count >= 2,
+                  selectedIndices.allSatisfy({ sourceTokens[$0].kind == .word }),
+                  firstSelectedIndex >= 0, firstSelectedIndex < sourceTokens.count,
+                  lastSelectedIndex >= 0, lastSelectedIndex < sourceTokens.count else {
+                throw ContextualTranslationError.invalidSelection
+            }
+            let firstToken = sourceTokens[firstSelectedIndex]
+            let lastToken = sourceTokens[lastSelectedIndex]
+            guard
+                  let lastEnd = lastToken.span.endExclusive,
+                  firstToken.span.location == localPhraseGroupSpan.location,
+                  lastEnd == (localPhraseGroupSpan.endExclusive ?? -1),
+                  localPhraseGroupSpan.length > 0,
+                  phraseGapsAreWhitespace(sourceTokens: sourceTokens, indices: selectedIndices, in: context.text),
+                  let groupSurface = localPhraseGroupSpan.substring(in: context.text) else {
+                throw ContextualTranslationError.invalidSelection
+            }
+            let groupID = "phrase-\(context.sourceSpan.location + localPhraseGroupSpan.location)-\(localPhraseGroupSpan.length)"
+            phraseGroup = ContextualTranslationPhraseGroup(id: groupID,
+                                                            sourceSpan: localPhraseGroupSpan,
+                                                            sourceSurface: groupSurface)
+        } else {
+            phraseGroup = nil
+        }
+        let selectedIDs = phraseGroup.map { [$0.id] } ?? selectedIndices.map { tokens[$0].id }
+        let selectedPhrase = phraseGroup?.sourceSurface ?? selectedPhrase
         return ContextualTranslationRequest(sentenceText: context.text,
                                             tokens: tokens,
                                             selectedTokenIDs: selectedIDs,
                                             selectedSourceSpans: localSelections,
-                                            selectedSourcePhrase: selectedPhrase)
+                                            selectedSourcePhrase: selectedPhrase,
+                                            selectedPhraseGroup: phraseGroup)
     }
 
     func attributedSourceText() throws -> AttributedString {
@@ -119,7 +175,38 @@ struct ContextualTranslationRequest: Equatable, Sendable {
             }
             attributed[startIndex..<endIndex][ContextualTranslationTokenIDAttribute.self] = token.id
         }
+        if let group = selectedPhraseGroup {
+            guard let end = group.sourceSpan.endExclusive,
+                  group.sourceSpan.composedCharacterRange(in: sentenceText) != nil,
+                  let startIndex = attributedIndex(atUTF16Offset: group.sourceSpan.location,
+                                                   in: sentenceText,
+                                                   attributed: attributed),
+                  let endIndex = attributedIndex(atUTF16Offset: end,
+                                                 in: sentenceText,
+                                                 attributed: attributed) else {
+                throw ContextualTranslationError.invalidTokenRange
+            }
+            attributed[startIndex..<endIndex][ContextualTranslationPhraseGroupIDAttribute.self] = group.id
+        }
         return attributed
+    }
+
+    private static func phraseGapsAreWhitespace(sourceTokens: [SourceToken],
+                                                indices: [Int],
+                                                in sourceText: String) -> Bool {
+        guard indices.count >= 2 else { return false }
+        for pair in zip(indices, indices.dropFirst()) {
+            guard let leftEnd = sourceTokens[pair.0].span.endExclusive else { return false }
+            let rightStart = sourceTokens[pair.1].span.location
+            guard rightStart > leftEnd,
+                  let gapText = UTF16Span(location: leftEnd,
+                                          length: rightStart - leftEnd).substring(in: sourceText),
+                  !gapText.isEmpty,
+                  gapText.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }) else {
+                return false
+            }
+        }
+        return true
     }
 
     private static func localSelectionSpans(in context: SentenceContext) throws -> [UTF16Span] {
@@ -153,9 +240,15 @@ struct ContextualTranslationTokenIDAttribute: CodableAttributedStringKey {
     static let name = "com.pdfvocab.contextual-token-id"
 }
 
+struct ContextualTranslationPhraseGroupIDAttribute: CodableAttributedStringKey {
+    typealias Value = String
+    static let name = "com.pdfvocab.contextual-phrase-group-id"
+}
+
 extension AttributeScopes {
     struct PdfVocabContextualTranslationAttributes: AttributeScope {
         let contextualTokenID: ContextualTranslationTokenIDAttribute
+        let contextualPhraseGroupID: ContextualTranslationPhraseGroupIDAttribute
     }
 
     var pdfVocabContextualTranslation: PdfVocabContextualTranslationAttributes.Type {
@@ -193,15 +286,28 @@ enum ContextualTranslationAlignment {
         let targetRanges = try tokenRanges(in: attributedTarget,
                                            expectedIDs: Set(request.tokens.map(\.id)),
                                            allowMissingIDs: true)
+        let expectedGroupIDs = Set(request.selectedPhraseGroup.map { [$0.id] } ?? [])
+        let targetGroupRanges = try phraseGroupRanges(in: attributedTarget,
+                                                     expectedIDs: expectedGroupIDs,
+                                                     allowMissingIDs: true)
 
         var selectedRanges: [UTF16Span] = []
-        for id in request.selectedTokenIDs {
-            guard let spans = targetRanges[id], !spans.isEmpty else {
-                throw ContextualTranslationError.selectedTokenNotAligned
+        if let group = request.selectedPhraseGroup {
+            guard let spans = targetGroupRanges[group.id], !spans.isEmpty else {
+                throw ContextualTranslationError.selectedPhraseGroupNotAligned
             }
             let merged = try mergeContiguous(spans)
             guard merged.count == 1 else { throw ContextualTranslationError.discontiguousTokenAlignment }
-            selectedRanges.append(merged[0])
+            selectedRanges = merged
+        } else {
+            for id in request.selectedTokenIDs {
+                guard let spans = targetRanges[id], !spans.isEmpty else {
+                    throw ContextualTranslationError.selectedTokenNotAligned
+                }
+                let merged = try mergeContiguous(spans)
+                guard merged.count == 1 else { throw ContextualTranslationError.discontiguousTokenAlignment }
+                selectedRanges.append(merged[0])
+            }
         }
         selectedRanges.sort { $0.location < $1.location }
         guard let first = selectedRanges.first,
@@ -232,7 +338,7 @@ enum ContextualTranslationAlignment {
             throw ContextualTranslationError.invalidTargetRange
         }
 
-        if request.selectedTokenIDs.count < request.tokens.count,
+        if (request.selectedPhraseGroup != nil || request.selectedTokenIDs.count < request.tokens.count),
            isWholeSentenceTarget(targetSpan, targetText: payload.targetText) {
             throw ContextualTranslationError.translationCoversSentence
         }
@@ -251,6 +357,19 @@ enum ContextualTranslationAlignment {
                 throw ContextualTranslationError.sourceAttributesLost
             }
         }
+        let expectedGroupIDs = Set(request.selectedPhraseGroup.map { [$0.id] } ?? [])
+        let foundGroups = try phraseGroupRanges(in: attributed,
+                                                expectedIDs: expectedGroupIDs,
+                                                allowMissingIDs: false)
+        if let group = request.selectedPhraseGroup {
+            guard let expectedSurface = group.sourceSpan.substring(in: request.sentenceText),
+                  group.sourceSpan.composedCharacterRange(in: request.sentenceText) != nil,
+                  expectedSurface == group.sourceSurface,
+                  let ranges = foundGroups[group.id],
+                  try mergeContiguous(ranges) == [group.sourceSpan] else {
+                throw ContextualTranslationError.sourceAttributesLost
+            }
+        }
     }
 
     private static func tokenRanges(in attributed: AttributedString,
@@ -261,6 +380,30 @@ enum ContextualTranslationAlignment {
         for run in attributed.runs {
             guard let id = run[ContextualTranslationTokenIDAttribute.self] else { continue }
             guard expectedIDs.contains(id) else { throw ContextualTranslationError.unknownTokenID }
+            guard let lower = String.Index(run.range.lowerBound, within: attributedText),
+                  let upper = String.Index(run.range.upperBound, within: attributedText) else {
+                throw ContextualTranslationError.invalidTargetRange
+            }
+            let range = NSRange(lower..<upper, in: attributedText)
+            guard let span = UTF16Span(composedRange: range, in: attributedText), span.length > 0 else {
+                throw ContextualTranslationError.invalidTargetRange
+            }
+            result[id, default: []].append(span)
+        }
+        if !allowMissingIDs && result.count != expectedIDs.count {
+            throw ContextualTranslationError.sourceAttributesLost
+        }
+        return result
+    }
+
+    private static func phraseGroupRanges(in attributed: AttributedString,
+                                          expectedIDs: Set<String>,
+                                          allowMissingIDs: Bool) throws -> [String: [UTF16Span]] {
+        let attributedText = String(attributed.characters)
+        var result: [String: [UTF16Span]] = [:]
+        for run in attributed.runs {
+            guard let id = run[ContextualTranslationPhraseGroupIDAttribute.self] else { continue }
+            guard expectedIDs.contains(id) else { throw ContextualTranslationError.unknownPhraseGroupID }
             guard let lower = String.Index(run.range.lowerBound, within: attributedText),
                   let upper = String.Index(run.range.upperBound, within: attributedText) else {
                 throw ContextualTranslationError.invalidTargetRange
@@ -339,6 +482,8 @@ enum ContextualTranslationError: Error, Equatable, LocalizedError, Sendable {
     case targetChanged
     case unknownTokenID
     case selectedTokenNotAligned
+    case selectedPhraseGroupNotAligned
+    case unknownPhraseGroupID
     case discontiguousTokenAlignment
     case overlappingTokenAlignment
     case noncontiguousPhraseAlignment
@@ -347,6 +492,38 @@ enum ContextualTranslationError: Error, Equatable, LocalizedError, Sendable {
     case invalidConfiguration
     case outputTooLong(maximumUTF16Units: Int)
     case staleRequest
+
+    /// Stable, content-free category for diagnostics. Never log localized
+    /// descriptions here because translation framework errors may include text.
+    var diagnosticCode: String {
+        switch self {
+        case .disabled: "disabled"
+        case .incompleteSentence: "incomplete_sentence"
+        case .emptyInput: "empty_input"
+        case .inputTooLong: "input_too_long"
+        case .invalidSelection: "invalid_selection"
+        case .partialTokenSelection: "partial_token"
+        case .discontiguousSelection: "discontiguous_selection"
+        case .selectionCoversSentence: "selection_covers_sentence"
+        case .noTokens: "no_tokens"
+        case .invalidTokenRange: "invalid_token_range"
+        case .sourceChanged: "source_changed"
+        case .sourceAttributesLost: "source_attributes_lost"
+        case .targetChanged: "target_changed"
+        case .unknownTokenID: "unknown_token_id"
+        case .selectedTokenNotAligned: "selected_token_not_aligned"
+        case .selectedPhraseGroupNotAligned: "selected_phrase_group_not_aligned"
+        case .unknownPhraseGroupID: "unknown_phrase_group_id"
+        case .discontiguousTokenAlignment: "discontiguous_token_alignment"
+        case .overlappingTokenAlignment: "overlapping_token_alignment"
+        case .noncontiguousPhraseAlignment: "noncontiguous_phrase_alignment"
+        case .invalidTargetRange: "invalid_target_range"
+        case .translationCoversSentence: "translation_covers_sentence"
+        case .invalidConfiguration: "invalid_configuration"
+        case .outputTooLong: "output_too_long"
+        case .staleRequest: "stale_request"
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -365,6 +542,8 @@ enum ContextualTranslationError: Error, Equatable, LocalizedError, Sendable {
         case .targetChanged: "系统译文与带标记译文不一致。"
         case .unknownTokenID: "系统返回了未知的 Token 标记，未显示语境候选。"
         case .selectedTokenNotAligned: "系统没有为选中的 Token 返回可用对齐。"
+        case .selectedPhraseGroupNotAligned: "系统没有为已验证短语返回可用对齐。"
+        case .unknownPhraseGroupID: "系统返回了未知的短语组标记，未显示语境候选。"
         case .discontiguousTokenAlignment: "选中 Token 的系统对齐分成了多段。"
         case .overlappingTokenAlignment: "系统返回的 Token 对齐范围发生重叠。"
         case .noncontiguousPhraseAlignment: "短语中的 Token 在译文里无法连续提取。"

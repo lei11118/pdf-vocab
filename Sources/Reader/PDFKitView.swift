@@ -30,7 +30,7 @@ struct PDFKitView: UIViewRepresentable {
     /// v0.11.0(M4-B):悬停预览 / 触觉(设置页开关)
     var hoverPreviewEnabled: Bool = false
     var hapticsEnabled: Bool = false
-    var onHoverUpdate: ((String, String, CGPoint) -> Void)? = nil
+    var onHoverUpdate: ((String, String, CGPoint, ContextualSelection?) -> Void)? = nil
     var onHoverEnd: (() -> Void)? = nil
     var markMode: Bool = false
     var contextReadingEnabled: Bool = false

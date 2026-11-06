@@ -23,7 +23,8 @@ enum ContextSelectionRouter {
                       pageIndex: Int,
                       displaySurface: String,
                       geometryQuality: SourceGeometryQuality,
-                      generation: Int) -> ContextualSelection? {
+                      generation: Int,
+                      verifiedPhraseGroupSpan: UTF16Span? = nil) -> ContextualSelection? {
         guard selection.pages.count == 1,
               selection.pages.first === page,
               let sourceText = page.string else { return nil }
@@ -41,21 +42,34 @@ enum ContextSelectionRouter {
                                        displaySurface: displaySurface,
                                        geometryQuality: geometryQuality,
                                        generation: generation,
-                                       allowsMultilineSentenceContext: true) else { return nil }
-        guard let candidate = contextual.sentenceContext,
-              let rawCandidate = candidate.sourceSpan.substring(in: sourceText),
-              containsLineBreak(rawCandidate) else { return contextual }
-        guard let lineSpans = NativeSentenceContextBuilder.lineSpans(in: sourceText,
-                                                                      sourceSpan: candidate.sourceSpan) else {
-            contextual.sentenceContext = nil
-            return contextual
+                                       allowsMultilineSentenceContext: true,
+                                       verifiedPhraseGroupSpan: verifiedPhraseGroupSpan) else { return nil }
+        if let candidate = contextual.sentenceContext,
+           let rawCandidate = candidate.sourceSpan.substring(in: sourceText),
+           containsLineBreak(rawCandidate) {
+            guard let lineSpans = NativeSentenceContextBuilder.lineSpans(in: sourceText,
+                                                                          sourceSpan: candidate.sourceSpan) else {
+                contextual.sentenceContext = nil
+                return verifiedPhraseGroupSpan == nil ? contextual : nil
+            }
+            let lineBoxes = lineSpans.compactMap { lineBounds(for: $0, sourceText: sourceText, page: page) }
+            guard isTrustedMultilineLayout(sourceText: sourceText,
+                                           candidate: candidate,
+                                           lineBounds: lineBoxes) else {
+                contextual.sentenceContext = nil
+                return verifiedPhraseGroupSpan == nil ? contextual : nil
+            }
         }
-        let lineBoxes = lineSpans.compactMap { lineBounds(for: $0, sourceText: sourceText, page: page) }
-        guard isTrustedMultilineLayout(sourceText: sourceText,
-                                       candidate: candidate,
-                                       lineBounds: lineBoxes) else {
-            contextual.sentenceContext = nil
-            return contextual
+        if let verifiedPhraseGroupSpan {
+            guard let sentenceContext = contextual.sentenceContext,
+                  contextual.sourceSpans == [verifiedPhraseGroupSpan],
+                  sentenceContext.selectedSourceSpans == [verifiedPhraseGroupSpan],
+                  contextual.tokens.count >= 2,
+                  contextual.tokens.allSatisfy({ $0.kind == .word }),
+                  isWhitespaceSeparatedWordGroup(contextual.tokens,
+                                                  span: verifiedPhraseGroupSpan,
+                                                  in: sourceText) else { return nil }
+            contextual.verifiedPhraseGroupSpan = verifiedPhraseGroupSpan
         }
         return contextual
     }
@@ -65,7 +79,8 @@ enum ContextSelectionRouter {
                         displaySurface: String,
                         geometryQuality: SourceGeometryQuality,
                         generation: Int,
-                        allowsMultilineSentenceContext: Bool = false) -> ContextualSelection? {
+                        allowsMultilineSentenceContext: Bool = false,
+                        verifiedPhraseGroupSpan: UTF16Span? = nil) -> ContextualSelection? {
         guard !sourceSpans.isEmpty,
               !displaySurface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
@@ -77,7 +92,16 @@ enum ContextSelectionRouter {
         }
 
         let selectedTokens: [SourceToken]
-        if geometryQuality == .approximate {
+        if let verifiedPhraseGroupSpan {
+            guard sourceSpans == [verifiedPhraseGroupSpan],
+                  contained.count == overlaps.count,
+                  contained.count >= 2,
+                  contained.allSatisfy({ $0.kind == .word }),
+                  isWhitespaceSeparatedWordGroup(contained,
+                                                 span: verifiedPhraseGroupSpan,
+                                                 in: canonical.sourceText) else { return nil }
+            selectedTokens = contained.map { $0.withGeometryQuality(geometryQuality) }
+        } else if geometryQuality == .approximate {
             // A drag may include several whole tokens. A partial token overlap
             // is ambiguous, so let the existing selection path own that case.
             guard !contained.isEmpty, contained.count == overlaps.count else { return nil }
@@ -229,5 +253,26 @@ enum ContextSelectionRouter {
 
     private static func containsLineBreak(_ text: String) -> Bool {
         text.unicodeScalars.contains { CharacterSet.newlines.contains($0) }
+    }
+
+    private static func isWhitespaceSeparatedWordGroup(_ tokens: [SourceToken],
+                                                       span: UTF16Span,
+                                                       in sourceText: String) -> Bool {
+        let ordered = tokens.sorted { $0.span.location < $1.span.location }
+        guard ordered.count >= 2,
+              ordered.allSatisfy({ $0.kind == .word }),
+              ordered.first?.span.location == span.location,
+              ordered.last?.span.endExclusive == span.endExclusive else { return false }
+        for pair in zip(ordered, ordered.dropFirst()) {
+            guard let leftEnd = pair.0.span.endExclusive,
+                  pair.1.span.location > leftEnd,
+                  let gapText = UTF16Span(location: leftEnd,
+                                          length: pair.1.span.location - leftEnd).substring(in: sourceText),
+                  !gapText.isEmpty,
+                  gapText.unicodeScalars.allSatisfy({
+                      CharacterSet.whitespaces.contains($0) && !CharacterSet.newlines.contains($0)
+                  }) else { return false }
+        }
+        return true
     }
 }

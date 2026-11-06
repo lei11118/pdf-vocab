@@ -3,6 +3,14 @@ import XCTest
 @testable import PdfVocab
 
 final class ContextualTranslationAlignmentTests: XCTestCase {
+    func testDiagnosticCodesDistinguishContentFreeFailureCategories() {
+        XCTAssertEqual(ContextualTranslationError.incompleteSentence.diagnosticCode, "incomplete_sentence")
+        XCTAssertEqual(ContextualTranslationError.partialTokenSelection.diagnosticCode, "partial_token")
+        XCTAssertEqual(ContextualTranslationError.sourceAttributesLost.diagnosticCode, "source_attributes_lost")
+        XCTAssertEqual(ContextualTranslationError.inputTooLong(maximumUTF16Units: 99).diagnosticCode,
+                       "input_too_long")
+    }
+
     func testRepeatedWordsHaveUniquePositionIDsAndSelectedOccurrenceIsExact() throws {
         let text = "They read read carefully."
         let selected = try XCTUnwrap(span(of: "read", in: text, occurrence: 1))
@@ -174,6 +182,81 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
         }
     }
 
+    func testVerifiedPhraseGroupAlignsManySourceWordsToOneTargetRange() throws {
+        let request = try phraseGroupRequest(text: "They read books daily.", selected: "read books")
+        let group = try XCTUnwrap(request.selectedPhraseGroup)
+        XCTAssertEqual(request.tokens.filter { ["read", "books"].contains($0.sourceSurface) }.count, 2)
+        XCTAssertEqual(request.selectedTokenIDs, [group.id])
+        XCTAssertEqual(request.selectedSourceSpans, [group.sourceSpan])
+
+        let target = "他们读书每天"
+        let groupTargetSpan = UTF16Span(location: 2, length: 2)
+        let payload = try phrasePayload(request: request,
+                                        target: target,
+                                        targetGroupSpans: [groupTargetSpan])
+        let candidate = try ContextualTranslationAlignment.decode(request: request, payload: payload)
+
+        XCTAssertEqual(candidate.sourcePhrase, "read books")
+        XCTAssertEqual(candidate.translatedPhrase, "读书")
+    }
+
+    func testVerifiedPhraseGroupRejectsMissingUnknownMovedDisjointAndWholeTargetMarkers() throws {
+        let request = try phraseGroupRequest(text: "They read books daily.", selected: "read books")
+        let expectedTargetSpan = UTF16Span(location: 1, length: 2)
+        let target = "甲读书乙"
+
+        let missingTarget = try phrasePayload(request: request, target: target)
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: missingTarget)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .selectedPhraseGroupNotAligned)
+        }
+
+        let unknownID = try phrasePayload(request: request,
+                                          target: target,
+                                          targetGroupSpans: [expectedTargetSpan],
+                                          targetGroupID: "unknown-phrase")
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: unknownID)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .unknownPhraseGroupID)
+        }
+
+        let group = try XCTUnwrap(request.selectedPhraseGroup)
+        let movedSource = try phrasePayload(request: request,
+                                            target: target,
+                                            sourceGroupSpans: [UTF16Span(location: group.sourceSpan.location + 1,
+                                                                        length: group.sourceSpan.length)],
+                                            targetGroupSpans: [expectedTargetSpan])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: movedSource)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .sourceAttributesLost)
+        }
+
+        let disjointTarget = try phrasePayload(request: request,
+                                               target: target,
+                                               targetGroupSpans: [UTF16Span(location: 1, length: 1),
+                                                                  UTF16Span(location: 3, length: 1)])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: disjointTarget)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .discontiguousTokenAlignment)
+        }
+
+        let wholeTarget = "读书"
+        let wholeTargetMarker = try phrasePayload(request: request,
+                                                  target: wholeTarget,
+                                                  targetGroupSpans: [UTF16Span(location: 0,
+                                                                               length: (wholeTarget as NSString).length)])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: wholeTargetMarker)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .translationCoversSentence)
+        }
+    }
+
+    func testVerifiedPhraseGroupRejectsMissingSourceMarker() throws {
+        let request = try phraseGroupRequest(text: "They read books daily.", selected: "read books")
+        let payload = try phrasePayload(request: request,
+                                        target: "甲读书乙",
+                                        sourceGroupSpans: [],
+                                        targetGroupSpans: [UTF16Span(location: 1, length: 2)])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: payload)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .sourceAttributesLost)
+        }
+    }
+
     func testRequestRejectsPartialTokenWholeSentenceAndMultilineInput() throws {
         let accented = "Cafe\u{0301} moves forward."
         XCTAssertThrowsError(try ContextualTranslationRequest.make(
@@ -214,13 +297,44 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                                             attributedTargetText: attributedTarget)
     }
 
+    private func phrasePayload(request: ContextualTranslationRequest,
+                               target: String,
+                               sourceGroupSpans: [UTF16Span]? = nil,
+                               targetGroupSpans: [UTF16Span] = [],
+                               targetGroupID: String? = nil) throws -> ContextualTranslationPayload {
+        let group = try XCTUnwrap(request.selectedPhraseGroup)
+        let sourceTokenRanges = Dictionary(uniqueKeysWithValues: request.tokens.map { ($0.id, [$0.sourceSpan]) })
+        let sourceGroupRanges = [group.id: sourceGroupSpans ?? [group.sourceSpan]]
+        let source = try attributed(request.sentenceText,
+                                    ranges: sourceTokenRanges,
+                                    phraseGroupRanges: sourceGroupRanges)
+        let targetGroupRanges = [targetGroupID ?? group.id: targetGroupSpans]
+        let attributedTarget = try attributed(target,
+                                              ranges: [:],
+                                              phraseGroupRanges: targetGroupRanges)
+        return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                            attributedSourceText: source,
+                                            targetText: target,
+                                            attributedTargetText: attributedTarget)
+    }
+
+    private func phraseGroupRequest(text: String, selected surface: String) throws -> ContextualTranslationRequest {
+        let local = try XCTUnwrap(span(of: surface, in: text))
+        let selectedContext = context(text, selected: [local])
+        let global = UTF16Span(location: selectedContext.sourceSpan.location + local.location,
+                               length: local.length)
+        return try ContextualTranslationRequest.make(from: selectedContext,
+                                                     verifiedPhraseGroupSpan: global)
+    }
+
     private func attributed(_ text: String,
                            ranges: [String: UTF16Span]) throws -> AttributedString {
         try attributed(text, ranges: ranges.mapValues { [$0] })
     }
 
     private func attributed(_ text: String,
-                           ranges: [String: [UTF16Span]]) throws -> AttributedString {
+                           ranges: [String: [UTF16Span]],
+                           phraseGroupRanges: [String: [UTF16Span]] = [:]) throws -> AttributedString {
         var result = AttributedString(text)
         for (id, spans) in ranges {
             for span in spans {
@@ -233,6 +347,19 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                     throw ContextualTranslationError.invalidTargetRange
                 }
                 result[lower..<upper][ContextualTranslationTokenIDAttribute.self] = id
+            }
+        }
+        for (id, spans) in phraseGroupRanges {
+            for span in spans {
+                guard let end = span.endExclusive else { throw ContextualTranslationError.invalidTargetRange }
+                let lowerStringIndex = String.Index(utf16Offset: span.location, in: text)
+                let upperStringIndex = String.Index(utf16Offset: end, in: text)
+                guard let lower = AttributedString.Index(lowerStringIndex, within: result),
+                      let upper = AttributedString.Index(upperStringIndex, within: result),
+                      span.composedCharacterRange(in: text) != nil else {
+                    throw ContextualTranslationError.invalidTargetRange
+                }
+                result[lower..<upper][ContextualTranslationPhraseGroupIDAttribute.self] = id
             }
         }
         return result
@@ -477,6 +604,65 @@ final class ContextualTranslationServiceTests: XCTestCase {
         XCTAssertEqual(callCount, 2)
     }
 
+    func testPhraseGroupAndWordSelectionWithSameSpanUseSeparateCacheEntries() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 4, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let localRange = (text as NSString).range(of: "read books")
+        let selectedSpan = try XCTUnwrap(UTF16Span(range: localRange, in: text))
+        let sourceLength = (text as NSString).length
+        let context = SentenceContext(documentSHA256: "phrase-cache-fixture",
+                                      pageIndex: 0,
+                                      blockID: "phrase-cache-block",
+                                      text: text,
+                                      displayLineText: text,
+                                      displaySentenceText: text,
+                                      sourceSpan: UTF16Span(location: 0, length: sourceLength),
+                                      displaySpan: UTF16Span(location: 0, length: sourceLength),
+                                      selectedSourceSpans: [selectedSpan],
+                                      selectedDisplaySpans: [selectedSpan],
+                                      kind: .completeSentence)
+        let words = try ContextualTranslationRequest.make(from: context)
+        let group = try ContextualTranslationRequest.make(from: context,
+                                                          verifiedPhraseGroupSpan: selectedSpan)
+        XCTAssertEqual(words.selectedSourceSpans, group.selectedSourceSpans)
+        XCTAssertEqual(words.selectedSourcePhrase, group.selectedSourcePhrase)
+        XCTAssertNil(words.selectedPhraseGroup)
+        XCTAssertNotNil(group.selectedPhraseGroup)
+
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makePhraseModePayload(request: request, source: source)
+        }
+        let wordResult = try await service.translate(words,
+                                                    sourceLanguageIdentifier: "en",
+                                                    targetLanguageIdentifier: "zh-Hans",
+                                                    backendVersion: "test-v2",
+                                                    using: translator)
+        let groupResult = try await service.translate(group,
+                                                     sourceLanguageIdentifier: "en",
+                                                     targetLanguageIdentifier: "zh-Hans",
+                                                     backendVersion: "test-v2",
+                                                     using: translator)
+        _ = try await service.translate(words,
+                                       sourceLanguageIdentifier: "en",
+                                       targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v2",
+                                       using: translator)
+        _ = try await service.translate(group,
+                                       sourceLanguageIdentifier: "en",
+                                       targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v2",
+                                       using: translator)
+
+        let callCount = await calls.count
+        let cacheCount = await service.cachedEntryCount
+        XCTAssertEqual(wordResult.translatedPhrase, "读书")
+        XCTAssertEqual(groupResult.translatedPhrase, "读书")
+        XCTAssertEqual(callCount, 2)
+        XCTAssertEqual(cacheCount, 2)
+    }
+
     private func fakeTranslator(calls: ContextualTranslationCallRecorder) -> ContextualTranslationService.Translator {
         { request, _, _, _ in
             await calls.record()
@@ -583,4 +769,55 @@ private func makeFakePayload(request: ContextualTranslationRequest,
                                         attributedSourceText: try request.attributedSourceText(),
                                         targetText: target,
                                         attributedTargetText: attributedTarget)
+}
+
+private func makePhraseModePayload(request: ContextualTranslationRequest,
+                                   source: AttributedString) throws -> ContextualTranslationPayload {
+    let target = "他们读书每天"
+    var attributedTarget = AttributedString(target)
+    if let group = request.selectedPhraseGroup {
+        try applyPhraseGroup(group.id,
+                             span: UTF16Span(location: 2, length: 2),
+                             to: &attributedTarget,
+                             source: target)
+    } else {
+        for id in request.selectedTokenIDs {
+            guard let token = request.tokens.first(where: { $0.id == id }) else {
+                throw ContextualTranslationError.unknownTokenID
+            }
+            let offset = token.sourceSurface == "read" ? 2 : 3
+            try applyToken(id,
+                           span: UTF16Span(location: offset, length: 1),
+                           to: &attributedTarget,
+                           source: target)
+        }
+    }
+    return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                        attributedSourceText: source,
+                                        targetText: target,
+                                        attributedTargetText: attributedTarget)
+}
+
+private func applyToken(_ id: String,
+                        span: UTF16Span,
+                        to attributed: inout AttributedString,
+                        source: String) throws {
+    guard let end = span.endExclusive,
+          let lower = AttributedString.Index(String.Index(utf16Offset: span.location, in: source), within: attributed),
+          let upper = AttributedString.Index(String.Index(utf16Offset: end, in: source), within: attributed) else {
+        throw ContextualTranslationError.invalidTargetRange
+    }
+    attributed[lower..<upper][ContextualTranslationTokenIDAttribute.self] = id
+}
+
+private func applyPhraseGroup(_ id: String,
+                              span: UTF16Span,
+                              to attributed: inout AttributedString,
+                              source: String) throws {
+    guard let end = span.endExclusive,
+          let lower = AttributedString.Index(String.Index(utf16Offset: span.location, in: source), within: attributed),
+          let upper = AttributedString.Index(String.Index(utf16Offset: end, in: source), within: attributed) else {
+        throw ContextualTranslationError.invalidTargetRange
+    }
+    attributed[lower..<upper][ContextualTranslationPhraseGroupIDAttribute.self] = id
 }

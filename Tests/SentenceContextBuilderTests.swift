@@ -265,6 +265,56 @@ final class SentenceContextBuilderTests: XCTestCase {
         ]), "A large vertical jump is not an adjacent row")
     }
 
+    func testNativeBuilderUsesNearestBlankLineParagraphAndPreservesPageUTF16Offsets() throws {
+        let source = "📘 Heading\r\n\r\nA paragraph has a charge here.\r\n\r\nMore text."
+        let ns = source as NSString
+        let selectedRange = ns.range(of: "charge")
+        let selected = try XCTUnwrap(UTF16Span(range: selectedRange, in: source))
+        let paragraphRange = ns.range(of: "A paragraph has a charge here.")
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "charge",
+                                                                        documentSHA256: "native-paragraph-window",
+                                                                        pageIndex: 3,
+                                                                        allowsLineBreaks: true))
+        XCTAssertEqual(context.text, "A paragraph has a charge here.")
+        XCTAssertEqual(context.sourceSpan.location, paragraphRange.location)
+        XCTAssertEqual(context.sourceSpan.length, paragraphRange.length)
+        XCTAssertEqual(context.sourceSpan.substring(in: source), "A paragraph has a charge here.")
+        XCTAssertEqual(context.selectedSourceSpans, [selected])
+        XCTAssertEqual(context.selectedDisplaySpans,
+                       [UTF16Span(location: selectedRange.location - paragraphRange.location,
+                                  length: selectedRange.length)])
+    }
+
+    func testNativeBuilderAcceptsFirstAndLastSentenceAtParagraphEdges() throws {
+        let source = "Heading.\n\nFirst sentence ends here. Last sentence ends here?\n\nFooter."
+        for surface in ["First", "Last"] {
+            let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: surface), in: source))
+            let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                            selectedSourceSpans: [selected],
+                                                                            displaySurface: surface,
+                                                                            documentSHA256: "native-paragraph-edge-\(surface)",
+                                                                            pageIndex: 0))
+            XCTAssertEqual(context.text, surface == "First"
+                           ? "First sentence ends here."
+                           : "Last sentence ends here?")
+        }
+    }
+
+    func testNativeBuilderRejectsSentenceCutByUTF16WindowLimit() throws {
+        let source = String(repeating: "a", count: 2_400) + " charge appears here."
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "charge"), in: source))
+
+        XCTAssertNil(NativeSentenceContextBuilder.build(sourceText: source,
+                                                        selectedSourceSpans: [selected],
+                                                        displaySurface: "charge",
+                                                        documentSHA256: "native-window-cut",
+                                                        pageIndex: 0),
+                   "A sentence that starts before the bounded paragraph window is incomplete")
+    }
+
     func testNativeBuilderKeepsEmojiAndCombiningMarkUTF16Coordinates() throws {
         let source = "😀 Cafe\u{0301} first. 😀 Cafe\u{0301} second."
         let ns = source as NSString

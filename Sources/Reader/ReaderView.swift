@@ -819,7 +819,9 @@ struct ReaderView: View {
                 term: preview.term,
                 detail: preview.detail,
                 anchor: preview.point,
-                bounds: geo.size
+                bounds: geo.size,
+                contextualSelection: preview.contextualSelection,
+                contextualTranslationEnabled: contextReadingEnabled
             )
         }
     }
@@ -1067,7 +1069,12 @@ struct ReaderView: View {
                     ocrStore: OCRStore(db: store.db),
                     hoverPreviewEnabled: pencilHoverPreview,
                     hapticsEnabled: pencilHaptics,
-                    onHoverUpdate: { term, key, point in wordInteraction.hover(term, query: key, at: point) },
+                    onHoverUpdate: { term, key, point, contextual in
+                        wordInteraction.hover(term,
+                                              query: key,
+                                              contextualSelection: contextual,
+                                              at: point)
+                    },
                     onHoverEnd: { wordInteraction.clear() },
                     markMode: markMode,
                     contextReadingEnabled: contextReadingEnabled,
@@ -1129,7 +1136,7 @@ struct ReaderView: View {
                         if let contextual = info.contextual {
                             guard contextReadingEnabled,
                                   contextual.generation == contextReadingGeneration else { return }
-                            if contextual.tokens.count == 1, info.wordCount <= 1 {
+                            if contextual.tokens.count == 1 || contextual.verifiedPhraseGroupSpan != nil {
                                 translationRequest = nil
                                 cardContent = .contextual(contextual)
                                 if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }

@@ -17,6 +17,8 @@ actor ContextualTranslationService {
         let sentenceUTF8: [UInt8]
         let selectedSourceUTF8: [UInt8]
         let selectedTokenSpans: [UTF16Span]
+        let phraseGroupSpan: UTF16Span?
+        let isPhraseGroupSelection: Bool
         let sourceLanguageIdentifier: String
         let targetLanguageIdentifier: String
         let backendVersion: String
@@ -52,6 +54,8 @@ actor ContextualTranslationService {
         let key = CacheKey(sentenceUTF8: Array(request.sentenceText.utf8),
                            selectedSourceUTF8: Array(request.selectedSourcePhrase.utf8),
                            selectedTokenSpans: request.selectedSourceSpans,
+                           phraseGroupSpan: request.selectedPhraseGroup?.sourceSpan,
+                           isPhraseGroupSelection: request.selectedPhraseGroup != nil,
                            sourceLanguageIdentifier: sourceLanguageIdentifier,
                            targetLanguageIdentifier: targetLanguageIdentifier,
                            backendVersion: backendVersion)
@@ -134,7 +138,7 @@ actor ContextualTranslationService {
 /// translationTask callback, matching Apple's session ownership model.
 @available(iOS 26.4, *)
 enum AppleContextualTranslationAdapter {
-    static let backendVersion = "apple-attributed-token-alignment-v1"
+    static let backendVersion = "apple-attributed-token-alignment-v2"
 
     @MainActor
     static func makeTranslator(using session: TranslationSession,

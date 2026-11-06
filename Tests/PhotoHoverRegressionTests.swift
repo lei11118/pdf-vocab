@@ -19,7 +19,7 @@ import PDFKit
         let coordinator = ReaderCoordinator(onPageChanged:{_ in},onSelectionInfo:{_ in})
         coordinator.pdfView = view; coordinator.ocrStore = ocr; coordinator.docSha = sha
         var term = "",anchor = CGPoint.zero
-        coordinator.onHoverUpdate = { value,_,point in term = value; anchor = point }
+        coordinator.onHoverUpdate = { value,_,point,_ in term = value; anchor = point }
         let rect = OCRService.pageRect(from:words[1],pageBounds:page.bounds(for:.mediaBox))
         coordinator.perform(NSSelectorFromString("handleHover:"),with:BeganWordHover(point:view.convert(CGPoint(x:rect.midX,y:rect.midY),from:page)))
         XCTAssertEqual(term,"function")

@@ -93,7 +93,9 @@ struct ContextOCRSelectionSource: Sendable {
         self.words = sortedEntries.map(\.word)
     }
 
-    func contextualSelection(for range: ClosedRange<Int>, generation: Int) -> ContextualSelection? {
+    func contextualSelection(for range: ClosedRange<Int>,
+                             generation: Int,
+                             verifiedPhraseGroupSpan: UTF16Span? = nil) -> ContextualSelection? {
         guard range.lowerBound >= 0, range.upperBound < entries.count else { return nil }
         let selectedEntries = Array(entries[range])
         guard let first = selectedEntries.first, let last = selectedEntries.last else { return nil }
@@ -145,13 +147,89 @@ struct ContextOCRSelectionSource: Sendable {
                                                  pageIndex: page.pageIndex,
                                                  blockID: line.blockID)
         }()
+        if let verifiedPhraseGroupSpan {
+            guard first.lineIndex == last.lineIndex,
+                  sourceSpans == [verifiedPhraseGroupSpan],
+                  let sentenceContext,
+                  sentenceContext.selectedSourceSpans == [verifiedPhraseGroupSpan],
+                  selectedTokens.count >= 2,
+                  selectedTokens.allSatisfy({ $0.kind == .word }),
+                  Self.isWhitespaceSeparatedGroup(selectedTokens, in: page.lines[first.lineIndex].sourceText) else {
+                return nil
+            }
+        }
         return ContextualSelection(documentSHA256: page.documentSHA256,
                                    pageIndex: page.pageIndex,
                                    sourceSpans: sourceSpans,
                                    tokens: selectedTokens,
+                                   verifiedPhraseGroupSpan: verifiedPhraseGroupSpan,
                                    displaySurface: displayLines.joined(separator: "\n"),
                                    generation: generation,
                                    sentenceContext: sentenceContext)
+    }
+
+    func entryRange(for phraseSpan: UTF16Span, containing seedIndex: Int) -> ClosedRange<Int>? {
+        guard entries.indices.contains(seedIndex),
+              let phraseEnd = phraseSpan.endExclusive,
+              phraseSpan.length > 0 else { return nil }
+        let seed = entries[seedIndex]
+        let matching = entries.indices.filter { index in
+            let entry = entries[index]
+            guard entry.lineIndex == seed.lineIndex,
+                  let end = entry.sourceSpan.endExclusive else { return false }
+            return entry.sourceSpan.location >= phraseSpan.location && end <= phraseEnd
+        }
+        guard let firstIndex = matching.first,
+              let lastIndex = matching.last,
+              entries[firstIndex].sourceSpan.location == phraseSpan.location,
+              entries[lastIndex].sourceSpan.endExclusive == phraseSpan.endExclusive,
+              firstIndex <= seedIndex, seedIndex <= lastIndex,
+              Array(firstIndex...lastIndex) == matching,
+              matching.allSatisfy({ !entries[$0].tokens.isEmpty && entries[$0].tokens.allSatisfy({ $0.kind == .word }) }),
+              page.lines.indices.contains(seed.lineIndex) else {
+            return nil
+        }
+        let line = page.lines[seed.lineIndex]
+        guard Self.isWhitespaceSeparatedGroup(matching.flatMap { entries[$0].tokens }, in: line.sourceText),
+              Self.hasAdjacentHorizontalGeometry(matching.map { entries[$0].word }, mediaBox: page.mediaBox) else {
+            return nil
+        }
+        return firstIndex...lastIndex
+    }
+
+    private static func isWhitespaceSeparatedGroup(_ tokens: [SourceToken], in sourceText: String) -> Bool {
+        let ordered = tokens.sorted { $0.span.location < $1.span.location }
+        guard ordered.count >= 2, ordered.allSatisfy({ $0.kind == .word }) else { return false }
+        for pair in zip(ordered, ordered.dropFirst()) {
+            guard let leftEnd = pair.0.span.endExclusive,
+                  pair.1.span.location > leftEnd,
+                  let gapText = UTF16Span(location: leftEnd,
+                                          length: pair.1.span.location - leftEnd).substring(in: sourceText),
+                  !gapText.isEmpty,
+                  gapText.unicodeScalars.allSatisfy({
+                      CharacterSet.whitespaces.contains($0) && !CharacterSet.newlines.contains($0)
+                  }) else { return false }
+        }
+        return true
+    }
+
+    private static func hasAdjacentHorizontalGeometry(_ words: [OCRWord], mediaBox: SourceRect) -> Bool {
+        guard !words.isEmpty else { return false }
+        let bounds = mediaBox.cgRect
+        let rects = words.map { word in
+            OCRService.pageRect(from: word, pageBounds: bounds)
+        }
+        guard rects.allSatisfy(SelectionGeometry.isValid) else { return false }
+        guard rects.count > 1 else { return true }
+        for pair in zip(rects, rects.dropFirst()) {
+            let maximumHeight = max(pair.0.height, pair.1.height)
+            let horizontalGap = pair.1.minX - pair.0.maxX
+            guard pair.1.midX > pair.0.midX,
+                  abs(pair.0.midY - pair.1.midY) <= maximumHeight * 0.6,
+                  horizontalGap >= -maximumHeight * 0.35,
+                  horizontalGap <= maximumHeight * 1.5 else { return false }
+        }
+        return true
     }
 
     func fullLineContext(for range: ClosedRange<Int>) -> String? {

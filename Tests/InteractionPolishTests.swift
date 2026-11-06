@@ -329,6 +329,67 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertNil(legacyInfo.contextual, "Turning context mode off restores the legacy selection payload")
     }
 
+    func testDoubleTapExpandsOnlyDictionaryVerifiedAdjacentPhrase() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let bytes = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            ("Quantum mechanics evolves." as NSString).draw(at: CGPoint(x: 40, y: 180),
+                                                            withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: bytes))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let source = try XCTUnwrap(page.string)
+        let sourceNSString = source as NSString
+        let selectedRange = sourceNSString.range(of: "mechanics")
+        let phraseRange = sourceNSString.range(of: "Quantum mechanics")
+        XCTAssertNotEqual(selectedRange.location, NSNotFound)
+        XCTAssertNotEqual(phraseRange.location, NSNotFound)
+
+        let view = VocabPDFView(frame: CGRect(x: 0, y: 0, width: 900, height: 700))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        controller.view = view
+        window.frame = view.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKey() }
+        view.displayMode = .singlePage
+        view.document = document
+        view.scaleFactor = 2.5
+        view.layoutDocumentView()
+        view.go(to: page)
+
+        let seedSelection = try XCTUnwrap(page.selection(for: selectedRange))
+        let seedRect = seedSelection.bounds(for: page)
+        let point = view.convert(CGPoint(x: seedRect.midX, y: seedRect.midY), from: page)
+        var events: [SelectionInfo?] = []
+        let phraseLookup = VerifiedPhraseGroupLookup(dictionaryRevision: { 0 },
+                                                    exactPhraseExists: { $0 == "quantum mechanics" })
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in },
+                                            onSelectionInfo: { events.append($0) },
+                                            phraseLookup: phraseLookup)
+        coordinator.pdfView = view
+        coordinator.docSha = "verified-phrase-doubletap"
+        coordinator.contextReadingEnabled = true
+        coordinator.contextReadingGeneration = 5
+        coordinator.hapticsEnabled = false
+
+        coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: CompletedWordTap(point: point))
+
+        let info = try XCTUnwrap(events.compactMap { $0 }.last)
+        let contextual = try XCTUnwrap(info.contextual)
+        let expectedPhraseSpan = try XCTUnwrap(UTF16Span(range: phraseRange, in: source))
+        XCTAssertEqual(info.text, "Quantum mechanics")
+        XCTAssertEqual(contextual.verifiedPhraseGroupSpan, expectedPhraseSpan)
+        XCTAssertEqual(contextual.sourceSpans, [expectedPhraseSpan])
+        XCTAssertEqual(contextual.tokens.map(\.sourceSurface), ["Quantum", "mechanics"])
+        XCTAssertTrue(contextual.tokens.allSatisfy { $0.geometryQuality == .word })
+
+        coordinator.dismissSelection()
+    }
+
     func testHoverSizeFitsActualContentAndCapsLongDefinitions() {
         let short = HoverBubbleLayout.size(term:"a",detail:"一个",maximumWidth:400,maximumHeight:420)
         let long = HoverBubbleLayout.size(term:"function",detail:String(repeating:"函数及其所有专业释义。",count:100),maximumWidth:400,maximumHeight:420)

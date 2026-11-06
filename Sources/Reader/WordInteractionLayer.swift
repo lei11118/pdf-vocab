@@ -9,6 +9,7 @@ struct WordPreview {
     var detail: String
     var point: CGPoint
     var translated: Bool
+    var contextualSelection: ContextualSelection?
 }
 
 /// PDF, text-node and screenshot-node geometry adapters feed this same state
@@ -21,29 +22,46 @@ struct WordPreview {
     private var generation = 0
     private var activeTerm = ""
     private var activeQuery = ""
+    private var activeContextualSelection: ContextualSelection?
     private var latestPoint = CGPoint.zero
     func clear() {
-        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false; activeTerm = ""; activeQuery = ""
+        generation += 1; request?.cancel(); request = nil; preview = nil; isHovering = false
+        activeTerm = ""; activeQuery = ""; activeContextualSelection = nil
     }
-    func hover(_ term: String, query: String? = nil, at point: CGPoint) {
+    func hover(_ term: String,
+               query: String? = nil,
+               contextualSelection: ContextualSelection? = nil,
+               at point: CGPoint) {
         let query = query ?? term
-        if isHovering && activeTerm == term && activeQuery == query {
+        if isHovering && activeTerm == term && activeQuery == query &&
+            activeContextualSelection == contextualSelection {
             latestPoint = point
             if var preview,preview.point != point { preview.point = point; self.preview = preview }
             return
         }
-        resolve(term,query:query,at:point,hover:true)
+        resolve(term,query:query,contextualSelection:contextualSelection,at:point,hover:true)
     }
-    func select(_ term: String, at point: CGPoint) { resolve(term,query:term,at:point,hover:false) }
-    private func resolve(_ term: String, query: String, at point: CGPoint, hover: Bool) {
-        clear(); isHovering = hover; activeTerm = term; activeQuery = query; latestPoint = point
+    func select(_ term: String, at point: CGPoint) {
+        resolve(term,query:term,contextualSelection:nil,at:point,hover:false)
+    }
+    private func resolve(_ term: String,
+                         query: String,
+                         contextualSelection: ContextualSelection?,
+                         at point: CGPoint,
+                         hover: Bool) {
+        clear(); isHovering = hover; activeTerm = term; activeQuery = query
+        activeContextualSelection = contextualSelection; latestPoint = point
         let token = generation
         request = Task { @MainActor [weak self] in
             if hover { try? await Task.sleep(nanoseconds:ToolArcConfig.hoverDelay) }
             guard !Task.isCancelled else { return }
             let detail = await Task.detached(priority:.utility) { WordInteraction.detail(query) }.value
             guard !Task.isCancelled,let self,self.generation == token else { return }
-            self.preview = WordPreview(term:term,detail:detail ?? "词库未收录",point:self.latestPoint,translated:detail != nil)
+            self.preview = WordPreview(term:term,
+                                       detail:detail ?? "词库未收录",
+                                       point:self.latestPoint,
+                                       translated:detail != nil,
+                                       contextualSelection:contextualSelection)
         }
     }
     @discardableResult func squeeze() -> Bool {

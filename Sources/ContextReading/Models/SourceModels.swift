@@ -167,6 +167,9 @@ struct ContextualSelection: Equatable, Sendable {
     let pageIndex: Int
     let sourceSpans: [UTF16Span]
     let tokens: [SourceToken]
+    /// Present only when an exact, enabled-dictionary phrase entry verified
+    /// this selected group. Coordinates stay page-relative UTF-16 like sourceSpans.
+    var verifiedPhraseGroupSpan: UTF16Span? = nil
     let displaySurface: String
     let generation: Int
     var sentenceContext: SentenceContext? = nil
