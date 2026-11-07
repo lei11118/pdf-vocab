@@ -15,7 +15,7 @@ enum HoverBubbleLayout {
         let candidateWidth = contextualCandidate.map {
             ($0 as NSString).size(withAttributes:[.font:detailFont]).width
         } ?? 0
-        let candidateLabelWidth = contextualCandidate.map {
+        let candidateLabelWidth = contextualCandidate.map { _ in
             ("语境译义" as NSString).size(withAttributes:[.font:contextLabelFont]).width
         } ?? 0
         let naturalWidth = max((term as NSString).size(withAttributes:[.font:titleFont]).width,
