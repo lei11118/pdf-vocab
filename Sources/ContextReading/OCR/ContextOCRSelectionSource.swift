@@ -14,11 +14,13 @@ struct ContextOCRSelectionSource: Sendable {
     let page: ContextOCRPage
     let entries: [ContextOCRSelectionEntry]
     let words: [OCRWord]
+    let layoutGeometryIndex: OCRLayoutGeometryIndex
 
     init?(page: ContextOCRPage) {
         guard !page.documentSHA256.isEmpty, page.pageIndex >= 0, page.revision >= 0,
               page.mediaBox.width > 0, page.mediaBox.height > 0 else { return nil }
         self.page = page
+        let layoutGeometryIndex = OCRLayoutGeometryIndex(page: page)
 
         var built: [ContextOCRSelectionEntry] = []
         for (lineIndex, line) in page.lines.enumerated() {
@@ -91,6 +93,7 @@ struct ContextOCRSelectionSource: Sendable {
         }
         self.entries = sortedEntries
         self.words = sortedEntries.map(\.word)
+        self.layoutGeometryIndex = layoutGeometryIndex
     }
 
     func contextualSelection(for range: ClosedRange<Int>,
@@ -134,7 +137,7 @@ struct ContextOCRSelectionSource: Sendable {
         }
 
         guard !sourceSpans.isEmpty, !selectedTokens.isEmpty else { return nil }
-        let sentenceContext: SentenceContext? = {
+        let phraseLookupContext: SentenceContext? = {
             guard first.lineIndex == last.lineIndex,
                   sourceSpans.count == 1,
                   first.lineIndex >= 0, first.lineIndex < page.lines.count else { return nil }
@@ -147,11 +150,24 @@ struct ContextOCRSelectionSource: Sendable {
                                                  pageIndex: page.pageIndex,
                                                  blockID: line.blockID)
         }()
+        let layoutContext: SentenceContext? = {
+            guard first.lineIndex == last.lineIndex,
+                  sourceSpans.count == 1,
+                  first.lineIndex >= 0, first.lineIndex < page.lines.count else { return nil }
+            return OCRLayoutBlockContextBuilder.build(page: page,
+                                                      geometryIndex: layoutGeometryIndex,
+                                                      selectedLineIndex: first.lineIndex,
+                                                      selectedSourceSpans: sourceSpans)
+        }()
+        let selectedLineHasLayoutGeometry = layoutGeometryIndex.linesByIndex[first.lineIndex] != nil
+        let selectedLineHasTrustedWordGeometry = layoutGeometryIndex.linesByIndex[first.lineIndex]?.tokenGeometryIsTrusted == true
+        let sentenceContext = layoutContext
+            ?? (selectedLineHasLayoutGeometry && !selectedLineHasTrustedWordGeometry ? nil : phraseLookupContext)
         if let verifiedPhraseGroupSpan {
             guard first.lineIndex == last.lineIndex,
                   sourceSpans == [verifiedPhraseGroupSpan],
-                  let sentenceContext,
-                  sentenceContext.selectedSourceSpans == [verifiedPhraseGroupSpan],
+                  let phraseLookupContext,
+                  phraseLookupContext.selectedSourceSpans == [verifiedPhraseGroupSpan],
                   selectedTokens.count >= 2,
                   selectedTokens.allSatisfy({ $0.kind == .word }),
                   Self.isWhitespaceSeparatedGroup(selectedTokens, in: page.lines[first.lineIndex].sourceText) else {
@@ -163,6 +179,7 @@ struct ContextOCRSelectionSource: Sendable {
                                    sourceSpans: sourceSpans,
                                    tokens: selectedTokens,
                                    verifiedPhraseGroupSpan: verifiedPhraseGroupSpan,
+                                   phraseLookupContext: phraseLookupContext,
                                    displaySurface: displayLines.joined(separator: "\n"),
                                    generation: generation,
                                    sentenceContext: sentenceContext)

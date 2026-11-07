@@ -30,7 +30,12 @@ struct ContextualTranslationRequest: Equatable, Sendable {
 
     static func make(from context: SentenceContext,
                      verifiedPhraseGroupSpan: UTF16Span? = nil) throws -> ContextualTranslationRequest {
-        guard context.kind == .completeSentence else { throw ContextualTranslationError.incompleteSentence }
+        guard context.kind == .completeSentence || context.kind == .layoutBlock else {
+            throw ContextualTranslationError.incompleteSentence
+        }
+        if context.kind != .layoutBlock && !context.sourceSpanMappings.isEmpty {
+            throw ContextualTranslationError.invalidSelection
+        }
         guard !context.text.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) else {
             throw ContextualTranslationError.incompleteSentence
         }
@@ -51,14 +56,27 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         let localSelections = try localSelectionSpans(in: context)
         let localPhraseGroupSpan: UTF16Span?
         if let verifiedPhraseGroupSpan {
-            guard context.selectedSourceSpans == [verifiedPhraseGroupSpan],
-                  verifiedPhraseGroupSpan.location >= context.sourceSpan.location,
-                  let verifiedEnd = verifiedPhraseGroupSpan.endExclusive,
-                  verifiedEnd <= (context.sourceSpan.endExclusive ?? -1) else {
+            guard context.selectedSourceSpans == [verifiedPhraseGroupSpan] else {
                 throw ContextualTranslationError.invalidSelection
             }
-            let local = UTF16Span(location: verifiedPhraseGroupSpan.location - context.sourceSpan.location,
+            let local: UTF16Span
+            if !context.sourceSpanMappings.isEmpty {
+                guard context.sourceSpanMappings.count == 1,
+                      let mapping = context.sourceSpanMappings.first,
+                      mapping.sourceSpan == verifiedPhraseGroupSpan,
+                      localSelections == [mapping.contextSpan] else {
+                    throw ContextualTranslationError.invalidSelection
+                }
+                local = mapping.contextSpan
+            } else {
+                guard verifiedPhraseGroupSpan.location >= context.sourceSpan.location,
+                      let verifiedEnd = verifiedPhraseGroupSpan.endExclusive,
+                      verifiedEnd <= (context.sourceSpan.endExclusive ?? -1) else {
+                    throw ContextualTranslationError.invalidSelection
+                }
+                local = UTF16Span(location: verifiedPhraseGroupSpan.location - context.sourceSpan.location,
                                   length: verifiedPhraseGroupSpan.length)
+            }
             guard local.composedCharacterRange(in: context.text) != nil,
                   localSelections == [local] else {
                 throw ContextualTranslationError.invalidSelection
@@ -106,6 +124,12 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         }
         guard selectedIndices.count < sourceTokens.count,
               !meaningfulTokenIndices.allSatisfy(selectedIndexSet.contains) else {
+            throw ContextualTranslationError.selectionCoversSentence
+        }
+        if context.kind == .layoutBlock,
+           !sourceTokens.indices.contains(where: {
+               !selectedIndexSet.contains($0) && sourceTokens[$0].kind == .word
+           }) {
             throw ContextualTranslationError.selectionCoversSentence
         }
 
@@ -210,6 +234,58 @@ struct ContextualTranslationRequest: Equatable, Sendable {
     }
 
     private static func localSelectionSpans(in context: SentenceContext) throws -> [UTF16Span] {
+        if !context.sourceSpanMappings.isEmpty {
+            let mappings = context.sourceSpanMappings
+            let textLength = (context.text as NSString).length
+            guard context.kind == .layoutBlock,
+                  context.sourceSpan.location == 0,
+                  context.sourceSpan.length == textLength,
+                  context.sourceSpan.endExclusive == textLength,
+                  mappings.count == context.selectedSourceSpans.count,
+                  mappings.count == context.selectedDisplaySpans.count,
+                  mappings.map(\.sourceSpan) == context.selectedSourceSpans,
+                  mappings.map(\.contextSpan) == context.selectedDisplaySpans,
+                  let seedLineIndex = mappings.first?.lineIndex,
+                  seedLineIndex >= 0,
+                  mappings.allSatisfy({ $0.lineIndex == seedLineIndex }) else {
+                throw ContextualTranslationError.invalidSelection
+            }
+
+            let local = mappings.map(\.contextSpan)
+            var commonBlockOffset: Int?
+            for mapping in mappings {
+                guard mapping.sourceSpan.location >= 0,
+                      mapping.sourceSpan.length > 0,
+                      mapping.sourceSpan.endExclusive != nil,
+                      mapping.contextSpan.location >= mapping.sourceSpan.location,
+                      mapping.sourceSpan.length == mapping.contextSpan.length,
+                      mapping.contextSpan.location >= 0,
+                      mapping.contextSpan.endExclusive.map({ $0 <= textLength }) == true,
+                      mapping.contextSpan.composedCharacterRange(in: context.text) != nil else {
+                    throw ContextualTranslationError.invalidSelection
+                }
+                let blockOffset = mapping.contextSpan.location - mapping.sourceSpan.location
+                guard commonBlockOffset == nil || commonBlockOffset == blockOffset else {
+                    throw ContextualTranslationError.invalidSelection
+                }
+                commonBlockOffset = blockOffset
+            }
+            for index in 1..<mappings.count {
+                let previous = mappings[index - 1]
+                let current = mappings[index]
+                guard previous.sourceSpan.location < current.sourceSpan.location,
+                      !previous.sourceSpan.intersects(current.sourceSpan),
+                      previous.contextSpan.location < current.contextSpan.location,
+                      !previous.contextSpan.intersects(current.contextSpan) else {
+                    throw ContextualTranslationError.invalidSelection
+                }
+            }
+            return local
+        }
+
+        guard context.kind == .completeSentence || context.kind == .layoutBlock else {
+            throw ContextualTranslationError.invalidSelection
+        }
         var local: [UTF16Span] = []
         for span in context.selectedSourceSpans {
             guard let end = span.endExclusive,
@@ -528,7 +604,7 @@ enum ContextualTranslationError: Error, Equatable, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .disabled: "语境 Token 阅读已关闭。"
-        case .incompleteSentence: "当前片段不是可验证的完整句子。"
+        case .incompleteSentence: "当前选区缺少可信语境，无法请求 Token 对齐。"
         case .emptyInput: "当前句子没有可翻译的文字。"
         case .inputTooLong(let maximum): "句子超过了 \(maximum) 个 UTF-16 单元的上限。"
         case .invalidSelection: "选中范围无法映射到句中 Token。"

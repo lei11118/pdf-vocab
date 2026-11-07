@@ -4,6 +4,15 @@ import NaturalLanguage
 enum SentenceContextKind: Equatable, Sendable {
     case completeSentence
     case fragment
+    case layoutBlock
+}
+
+/// Maps an exact source span in one OCR line to its position in a bounded
+/// multi-line context. OCR selection spans stay line-local outside this map.
+struct SentenceContextSpanMapping: Equatable, Sendable {
+    let lineIndex: Int
+    let sourceSpan: UTF16Span
+    let contextSpan: UTF16Span
 }
 
 /// A sentence candidate tied to its exact source and display ranges. Source
@@ -21,6 +30,7 @@ struct SentenceContext: Equatable, Sendable {
     let selectedSourceSpans: [UTF16Span]
     let selectedDisplaySpans: [UTF16Span]
     let kind: SentenceContextKind
+    var sourceSpanMappings: [SentenceContextSpanMapping] = []
 }
 
 /// Builds a sentence candidate only when the fast display line can be mapped

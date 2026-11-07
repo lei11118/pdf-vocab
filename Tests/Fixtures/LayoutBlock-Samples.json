@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "coordinateSystem": "PDF media-box points; origin at bottom-left; bbox is [x, y, width, height]",
+  "samples": [
+    {
+      "sampleID": "ielts-intro-p10",
+      "sourceKind": "scanned-image-pdf",
+      "pdfPageNumber": 10,
+      "printedPageNumber": 6,
+      "mediaBox": [0, 0, 558.7086, 768],
+      "textProvenance": "manual-image-transcription; not OCR output or OCR ground truth",
+      "bboxMeasurement": "approximate ink-row bounds measured from a 100 dpi render; pixel coordinates scaled by 72/100 and converted from top-left to bottom-left origin",
+      "lines": [
+        {
+          "readingOrder": 0,
+          "layoutRole": "body",
+          "text": "Complete IELTS Bands 4–5.5 is a short course of 50–60",
+          "bbox": [20.16, 591.6, 241.2, 7.2]
+        },
+        {
+          "readingOrder": 1,
+          "layoutRole": "body",
+          "text": "classroom hours for students who wish to take the",
+          "bbox": [20.16, 580.08, 224.64, 7.2]
+        }
+      ],
+      "selectedLineIndex": 0,
+      "selectedText": "Complete",
+      "selectedUTF16Range": { "location": 0, "length": 8 }
+    },
+    {
+      "sampleID": "ielts-exercise-p50",
+      "sourceKind": "scanned-image-pdf",
+      "pdfPageNumber": 50,
+      "printedPageNumber": 46,
+      "mediaBox": [0, 0, 558.7086, 768],
+      "textProvenance": "manual-image-transcription; not OCR output or OCR ground truth",
+      "bboxMeasurement": "approximate whole-row ink bounds measured from a 100 dpi render; text is a short prefix excerpt within the row and omits its circled exercise marker; pixel coordinates scaled by 72/100 and converted from top-left to bottom-left origin",
+      "lines": [
+        {
+          "readingOrder": 0,
+          "layoutRole": "exercise-instruction-excerpt",
+          "text": "Find nine more words",
+          "textScope": "prefix-excerpt; not a complete row transcription",
+          "bbox": [43.2, 629.04, 215.28, 10.08]
+        }
+      ],
+      "selectedLineIndex": 0,
+      "selectedText": "Find",
+      "selectedUTF16Range": { "location": 0, "length": 4 }
+    },
+    {
+      "sampleID": "physics-exercises-p61",
+      "sourceKind": "text-layer-pdf",
+      "pdfPageNumber": 61,
+      "printedPageNumber": 33,
+      "mediaBox": [0, 0, 732, 849],
+      "textProvenance": "pdfplumber text-layer line extraction; bbox taken from extracted glyph line",
+      "bboxMeasurement": "PDF points, converted from pdfplumber top-origin x0/top/x1/bottom to bottom-left media-box coordinates",
+      "lines": [
+        {
+          "readingOrder": 0,
+          "layoutRole": "module-heading",
+          "text": "Module 2-3 Acceleration",
+          "bbox": [381, 615.62, 111.3, 9]
+        }
+      ],
+      "selectedLineIndex": 0,
+      "selectedText": "Acceleration",
+      "selectedUTF16Range": { "location": 11, "length": 12 }
+    },
+    {
+      "sampleID": "physics-vectors-p88",
+      "sourceKind": "text-layer-pdf",
+      "pdfPageNumber": 88,
+      "printedPageNumber": 60,
+      "mediaBox": [0, 0, 732, 849],
+      "textProvenance": "pdfplumber text-layer line extraction; bbox taken from extracted glyph line",
+      "bboxMeasurement": "PDF points, converted from pdfplumber top-origin x0/top/x1/bottom to bottom-left media-box coordinates",
+      "lines": [
+        {
+          "readingOrder": 0,
+          "layoutRole": "running-header",
+          "text": "60 CHAPTER 3 VECTORS",
+          "bbox": [93, 776.89, 147.23, 9]
+        },
+        {
+          "readingOrder": 1,
+          "layoutRole": "right-column-formula-problem",
+          "text": "60 If → b =2→c, →a + → b =4→c, and →c =3î+4ĵ, then what are",
+          "bbox": [369, 635.76, 258.01, 15.12]
+        }
+      ],
+      "selectedLineIndex": 1,
+      "selectedText": "If",
+      "selectedUTF16Range": { "location": 3, "length": 2 }
+    }
+  ]
+}

@@ -1,27 +1,36 @@
 # ★标记★ iPadOS 26 语境 Token 与数学识别实施现状
 
-> 本文记录当前增量与阶段状态，按代码核对日期：2026-11-06。`project.yml` 配置候选版 v0.71.0 / build 121。
-> 当前提交 `43a63c9700fe9be9a184832340f9b6f0df84c789` 的 [build-ipa run 42182468504](https://github.com/lei11118/pdf-vocab/actions/runs/42182468504) 成功：IPA 为 v0.71.0 / build 121，minimum OS 26.0，48,075,418 bytes，SHA-256 `ef33542468c1d065a0e5a60d0501433891d422fdff67c6bb7b5f01740edd50e7`；主 app ZIP CRC、ARM64、science/ecdict 资源头检查通过。
-> [test-ink run 42182468786](https://github.com/lei11118/pdf-vocab/actions/runs/42182468786) 在同 SHA `43a63c9700fe9be9a184832340f9b6f0df84c789` 上成功：223 项 unit/integration + 6 项 UI，共 229 项，零失败（`TEST SUCCEEDED`）。主脑已审阅本次 UIReview 44 张 PNG 中的 4 张代表图（reader-canvas portrait/landscape、context-card light、narrow-dark）：静态布局无明显裁切或旧矩形挡条，浅/深卡片没有显示原句或整句译文。卡片图为开关关闭的词典回退状态，只验证该布局，不验证 Apple 候选译义或动态 Gaussian 质量；真实设备验收仍待完成。
-> 本次 19 文件增量由 `a487108` 引入；其两处 Swift 编译问题由 `43a63c9` 修正：将嵌套 `State` 改为 `TranslationState`，并针对 `attributedText` 而非 `attributed` 包装值构造 `String.Index`。
-> 历史 v0.70.2 / build 120 的同 SHA [test-ink run 42172727928](https://github.com/lei11118/pdf-vocab/actions/runs/42172727928) 与 [build-ipa run 42172740816](https://github.com/lei11118/pdf-vocab/actions/runs/42172740816) 成功；更早 G0-G2 run 只证明对应历史 SHA。历史完整 [test-ink run 42146019076](https://github.com/lei11118/pdf-vocab/actions/runs/42146019076) 和 [build-ipa run 42146414284](https://github.com/lei11118/pdf-vocab/actions/runs/42146414284) 属于 v0.70.0 / build 118，不验证当前增量。
+> 当前在研增量：v0.72.0 / build 123，核对日期 2026-11-07。工作树包含语境布局块、Translation attributes 对齐和同屏释义显示改动；尚未有本轮 CI 结果。具体样本、研究候选与 OCR 测试状态见 [语境布局块与翻译对齐证据](CONTEXT-BLOCK-ALIGNMENT.md)。
+> 最新已验证基线是 `18ba9a5`： [test-ink run 42339957440](https://github.com/lei11118/pdf-vocab/actions/runs/42339957440) 通过 251 项、0 失败；[build-ipa run 42339957547](https://github.com/lei11118/pdf-vocab/actions/runs/42339957547) 成功，产物为 v0.71.1 / build 122。这两条记录只适用于该基线，不验证当前工作树的 v0.72.0 改动。
+> `project.yml` 当前工作树候选值为 v0.72.0 / build 123；本轮代码审查、`test-ink`、`build-ipa`、真实 iPad/Pencil 验收仍待完成。数学识别和外部模型阶段未完成。
 > 设计来源：`pdf-vocab：iPadOS 26 语境 Token 与数学表达式智能阅读系统`。设计文档描述目标，不证明功能已实现。
 
-## 当前增量状态（权威，2026-11-06）
+## 当前增量状态（权威，2026-11-07；CI 待跑）
 
-- `project.yml` 配置候选版 `0.71.0` / build `121`。当前提交的 `build-ipa` 和 `test-ink` 均已通过；IPA 元数据/包内检查及 CI 证据见本文开头。
-- Reader 安全区叠层已从系统材质改为 PDF 画面 Gaussian 模糊：UIKit 采集在主线程，Core Image 模糊在后台队列执行。
-- Reader 将符合条件的单 Token 选区接入语境卡；系统候选仅面向完整 context。多词选区仍走旧整句卡，悬浮预览和小胶囊仍显示词典释义；语境卡保留“查看词典释义”回退入口。
-- 原生 PDF 句子上下文按源 UTF-16 ranges 找唯一句子，限制 2048 UTF-16 单元；只对选区与显示 surface 非空白字符一致的范围构造 context。原文跨行只有经过候选行同栏/相邻几何校验才连接。OCR 当前仅构建完整单行 context；片段保持 fragment，OCR 跨行 context 暂不提供。
-- 系统候选由 `ContextualTranslationTaskView` 在实验开关开启、句子完整、iOS 26.4+ 可用且语言对已安装时请求。界面把结果标为“系统对齐，待校对”；系统 attributed ranges、候选词义与设置页措辞尚待校对。
-- 实验开关默认关闭；语言包需用户显式准备。GRDB 持久化、金标 precision/recall/F1、真实 iPad/Pencil 验收仍待完成。主脑已审阅 44 张 UIReview PNG 中的 4 张代表图：静态画面无明显裁切或旧矩形挡条，浅/深卡片未显示原句/整句译文；卡片截图为开关关闭的词典回退状态。该审阅不验证真实 Apple 候选译义或动态 Gaussian 质量。当前 `build-ipa` 的 IPA 与主 app ZIP 检查已通过，`test-ink` 已在同 SHA 上通过。
+- 当前工作树候选为 v0.72.0 / build 123。最近通过的 `18ba9a5` 基线及其 run 不覆盖本轮变更。
+- 工作树正在构造受可信几何约束的 `.layoutBlock` context：原生 PDF/OCR 行保留来源映射，只在有效的同栏邻接与结构边界检查后生成有界块。当前实现受 2,048 UTF-16 单元限制；OCR 行布局最多向每侧检查 8 行。源码和算法细节见 [新证据文档](CONTEXT-BLOCK-ALIGNMENT.md)。
+- 工作树继续复用 TranslationSession attributed-string Token ID 路径，并调整卡片与悬浮释义显示。候选服务目前不是设备验收结果；iOS 26.4+ 语言包、Apple 返回属性、词义和真机显示均待验证。
+- 新增 `Tests/Fixtures/LayoutBlock-Samples.json` 与 `Tests/LayoutBlockContextBuilderTests.swift`，覆盖人工转录扫描行和原生 PDF 文本层行的范围/几何映射。新增 `Tests/Fixtures/IELTS-context-strip.png` 与 `Tests/RealScanContextTests.swift`，测试真实 Vision OCR → `classroom` source span → `.layoutBlock` → 翻译请求的路径；该 XCTest 尚未运行，CI 待跑。扫描页字符串是人工参照，不是 OCR 输出或精度结论。
+- 0.72.0 的本轮 `test-ink` / `build-ipa` 尚未验证。数学符号识别、数学 OCR、外部模型安全与发布验收仍未完成；真实 iPad/Pencil 回归仍待完成。
 
-下方源码表与阶段表保留历史基线和对应证据，作为归档阅读；其中旧版本关于句子候选“未接 UI”的状态不适用于当前增量。若与本节冲突，以本节为准。当前 test-ink 的通过结果仅对应本页列出的同一 SHA 与 run，不外推到 Apple 候选语义或真机表现。
+下方保留 v0.71.0 与更早阶段的源代码说明和验证记录作为历史归档；历史通过结果只适用于对应 SHA，不代表当前增量通过。若归档文字与本节冲突，以本节为准。
 
-## 当前基座与边界
+## 历史验证档案（v0.71.0 / build 121）
+
+- `43a63c9700fe9be9a184832340f9b6f0df84c789` 的 [build-ipa run 42182468504](https://github.com/lei11118/pdf-vocab/actions/runs/42182468504) 曾成功：IPA v0.71.0 / build 121，minimum OS 26.0，48,075,418 bytes，SHA-256 `ef33542468c1d065a0e5a60d0501433891d422fdff67c6bb7b5f01740edd50e7`；主 app ZIP CRC、ARM64、science/ecdict 资源头检查通过。
+- 同 SHA 的 [test-ink run 42182468786](https://github.com/lei11118/pdf-vocab/actions/runs/42182468786) 曾成功：223 项 unit/integration + 6 项 UI，共 229 项，0 失败。主脑审阅过 UIReview 44 张图中的 4 张代表图；静态布局无明显裁切或旧矩形挡条，浅/深卡片未显示原句或整句译文。截图为实验开关关闭的词典回退状态，不验证系统候选译义、动态 Gaussian 质量或真机行为。
+- 19 文件增量由 `a487108` 引入；`43a63c9` 修正两处 Swift 编译问题：将嵌套 `State` 改为 `TranslationState`，并针对 `attributedText` 而非 `attributed` 包装值构造 `String.Index`。
+- v0.70.2 / build 120 的同 SHA [test-ink run 42172727928](https://github.com/lei11118/pdf-vocab/actions/runs/42172727928) 与 [build-ipa run 42172740816](https://github.com/lei11118/pdf-vocab/actions/runs/42172740816) 曾成功。历史完整 [test-ink run 42146019076](https://github.com/lei11118/pdf-vocab/actions/runs/42146019076) 和 [build-ipa run 42146414284](https://github.com/lei11118/pdf-vocab/actions/runs/42146414284) 属于 v0.70.0 / build 118；它们都不验证当前增量。
+
+## 历史基座与持续产品边界（v0.71.0 归档）
+
+本节记录的是 v0.71.0 / build 121 时的实现与持续产品约束，不是 v0.72.0 的验证结果。旧 run 与历史证据继续保留。
+
+- v0.71.0 / build 121 的 `43a63c9700fe9be9a184832340f9b6f0df84c789` 曾通过 [build-ipa run 42182468504](https://github.com/lei11118/pdf-vocab/actions/runs/42182468504) 和 [test-ink run 42182468786](https://github.com/lei11118/pdf-vocab/actions/runs/42182468786)；后者为 223 项 unit/integration + 6 项 UI，0 失败。IPA 元数据、包内检查和历史 UIReview 结论仅适用于该 SHA。
+- v0.71.0 / build 121 的 UIReview 只检查静态布局，没有验证真实 Apple 候选译义、动态 Gaussian 质量或真实设备行为。
 
 - iPad 专用应用；Bundle ID 为 `com.lei11118.pdfvocab`。G0 历史阶段未修改 Bundle ID、营销版本或 build 号；这不覆盖本次 v0.71.0 候选版本配置。
-- 当前 v0.71.0 / build 121 的 `build-ipa` run 42182468504 与 `test-ink` run 42182468786 均已通过；后者共 223 项 unit/integration 与 6 项 UI，零失败。历史 G0、G1 与 G2 测试记录只适用于各自 SHA。
+- 该 v0.71.0 / build 121 的 `build-ipa` run 42182468504 与 `test-ink` run 42182468786 均曾通过；后者共 223 项 unit/integration 与 6 项 UI，零失败。历史 G0、G1 与 G2 测试记录只适用于各自 SHA。
 - 新能力后续必须保持本地运行；总开关默认关闭，关闭后回到当前阅读路径。
 - 保留现有单击链接跳转；不新增单击选词。当前双击和长按选词继续可用。
 - 保留尺子的现有位置与手势；保留用户指定的不可拖动双层弧形工具栏，以及编辑、颜色和笔宽管理。
@@ -46,7 +55,7 @@
 
 ## 历史阶段状态归档
 
-G0-G2 的状态和 run 链接是对应历史 SHA 的记录；G3 描述当前候选接线：build-ipa 与 test-ink 已成功，真机验收未完成。
+G0-G3 的状态和 run 链接是对应历史 SHA 的记录；G3 描述 v0.71.0 时的候选接线，不代表当前工作树通过，真机验收当时仍未完成。
 
 | 阶段 | 状态 | 证据 / 下一步 |
 |---|---|---|

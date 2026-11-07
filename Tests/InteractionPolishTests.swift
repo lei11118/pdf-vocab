@@ -401,6 +401,86 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertLessThanOrEqual(narrow.height,80)
     }
 
+    func testHoverContextCandidateUsesNaturalHeightAndRespectsBubbleLimit() {
+        let base = HoverBubbleLayout.size(term:"function",detail:"函数",maximumWidth:320,maximumHeight:420,
+                                          hasContextualSection:true)
+        let candidate = String(repeating:"这是完整显示的语境译义。",count:14)
+        let withCandidate = HoverBubbleLayout.size(term:"function",detail:"函数",maximumWidth:320,maximumHeight:420,
+                                                   contextualCandidate:candidate,hasContextualSection:true)
+        XCTAssertGreaterThan(withCandidate.height - base.height,64)
+
+        let capped = HoverBubbleLayout.size(term:"function",detail:"函数",maximumWidth:320,maximumHeight:120,
+                                            contextualCandidate:String(repeating:"语境译义。",count:100),
+                                            hasContextualSection:true)
+        XCTAssertEqual(capped.height,120)
+    }
+
+    func testHoverBubbleHostsLongContextAndDictionaryInOneScrollableSurface() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let host = UIHostingController(rootView: WordBubbleContent(
+            term:"function",
+            detail:String(repeating:"n. 函数；功能；作用；职责。\n",count:30),
+            contextualCandidate:String(repeating:"这里的语境译义需要完整保留。",count:14)
+        ).frame(width:320,height:180))
+        let window = UIWindow(windowScene:scene)
+        window.frame = CGRect(x:0,y:0,width:320,height:180)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        host.view.frame = window.bounds
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for:.milliseconds(100))
+        host.view.layoutIfNeeded()
+
+        let identifiers = accessibilityIdentifiers(in:host.view)
+        XCTAssertTrue(identifiers.contains("word-bubble-scroll-content"))
+        XCTAssertTrue(identifiers.contains("contextual-hover-candidate"))
+        XCTAssertTrue(identifiers.contains("hover-dictionary-definition"))
+        let views = descendantViews(of:host.view)
+        let textView = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first)
+        XCTAssertFalse(textView.isScrollEnabled,"The outer bubble scroll view must own scrolling for both sections")
+        XCTAssertTrue(views.compactMap { $0 as? UIScrollView }.contains {
+            $0 !== textView && $0.isScrollEnabled && $0.contentSize.height > $0.bounds.height
+        },"The context and dictionary content must remain reachable in the capped bubble")
+    }
+
+    func testCompactContextCardShowsContextAndAllDictionaryDefinitionsTogether() async throws {
+        let canonical = SemanticTokenizer.canonicalize("charge", documentSHA256:"compact-context-test", pageIndex:0)
+        let token = try XCTUnwrap(canonical.tokens.first).withGeometryQuality(.word)
+        let selection = ContextualSelection(documentSHA256:canonical.documentSHA256,
+                                            pageIndex:canonical.pageIndex,
+                                            sourceSpans:[token.span],
+                                            tokens:[token],
+                                            displaySurface:"charge",
+                                            generation:7)
+        let host = UIHostingController(rootView: CompactContextualCardContent(
+            selection:selection,
+            dictionaryDefinitions:String(repeating:"费用；负责；指控；冲锋。\n",count:12),
+            candidatePreview:String(repeating:"此处语境译义会完整显示并可随胶囊滚动。",count:8)
+        ).frame(width:320,height:96))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene:scene)
+        window.frame = CGRect(x:0,y:0,width:320,height:96)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        host.view.frame = window.bounds
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for:.milliseconds(100))
+        host.view.layoutIfNeeded()
+
+        let identifiers = accessibilityIdentifiers(in:host.view)
+        XCTAssertTrue(identifiers.contains("compact-contextual-scroll-content"))
+        XCTAssertTrue(identifiers.contains("compact-contextual-term"))
+        XCTAssertTrue(identifiers.contains("contextual-hover-candidate"))
+        XCTAssertTrue(identifiers.contains("compact-contextual-dictionary-definitions"))
+        XCTAssertTrue(descendantViews(of:host.view).compactMap { $0 as? UIScrollView }.contains {
+            $0.isScrollEnabled && $0.contentSize.height > $0.bounds.height
+        },"The compact contextual card must keep both full texts reachable by scrolling")
+    }
+
     func testNarrowCapsuleWidthIsContinuousAcrossLayoutThreshold() {
         XCTAssertEqual(ReaderWindowGeometry.minimumWidth(height:96,allowsCompact:true),180)
         XCTAssertEqual(ReaderWindowGeometry.minimumWidth(height:220,allowsCompact:true),260)
@@ -1130,6 +1210,45 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertFalse(store.isDone(docSha: sha))
         store.markDone(docSha: sha)
         XCTAssertTrue(store.isDone(docSha: sha))
+    }
+
+    private func descendantViews(of root:UIView) -> [UIView] {
+        [root] + root.subviews.flatMap { descendantViews(of:$0) }
+    }
+
+    private func accessibilityIdentifiers(in root:UIView) -> Set<String> {
+        var identifiers = Set<String>()
+        var visited = Set<ObjectIdentifier>()
+        func visit(_ element:Any) {
+            guard let object = element as? NSObject,
+                  visited.insert(ObjectIdentifier(object)).inserted else { return }
+            if let identifiable = object as? UIAccessibilityIdentification,
+               let identifier = identifiable.accessibilityIdentifier {
+                identifiers.insert(identifier)
+            }
+            if let view = object as? UIView {
+                if let elements = view.accessibilityElements {
+                    elements.prefix(256).forEach { visit($0) }
+                } else if let container = object as? UIAccessibilityContainer {
+                    let count = container.accessibilityElementCount()
+                    if count != NSNotFound, count > 0 {
+                        for index in 0..<min(count,256) {
+                            if let child = container.accessibilityElement(at:index) { visit(child) }
+                        }
+                    }
+                }
+                view.subviews.forEach { visit($0) }
+            } else if let container = object as? UIAccessibilityContainer {
+                let count = container.accessibilityElementCount()
+                if count != NSNotFound, count > 0 {
+                    for index in 0..<min(count,256) {
+                        if let child = container.accessibilityElement(at:index) { visit(child) }
+                    }
+                }
+            }
+        }
+        visit(root)
+        return identifiers
     }
 
 }

@@ -170,6 +170,9 @@ struct ContextualSelection: Equatable, Sendable {
     /// Present only when an exact, enabled-dictionary phrase entry verified
     /// this selected group. Coordinates stay page-relative UTF-16 like sourceSpans.
     var verifiedPhraseGroupSpan: UTF16Span? = nil
+    /// The original single-line OCR context used only for exact dictionary
+    /// phrase lookup when `sentenceContext` is a mapped layout block.
+    var phraseLookupContext: SentenceContext? = nil
     let displaySurface: String
     let generation: Int
     var sentenceContext: SentenceContext? = nil

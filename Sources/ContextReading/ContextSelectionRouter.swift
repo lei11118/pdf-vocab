@@ -104,15 +104,27 @@ enum ContextSelectionRouter {
                                         documentSHA256: documentSHA256,
                                         pageIndex: pageIndex,
                                         geometryRevision: SelectionGeometry.contextGeometryRevision(for: page))
+        let validatedBlock = trustedSourceBlock()
         guard var contextual = resolve(canonical: canonical,
                                        sourceSpans: sourceSpans,
                                        displaySurface: displaySurface,
                                        geometryQuality: geometryQuality,
                                        generation: generation,
                                        allowsMultilineSentenceContext: true,
-                                       verifiedPhraseGroupSpan: verifiedPhraseGroupSpan) else { return nil }
-        var shouldUseTrustedFallback = contextual.sentenceContext == nil
-        if let candidate = contextual.sentenceContext {
+                                       verifiedPhraseGroupSpan: verifiedPhraseGroupSpan,
+                                       trustedSourceBlock: validatedBlock) else { return nil }
+        var usesValidatedLayoutBlock = false
+        if let validatedBlock,
+           let layoutContext = NativeLayoutBlockContextBuilder.build(sourceText: sourceText,
+                                                                     trustedSourceBlock: validatedBlock,
+                                                                     selectedSourceSpans: sourceSpans,
+                                                                     documentSHA256: documentSHA256,
+                                                                     pageIndex: pageIndex) {
+            contextual.sentenceContext = layoutContext
+            usesValidatedLayoutBlock = true
+        }
+        var shouldUseTrustedFallback = !usesValidatedLayoutBlock && contextual.sentenceContext == nil
+        if !usesValidatedLayoutBlock, let candidate = contextual.sentenceContext {
             if let rawCandidate = candidate.sourceSpan.substring(in: sourceText) {
                 if containsLineBreak(rawCandidate) {
                     shouldUseTrustedFallback = !candidateHasTrustedLineGeometry(candidate)
@@ -123,7 +135,7 @@ enum ContextSelectionRouter {
         }
         if shouldUseTrustedFallback {
             contextual.sentenceContext = nil
-            if let block = trustedSourceBlock(),
+            if let block = validatedBlock,
                let fallback = resolve(canonical: canonical,
                                       sourceSpans: sourceSpans,
                                       displaySurface: displaySurface,

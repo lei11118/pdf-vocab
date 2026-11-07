@@ -281,6 +281,203 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
         }
     }
 
+    func testNonSentenceLayoutBlockBuildsContextualRequestAndFragmentStillFails() throws {
+        let text = "The charge of an electron is negative"
+        let selected = try XCTUnwrap(span(of: "charge", in: text))
+        let layout = layoutBlockContext(rawText: text,
+                                        selectedLineSpans: [selected],
+                                        seedLineIndex: 0,
+                                        seedLineOffset: 0)
+        let request = try ContextualTranslationRequest.make(from: layout)
+        XCTAssertEqual(request.sentenceText, text)
+        XCTAssertEqual(request.selectedSourcePhrase, "charge")
+        XCTAssertEqual(request.selectedSourceSpans, [selected])
+
+        let fragment = context(text, selected: [selected], kind: .fragment)
+        XCTAssertThrowsError(try ContextualTranslationRequest.make(from: fragment)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .incompleteSentence)
+        }
+    }
+
+    func testMappedRepeatedWordOnSecondLineUsesMappedOccurrenceOffset() throws {
+        let firstLine = "The method"
+        let secondLine = "uses method daily"
+        let rawText = firstLine + "\n" + secondLine
+        let selectedLineSpan = try XCTUnwrap(span(of: "method", in: secondLine))
+        let seedOffset = (firstLine as NSString).length + 1
+        let context = layoutBlockContext(rawText: rawText,
+                                        selectedLineSpans: [selectedLineSpan],
+                                        seedLineIndex: 8,
+                                        seedLineOffset: seedOffset)
+
+        let request = try ContextualTranslationRequest.make(from: context)
+        let mappedSpan = UTF16Span(location: seedOffset + selectedLineSpan.location,
+                                   length: selectedLineSpan.length)
+        XCTAssertEqual(request.selectedSourceSpans, [mappedSpan])
+        XCTAssertEqual(request.tokens.filter { $0.sourceSurface == "method" }.count, 2)
+        XCTAssertEqual(request.selectedTokenIDs,
+                       [try XCTUnwrap(request.tokens.first { $0.sourceSpan == mappedSpan }?.id)])
+    }
+
+    func testCRLFLayoutBlockNormalizesWithoutShiftingMappedSelection() throws {
+        let firstLine = "A useful"
+        let secondLine = "method carries meaning"
+        let rawText = firstLine + "\r\n" + secondLine
+        let selected = try XCTUnwrap(span(of: "method", in: secondLine))
+        let seedOffset = (firstLine as NSString).length + 2
+        let context = layoutBlockContext(rawText: rawText,
+                                        selectedLineSpans: [selected],
+                                        seedLineIndex: 4,
+                                        seedLineOffset: seedOffset)
+
+        let request = try ContextualTranslationRequest.make(from: context)
+        XCTAssertEqual(context.text, "A useful  method carries meaning")
+        XCTAssertEqual((context.text as NSString).length, (rawText as NSString).length)
+        XCTAssertEqual(request.selectedSourceSpans,
+                       [UTF16Span(location: seedOffset + selected.location, length: selected.length)])
+        XCTAssertEqual(request.selectedSourcePhrase, "method")
+    }
+
+    func testVerifiedPhraseGroupMapsLineLocalSpanIntoLayoutBlock() throws {
+        let firstLine = "Earlier line"
+        let secondLine = "They read books daily"
+        let rawText = firstLine + "\n" + secondLine
+        let selectedLineSpan = try XCTUnwrap(span(of: "read books", in: secondLine))
+        let seedOffset = (firstLine as NSString).length + 1
+        let context = layoutBlockContext(rawText: rawText,
+                                        selectedLineSpans: [selectedLineSpan],
+                                        seedLineIndex: 1,
+                                        seedLineOffset: seedOffset)
+
+        let request = try ContextualTranslationRequest.make(from: context,
+                                                            verifiedPhraseGroupSpan: selectedLineSpan)
+        let mappedSpan = UTF16Span(location: seedOffset + selectedLineSpan.location,
+                                   length: selectedLineSpan.length)
+        XCTAssertEqual(context.selectedSourceSpans, [selectedLineSpan])
+        XCTAssertEqual(request.selectedSourceSpans, [mappedSpan])
+        XCTAssertEqual(request.selectedPhraseGroup?.sourceSpan, mappedSpan)
+        XCTAssertEqual(request.selectedPhraseGroup?.sourceSurface, "read books")
+    }
+
+    func testLayoutBlockRejectsMalformedMappingsAndWholeContextSelection() throws {
+        let text = "The red apple remains fresh"
+        let red = try XCTUnwrap(span(of: "red", in: text))
+        let apple = try XCTUnwrap(span(of: "apple", in: text))
+        let normalMaps = [
+            SentenceContextSpanMapping(lineIndex: 3, sourceSpan: red, contextSpan: red),
+            SentenceContextSpanMapping(lineIndex: 3, sourceSpan: apple, contextSpan: apple)
+        ]
+        let malformed: [SentenceContext] = [
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0]]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               sourceSpan: UTF16Span(location: 1, length: (text as NSString).length)),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0],
+                                          SentenceContextSpanMapping(lineIndex: 4,
+                                                                     sourceSpan: apple,
+                                                                     contextSpan: apple)]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0],
+                                          SentenceContextSpanMapping(lineIndex: 3,
+                                                                     sourceSpan: apple,
+                                                                     contextSpan: UTF16Span(location: red.location + 1,
+                                                                                            length: apple.length))]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0], normalMaps[0]]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, red],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0],
+                                          SentenceContextSpanMapping(lineIndex: 3,
+                                                                     sourceSpan: red,
+                                                                     contextSpan: apple)]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [SentenceContextSpanMapping(lineIndex: 3,
+                                                                     sourceSpan: red,
+                                                                     contextSpan: apple),
+                                          SentenceContextSpanMapping(lineIndex: 3,
+                                                                     sourceSpan: apple,
+                                                                     contextSpan: red)]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: [normalMaps[0],
+                                          SentenceContextSpanMapping(lineIndex: 3,
+                                                                     sourceSpan: apple,
+                                                                     contextSpan: UTF16Span(location: apple.location,
+                                                                                            length: apple.length - 1))]),
+            layoutBlockContext(rawText: text,
+                               selectedLineSpans: [red, apple],
+                               seedLineIndex: 3,
+                               seedLineOffset: 0,
+                               mappings: normalMaps,
+                               selectedDisplaySpans: [red,
+                                                      UTF16Span(location: apple.location + 1,
+                                                                length: apple.length)])
+        ]
+        for context in malformed {
+            XCTAssertThrowsError(try ContextualTranslationRequest.make(from: context)) {
+                XCTAssertEqual($0 as? ContextualTranslationError, .invalidSelection)
+            }
+        }
+
+        let wholeText = "Charge levels change slowly"
+        let allWords = SemanticTokenizer.canonicalize(wholeText,
+                                                       documentSHA256: "layout-whole-context",
+                                                       pageIndex: 0,
+                                                       blockID: "layout-whole-context")
+            .tokens.filter { $0.kind == .word }.map(\.span)
+        let wholeContext = layoutBlockContext(rawText: wholeText,
+                                             selectedLineSpans: allWords,
+                                             seedLineIndex: 0,
+                                             seedLineOffset: 0)
+        XCTAssertThrowsError(try ContextualTranslationRequest.make(from: wholeContext)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .selectionCoversSentence)
+        }
+
+        let onlyNonWordContext = "7 + read"
+        let read = try XCTUnwrap(span(of: "read", in: onlyNonWordContext))
+        let onlyNonWord = layoutBlockContext(rawText: onlyNonWordContext,
+                                             selectedLineSpans: [read],
+                                             seedLineIndex: 0,
+                                             seedLineOffset: 0)
+        XCTAssertThrowsError(try ContextualTranslationRequest.make(from: onlyNonWord)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .selectionCoversSentence)
+        }
+    }
+
+    func testNativeLayoutBlockWithoutMappingsKeepsPageGlobalOffsets() throws {
+        let text = "The charge of an electron is negative"
+        let local = try XCTUnwrap(span(of: "charge", in: text))
+        let nativeLayoutBlock = context(text,
+                                       selected: [local],
+                                       kind: .layoutBlock)
+        let request = try ContextualTranslationRequest.make(from: nativeLayoutBlock)
+        XCTAssertEqual(request.selectedSourceSpans, [local])
+        XCTAssertEqual(request.selectedSourcePhrase, "charge")
+    }
+
     private func request(text: String, selected surface: String) throws -> ContextualTranslationRequest {
         let selected = try XCTUnwrap(span(of: surface, in: text))
         return try ContextualTranslationRequest.make(from: context(text, selected: [selected]))
@@ -365,7 +562,40 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
         return result
     }
 
-    private func context(_ text: String, selected localSpans: [UTF16Span]) -> SentenceContext {
+    private func layoutBlockContext(rawText: String,
+                                    selectedLineSpans: [UTF16Span],
+                                    seedLineIndex: Int,
+                                    seedLineOffset: Int,
+                                    mappings: [SentenceContextSpanMapping]? = nil,
+                                    selectedDisplaySpans: [UTF16Span]? = nil,
+                                    sourceSpan: UTF16Span? = nil) -> SentenceContext {
+        let text = LayoutBlockContextBuilder.replacingLineBreaksPreservingUTF16(in: rawText)
+        let length = (text as NSString).length
+        let defaultMappings = selectedLineSpans.map { span in
+            SentenceContextSpanMapping(lineIndex: seedLineIndex,
+                                       sourceSpan: span,
+                                       contextSpan: UTF16Span(location: seedLineOffset + span.location,
+                                                             length: span.length))
+        }
+        let resolvedMappings = mappings ?? defaultMappings
+        let displaySpans = selectedDisplaySpans ?? resolvedMappings.map(\.contextSpan)
+        return SentenceContext(documentSHA256: "layout-fixture-document",
+                               pageIndex: 0,
+                               blockID: "layout-fixture-block",
+                               text: text,
+                               displayLineText: text,
+                               displaySentenceText: text,
+                               sourceSpan: sourceSpan ?? UTF16Span(location: 0, length: length),
+                               displaySpan: UTF16Span(location: 0, length: length),
+                               selectedSourceSpans: selectedLineSpans,
+                               selectedDisplaySpans: displaySpans,
+                               kind: .layoutBlock,
+                               sourceSpanMappings: resolvedMappings)
+    }
+
+    private func context(_ text: String,
+                         selected localSpans: [UTF16Span],
+                         kind: SentenceContextKind = .completeSentence) -> SentenceContext {
         let origin = 100
         let length = (text as NSString).length
         return SentenceContext(documentSHA256: "fixture-document",
@@ -380,7 +610,7 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                                    UTF16Span(location: origin + $0.location, length: $0.length)
                                },
                                selectedDisplaySpans: localSpans,
-                               kind: .completeSentence)
+                               kind: kind)
     }
 
     private func span(of surface: String, in text: String, occurrence: Int = 0) -> UTF16Span? {
@@ -452,8 +682,96 @@ final class ContextualTranslationServiceTests: XCTestCase {
                                        using: translator)
         let enabledCallCount = await calls.count
         let cachedEntryCount = await service.cachedEntryCount
-        XCTAssertEqual(enabledCallCount, 3)
+        let cachedPayloadCount = await service.cachedPayloadEntryCount
+        XCTAssertEqual(enabledCallCount, 2)
         XCTAssertEqual(cachedEntryCount, 3)
+        XCTAssertEqual(cachedPayloadCount, 2)
+    }
+
+    func testWholeBlockPayloadCacheExtractsEachSelectedWordOnce() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 4, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makeWholeBlockPayload(request: request, source: source)
+        }
+
+        let readResult = try await service.translate(read,
+                                                     sourceLanguageIdentifier: "en",
+                                                     targetLanguageIdentifier: "zh-Hans",
+                                                     backendVersion: "test-v1",
+                                                     using: translator)
+        let booksResult = try await service.translate(books,
+                                                      sourceLanguageIdentifier: "en",
+                                                      targetLanguageIdentifier: "zh-Hans",
+                                                      backendVersion: "test-v1",
+                                                      using: translator)
+        let callCount = await calls.count
+        let candidateCount = await service.cachedEntryCount
+        let payloadCount = await service.cachedPayloadEntryCount
+        XCTAssertEqual(readResult.sourcePhrase, "read")
+        XCTAssertEqual(readResult.translatedPhrase, "读")
+        XCTAssertEqual(booksResult.sourcePhrase, "books")
+        XCTAssertEqual(booksResult.translatedPhrase, "书")
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(candidateCount, 2)
+        XCTAssertEqual(payloadCount, 1)
+    }
+
+    func testPayloadCacheSeparatesGroupSourceLanguageAndBackend() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 8, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let phrase = try makePhraseRequest(text: text, selected: "read books")
+        let otherSource = try makeRequest(text: "They read passages daily.", selected: "read")
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makeAllTokenMarkedPayload(request: request, source: source)
+        }
+
+        _ = try await service.translate(read, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1", using: translator)
+        _ = try await service.translate(books, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1", using: translator)
+        _ = try await service.translate(read, sourceLanguageIdentifier: "fr", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1", using: translator)
+        _ = try await service.translate(read, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v2", using: translator)
+        _ = try await service.translate(otherSource, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1", using: translator)
+        _ = try await service.translate(phrase, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1", using: translator)
+
+        let callCount = await calls.count
+        XCTAssertEqual(callCount, 5,
+                       "Different source, language, backend, and verified phrase-group payloads must not share")
+    }
+
+    func testInvalidCachedPayloadFallsBackToTranslatorForUnmarkedSelection() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 4, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makeSelectedTokenPayload(request: request, source: source)
+        }
+
+        let readResult = try await service.translate(read, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                                     backendVersion: "test-v1", using: translator)
+        let booksResult = try await service.translate(books, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                                      backendVersion: "test-v1", using: translator)
+        let callCount = await calls.count
+        XCTAssertEqual(readResult.translatedPhrase, "读")
+        XCTAssertEqual(booksResult.sourcePhrase, "books")
+        XCTAssertEqual(booksResult.translatedPhrase, "书")
+        XCTAssertEqual(callCount, 2)
     }
 
     func testFailuresAndCancellationAreNotCached() async throws {
@@ -478,8 +796,10 @@ final class ContextualTranslationServiceTests: XCTestCase {
         }
         let failedCallCount = await calls.count
         let failedCacheCount = await service.cachedEntryCount
+        let failedPayloadCount = await service.cachedPayloadEntryCount
         XCTAssertEqual(failedCallCount, 2)
         XCTAssertEqual(failedCacheCount, 0)
+        XCTAssertEqual(failedPayloadCount, 0)
 
         let started = ContextualTranslationCallRecorder()
         let sleeping: ContextualTranslationService.Translator = { request, _, _, _ in
@@ -503,7 +823,9 @@ final class ContextualTranslationServiceTests: XCTestCase {
             // Expected: the canceled result is not cached.
         }
         let canceledCacheCount = await service.cachedEntryCount
+        let canceledPayloadCount = await service.cachedPayloadEntryCount
         XCTAssertEqual(canceledCacheCount, 0)
+        XCTAssertEqual(canceledPayloadCount, 0)
     }
 
     func testInvalidatedOlderRequestCannotPopulateCache() async throws {
@@ -531,7 +853,42 @@ final class ContextualTranslationServiceTests: XCTestCase {
             XCTAssertEqual(error, .staleRequest)
         }
         let cachedCount = await service.cachedEntryCount
+        let cachedPayloadCount = await service.cachedPayloadEntryCount
         XCTAssertEqual(cachedCount, 0)
+        XCTAssertEqual(cachedPayloadCount, 0)
+    }
+
+    func testClearCacheDuringTranslationDoesNotRepopulateCandidateOrPayloadCache() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 4, isEnabled: { true })
+        let request = try makeRequest(text: "A reader learns quickly.", selected: "reader")
+        let gate = ContextualTranslationPayloadGate()
+        let pendingTranslator: ContextualTranslationService.Translator = { request, _, _, _ in
+            try await gate.wait()
+        }
+        let pending = Task {
+            try await service.translate(request,
+                                        sourceLanguageIdentifier: "en",
+                                        targetLanguageIdentifier: "zh-Hans",
+                                        backendVersion: "test-v1",
+                                        using: pendingTranslator)
+        }
+        await gate.waitUntilStarted()
+        await service.clearCache()
+        await gate.resume(try makeFakePayload(request: request))
+        _ = try await pending.value
+        let candidateCountAfterClear = await service.cachedEntryCount
+        let payloadCountAfterClear = await service.cachedPayloadEntryCount
+        XCTAssertEqual(candidateCountAfterClear, 0)
+        XCTAssertEqual(payloadCountAfterClear, 0)
+
+        let retryCalls = ContextualTranslationCallRecorder()
+        _ = try await service.translate(request,
+                                       sourceLanguageIdentifier: "en",
+                                       targetLanguageIdentifier: "zh-Hans",
+                                       backendVersion: "test-v1",
+                                       using: fakeTranslator(calls: retryCalls))
+        let retryCallCount = await retryCalls.count
+        XCTAssertEqual(retryCallCount, 1,"The in-flight payload must not survive clearCache")
     }
 
     func testCacheRemainsBounded() async throws {
@@ -553,8 +910,10 @@ final class ContextualTranslationServiceTests: XCTestCase {
         }
         let callCount = await calls.count
         let cachedCount = await service.cachedEntryCount
+        let cachedPayloadCount = await service.cachedPayloadEntryCount
         XCTAssertEqual(callCount, 3)
         XCTAssertEqual(cachedCount, 2)
+        XCTAssertEqual(cachedPayloadCount, 2)
 
         _ = try await service.translate(requests[0],
                                        sourceLanguageIdentifier: "en",
@@ -563,6 +922,46 @@ final class ContextualTranslationServiceTests: XCTestCase {
                                        using: translator)
         let callCountAfterEvictedRead = await calls.count
         XCTAssertEqual(callCountAfterEvictedRead, 4, "The first result should have been evicted by the third insertion")
+    }
+
+    func testPayloadLRUIsCappedAtEightAndZeroCapacityDisablesReuse() async throws {
+        let bounded = ContextualTranslationService(maximumCachedEntries: 12, isEnabled: { true })
+        let boundedCalls = ContextualTranslationCallRecorder()
+        let nouns = ["cat", "dog", "bird", "book", "reader", "teacher", "method", "charge", "light"]
+        for noun in nouns {
+            let text = "A \(noun) moves daily."
+            let request = try makeRequest(text: text, selected: noun)
+            _ = try await bounded.translate(request,
+                                            sourceLanguageIdentifier: "en",
+                                            targetLanguageIdentifier: "zh-Hans",
+                                            backendVersion: "test-v1",
+                                            using: { request, source, _, _ in
+                                                await boundedCalls.record()
+                                                return try makeAllTokenMarkedPayload(request: request, source: source)
+                                            })
+        }
+        let boundedPayloadCount = await bounded.cachedPayloadEntryCount
+        XCTAssertEqual(boundedPayloadCount, 8)
+
+        let disabled = ContextualTranslationService(maximumCachedEntries: 0, isEnabled: { true })
+        let disabledCalls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await disabledCalls.record()
+            return try makeWholeBlockPayload(request: request, source: source)
+        }
+        _ = try await disabled.translate(read, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                         backendVersion: "test-v1", using: translator)
+        _ = try await disabled.translate(books, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
+                                         backendVersion: "test-v1", using: translator)
+        let disabledCallCount = await disabledCalls.count
+        let disabledCandidateCount = await disabled.cachedEntryCount
+        let disabledPayloadCount = await disabled.cachedPayloadEntryCount
+        XCTAssertEqual(disabledCallCount, 2)
+        XCTAssertEqual(disabledCandidateCount, 0)
+        XCTAssertEqual(disabledPayloadCount, 0)
     }
 
     func testRepeatedWordOccurrencesUseSeparateCacheEntries() async throws {
@@ -748,6 +1147,101 @@ private func makeRequest(text: String, selected: String, occurrence: Int = 0) th
                                   selectedDisplaySpans: [span],
                                   kind: .completeSentence)
     return try ContextualTranslationRequest.make(from: context)
+}
+
+private func makePhraseRequest(text: String, selected: String) throws -> ContextualTranslationRequest {
+    let source = text as NSString
+    let range = source.range(of: selected)
+    guard range.location != NSNotFound,
+          let span = UTF16Span(range: range, in: text) else {
+        throw ContextualTranslationError.invalidSelection
+    }
+    let length = source.length
+    let context = SentenceContext(documentSHA256: "service-fixture",
+                                  pageIndex: 0,
+                                  blockID: "service-block",
+                                  text: text,
+                                  displayLineText: text,
+                                  displaySentenceText: text,
+                                  sourceSpan: UTF16Span(location: 0, length: length),
+                                  displaySpan: UTF16Span(location: 0, length: length),
+                                  selectedSourceSpans: [span],
+                                  selectedDisplaySpans: [span],
+                                  kind: .completeSentence)
+    return try ContextualTranslationRequest.make(from: context, verifiedPhraseGroupSpan: span)
+}
+
+private func makeWholeBlockPayload(request: ContextualTranslationRequest,
+                                   source: AttributedString) throws -> ContextualTranslationPayload {
+    let target = "他们读书每天"
+    let spans: [String: UTF16Span] = [
+        "they": UTF16Span(location: 0, length: 2),
+        "read": UTF16Span(location: 2, length: 1),
+        "books": UTF16Span(location: 3, length: 1),
+        "daily": UTF16Span(location: 4, length: 2)
+    ]
+    var attributedTarget = AttributedString(target)
+    for token in request.tokens {
+        guard let span = spans[token.sourceSurface.lowercased()] else { continue }
+        try applyToken(token.id, span: span, to: &attributedTarget, source: target)
+    }
+    return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                        attributedSourceText: source,
+                                        targetText: target,
+                                        attributedTargetText: attributedTarget)
+}
+
+private func makeAllTokenMarkedPayload(request: ContextualTranslationRequest,
+                                       source: AttributedString) throws -> ContextualTranslationPayload {
+    let glyphs = Array("甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥")
+    guard request.tokens.count <= glyphs.count else { throw ContextualTranslationError.invalidTargetRange }
+    let body = String(glyphs.prefix(request.tokens.count))
+    let target = "甲\(body)乙"
+    var attributedTarget = AttributedString(target)
+    for (index, token) in request.tokens.enumerated() {
+        try applyToken(token.id,
+                       span: UTF16Span(location: 1 + index, length: 1),
+                       to: &attributedTarget,
+                       source: target)
+    }
+    if let group = request.selectedPhraseGroup {
+        let selectedIndices = request.tokens.indices.filter {
+            request.tokens[$0].sourceSpan.intersects(group.sourceSpan)
+        }
+        guard let first = selectedIndices.first, let last = selectedIndices.last else {
+            throw ContextualTranslationError.invalidSelection
+        }
+        try applyPhraseGroup(group.id,
+                             span: UTF16Span(location: 1 + first, length: last - first + 1),
+                             to: &attributedTarget,
+                             source: target)
+    }
+    return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                        attributedSourceText: source,
+                                        targetText: target,
+                                        attributedTargetText: attributedTarget)
+}
+
+private func makeSelectedTokenPayload(request: ContextualTranslationRequest,
+                                      source: AttributedString) throws -> ContextualTranslationPayload {
+    let target = "甲读书乙"
+    var attributedTarget = AttributedString(target)
+    for id in request.selectedTokenIDs {
+        guard let token = request.tokens.first(where: { $0.id == id }) else {
+            throw ContextualTranslationError.unknownTokenID
+        }
+        let span: UTF16Span
+        switch token.sourceSurface.lowercased() {
+        case "read": span = UTF16Span(location: 1, length: 1)
+        case "books": span = UTF16Span(location: 2, length: 1)
+        default: throw ContextualTranslationError.invalidSelection
+        }
+        try applyToken(id, span: span, to: &attributedTarget, source: target)
+    }
+    return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                        attributedSourceText: source,
+                                        targetText: target,
+                                        attributedTargetText: attributedTarget)
 }
 
 private func makeFakePayload(request: ContextualTranslationRequest,

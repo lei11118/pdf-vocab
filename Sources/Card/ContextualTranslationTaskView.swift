@@ -7,6 +7,24 @@ enum ContextualTranslationPresentation: Hashable {
     case hover
 }
 
+struct ContextualTranslationHoverText: View {
+    let phrase: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("语境译义")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(DS.foreground2)
+            Text(phrase)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(DS.accent)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("contextual-hover-candidate")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Owns the local identity barrier for one contextual request. A disappearing
 /// card or hover cancels only this driver; it never invalidates shared requests.
 @MainActor
@@ -79,7 +97,7 @@ final class ContextualTranslationDriver: ObservableObject {
         guard isCurrent(identity, generation: localGeneration), !Task.isCancelled,
               identity.isEnabled else { return }
         guard let sentenceContext = identity.selection.sentenceContext else {
-            state = .unavailable("当前选区没有可验证的完整句子上下文，可查看词典释义。")
+            state = .unavailable("当前选区没有可验证的语境，无法生成语境译义；下方仍显示词典释义。")
             DiagLog.log("context.translation.prepare=missing-context")
             return
         }
@@ -103,7 +121,7 @@ final class ContextualTranslationDriver: ObservableObject {
         } else {
             guard #available(iOS 26.4, *) else {
                 availability = .systemUnavailable
-                state = .unavailable("系统 Token 对齐需要 iPadOS 26.4 或更高版本，当前版本仍可使用词典入口。")
+                state = .unavailable("系统语境 Token 对齐需要 iPadOS 26.4 或更高版本；下方仍显示词典释义。")
                 DiagLog.log("context.translation.availability=system-unavailable")
                 return
             }
@@ -138,7 +156,7 @@ final class ContextualTranslationDriver: ObservableObject {
             state = .unsupported
             DiagLog.log("context.translation.availability=unsupported")
         case .systemUnavailable:
-            state = .unavailable("系统 Token 对齐需要 iPadOS 26.4 或更高版本，当前版本仍可使用词典入口。")
+            state = .unavailable("系统语境 Token 对齐需要 iPadOS 26.4 或更高版本；下方仍显示词典释义。")
             DiagLog.log("context.translation.availability=system-unavailable")
         }
     }
@@ -286,7 +304,7 @@ struct ContextualTranslationTaskView: View {
                 OfflineTranslationPreparationView(model: preparationModel)
                 retryButton
             case .unsupported:
-                Text("此设备当前不支持英语到简体中文的端侧翻译，可查看词典释义。")
+                Text("此设备当前不支持英语到简体中文的端侧语境翻译；下方仍显示词典释义。")
                     .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
             case .unavailable(let message), .failed(let message):
                 Text(message).font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
@@ -316,14 +334,7 @@ struct ContextualTranslationTaskView: View {
     @ViewBuilder
     private var hoverContent: some View {
         if case .candidate(let candidate) = driver.state {
-            ScrollView(.vertical, showsIndicators: false) {
-                Text(candidate.translatedPhrase)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(DS.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("contextual-hover-candidate")
-            }
-            .frame(maxHeight: 64)
+            ContextualTranslationHoverText(phrase: candidate.translatedPhrase)
         }
     }
 

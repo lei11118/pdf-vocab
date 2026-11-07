@@ -6,7 +6,7 @@ import XCTest
 
 @MainActor
 final class ContextOCRSelectionTests: XCTestCase {
-    func testOCRSelectionCarriesSameLineSentenceContextAndKeepsFragmentsIncomplete() throws {
+    func testOCRSelectionBuildsLayoutContextAndKeepsIsolatedWordsIncomplete() throws {
         let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
         let completePage = try makePage(sha: "ocr-sentence", pageIndex: 0, mediaBox: media,
                                         blockID: "sentence-row", text: "A complete sentence.",
@@ -17,10 +17,13 @@ final class ContextOCRSelectionTests: XCTestCase {
         let completeSource = try XCTUnwrap(ContextOCRSelectionSource(page: completePage))
         let completeSelection = try XCTUnwrap(completeSource.contextualSelection(for: 0...0, generation: 1))
         let completeContext = try XCTUnwrap(completeSelection.sentenceContext)
-        XCTAssertEqual(completeContext.kind, .completeSentence)
+        XCTAssertEqual(completeContext.kind, .layoutBlock)
         XCTAssertEqual(completeContext.text, "A complete sentence.")
         XCTAssertEqual(completeContext.selectedSourceSpans, completeSelection.sourceSpans)
         XCTAssertEqual(completeContext.sourceSpan, UTF16Span(location: 0, length: ("A complete sentence." as NSString).length))
+        XCTAssertEqual(completeContext.selectedDisplaySpans, completeSelection.sourceSpans)
+        XCTAssertEqual(completeContext.sourceSpanMappings.map(\.lineIndex), [0])
+        XCTAssertEqual(completeContext.sourceSpanMappings.map(\.sourceSpan), completeSelection.sourceSpans)
 
         let fragmentPage = try makePage(sha: "ocr-fragment", pageIndex: 0, mediaBox: media,
                                         blockID: "fragment-row", text: "charge",
@@ -31,6 +34,213 @@ final class ContextOCRSelectionTests: XCTestCase {
         let fragmentSource = try XCTUnwrap(ContextOCRSelectionSource(page: fragmentPage))
         let fragmentSelection = try XCTUnwrap(fragmentSource.contextualSelection(for: 0...0, generation: 2))
         XCTAssertEqual(fragmentSelection.sentenceContext?.kind, .fragment)
+        XCTAssertThrowsError(try ContextualTranslationRequest.make(from: XCTUnwrap(fragmentSelection.sentenceContext))) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .incompleteSentence)
+        }
+    }
+
+    func testOCRLayoutContextMapsRepeatedLineLocalWordIntoSameColumnBlock() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let page = try makeLayoutPage(sha: "ocr-layout-repeated",
+                                      mediaBox: media,
+                                      lines: [
+                                          ("read books daily", CGRect(x: 40, y: 240, width: 190, height: 14)),
+                                          ("read pages carefully", CGRect(x: 40, y: 220, width: 220, height: 14)),
+                                          ("Unrelated right column", CGRect(x: 270, y: 220, width: 120, height: 14)),
+                                          ("and ends here", CGRect(x: 40, y: 200, width: 190, height: 14))
+                                      ])
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let selectedEntry = try XCTUnwrap(source.entries.firstIndex {
+            $0.lineIndex == 1 && $0.word.text == "read"
+        })
+        let selection = try XCTUnwrap(source.contextualSelection(for: selectedEntry...selectedEntry,
+                                                                 generation: 8))
+        let context = try XCTUnwrap(selection.sentenceContext)
+        let mapped = try XCTUnwrap(context.selectedDisplaySpans.first)
+        let lineLocal = try XCTUnwrap(selection.sourceSpans.first)
+
+        XCTAssertEqual(context.kind, .layoutBlock)
+        XCTAssertEqual(selection.sourceSpans, [UTF16Span(location: 0, length: 4)],
+                       "The public OCR highlight coordinate stays line-local")
+        XCTAssertEqual(mapped.substring(in: context.text), "read")
+        XCTAssertEqual(mapped.location, (page.lines[0].sourceText as NSString).length + 1,
+                       "The second occurrence maps to its block-local position")
+        XCTAssertTrue(context.text.contains("read books daily"))
+        XCTAssertTrue(context.text.contains("read pages carefully"))
+        XCTAssertTrue(context.text.contains("and ends here"))
+        XCTAssertFalse(context.text.contains("Unrelated right column"))
+        XCTAssertEqual(context.sourceSpanMappings.map(\.lineIndex), [1])
+        XCTAssertEqual(context.sourceSpanMappings.map(\.sourceSpan), [lineLocal])
+        XCTAssertEqual(context.sourceSpanMappings.map(\.contextSpan), [mapped])
+        XCTAssertEqual(lineLocal.substring(in: page.lines[1].sourceText), "read")
+    }
+
+    func testOCRLayoutContextPreservesUnicodeAndExplicitLineOffsetMapping() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let decomposedWord = "cafe\u{0301}"
+        let firstLine = "café study 😀"
+        let secondLine = "😀 \(decomposedWord) studies"
+        let page = try makeLayoutPage(sha: "ocr-layout-unicode",
+                                      mediaBox: media,
+                                      lines: [
+                                          (firstLine, CGRect(x: 40, y: 220, width: 220, height: 14)),
+                                          (secondLine, CGRect(x: 40, y: 200, width: 220, height: 14))
+                                      ])
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let selectedEntry = try XCTUnwrap(source.entries.firstIndex {
+            $0.lineIndex == 1 && $0.word.text.utf16.elementsEqual(decomposedWord.utf16)
+        })
+        let selection = try XCTUnwrap(source.contextualSelection(for: selectedEntry...selectedEntry,
+                                                                 generation: 9))
+        let context = try XCTUnwrap(selection.sentenceContext)
+        let localSelection = try XCTUnwrap(selection.sourceSpans.first)
+        let mappedSelection = try XCTUnwrap(context.selectedDisplaySpans.first)
+        let expectedText = firstLine + " " + secondLine
+
+        XCTAssertEqual(context.kind, .layoutBlock)
+        XCTAssertTrue(context.text.utf16.elementsEqual(expectedText.utf16))
+        XCTAssertEqual(mappedSelection.location,
+                       (firstLine as NSString).length + 1 + localSelection.location)
+        XCTAssertTrue(mappedSelection.substring(in: context.text)?.utf16.elementsEqual(decomposedWord.utf16) == true)
+        XCTAssertTrue(localSelection.substring(in: secondLine)?.utf16.elementsEqual(decomposedWord.utf16) == true)
+    }
+
+    func testOCRLayoutContextCapsNeighborRowsAtEightPerSide() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 800))
+        let rows = (0..<25).map { index in
+            ("row \(index) has context words", CGRect(x: 40, y: 700 - CGFloat(index) * 18, width: 230, height: 12))
+        }
+        let page = try makeLayoutPage(sha: "ocr-layout-row-cap", mediaBox: media, lines: rows)
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let selectedEntry = try XCTUnwrap(source.entries.firstIndex {
+            $0.lineIndex == 12 && $0.word.text == "context"
+        })
+        let context = try XCTUnwrap(source.contextualSelection(for: selectedEntry...selectedEntry,
+                                                              generation: 10)?.sentenceContext)
+
+        XCTAssertTrue(context.text.hasPrefix("row 4 has context words"))
+        XCTAssertTrue(context.text.contains("row 20 has context words"))
+        XCTAssertFalse(context.text.contains("row 3 has context words"))
+        XCTAssertFalse(context.text.contains("row 21 has context words"))
+    }
+
+    func testMissingOCRRowGeometryKeepsOnlyTheLegacySingleLineContext() throws {
+        let sha = "ocr-layout-missing-geometry"
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let lineText = "A clear sentence."
+        let selectedSpan = UTF16Span(location: 2, length: 5)
+        let token = SourceToken(documentSHA256: sha,
+                               pageIndex: 0,
+                               span: selectedSpan,
+                               sourceSurface: "clear",
+                               kind: .word,
+                               blockID: "missing-row-box",
+                               geometryQuality: .word)
+        let tokenRect = try XCTUnwrap(SourceRect(x: 50, y: 180, width: 48, height: 18))
+        let line = OCRLine(blockID: "missing-row-box",
+                           candidates: [OCRCandidate(text: lineText, confidence: 0.9)],
+                           regionRect: media,
+                           pageRect: nil,
+                           tokens: [token],
+                           tokenGeometry: [SourceTokenGeometry(tokenID: token.id,
+                                                               span: token.span,
+                                                               rect: tokenRect,
+                                                               quality: .word)])
+        let page = ContextOCRPage(documentSHA256: sha,
+                                  pageIndex: 0,
+                                  revision: ContextOCRPage.currentRevision,
+                                  mediaBox: media,
+                                  lines: [line])
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let context = try XCTUnwrap(source.contextualSelection(for: 0...0, generation: 1)?.sentenceContext)
+
+        XCTAssertEqual(context.kind, .completeSentence)
+        XCTAssertEqual(context.text, lineText)
+        XCTAssertTrue(context.sourceSpanMappings.isEmpty)
+    }
+
+    func testOCRLayoutStopsAtNumberedPromptsFormulasAndModuleHeadings() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 400))
+        let questionPage = try makeLayoutPage(sha: "ocr-layout-question",
+                                              mediaBox: media,
+                                              lines: [
+                                                  ("99 Previous answer continued", CGRect(x: 40, y: 300, width: 230, height: 14)),
+                                                  ("51 Rock faults and folds", CGRect(x: 40, y: 280, width: 220, height: 14)),
+                                                  ("occur due to pressure", CGRect(x: 40, y: 260, width: 210, height: 14)),
+                                                  ("52 New question starts", CGRect(x: 40, y: 240, width: 220, height: 14))
+                                              ])
+        let questionSource = try XCTUnwrap(ContextOCRSelectionSource(page: questionPage))
+        let rockEntry = try XCTUnwrap(questionSource.entries.firstIndex {
+            $0.lineIndex == 1 && $0.word.text == "Rock"
+        })
+        let questionSelection = try XCTUnwrap(questionSource.contextualSelection(for: rockEntry...rockEntry,
+                                                                                 generation: 4))
+        let questionContext = try XCTUnwrap(questionSelection.sentenceContext)
+        XCTAssertEqual(questionContext.kind, .layoutBlock)
+        XCTAssertTrue(questionContext.text.hasPrefix("51 Rock faults and folds"))
+        XCTAssertTrue(questionContext.text.contains("occur due to pressure"))
+        XCTAssertFalse(questionContext.text.contains("99 Previous answer"))
+        XCTAssertFalse(questionContext.text.contains("52 New question"))
+
+        let continuationEntry = try XCTUnwrap(questionSource.entries.firstIndex {
+            $0.lineIndex == 2 && $0.word.text == "pressure"
+        })
+        let continuation = try XCTUnwrap(questionSource.contextualSelection(for: continuationEntry...continuationEntry,
+                                                                            generation: 4)?.sentenceContext)
+        XCTAssertTrue(continuation.text.hasPrefix("51 Rock faults and folds"),
+                      "Selecting a question continuation includes its preceding numbered prompt")
+        XCTAssertFalse(continuation.text.contains("99 Previous answer"))
+        XCTAssertFalse(continuation.text.contains("52 New question"))
+
+        let barrierPage = try makeLayoutPage(sha: "ocr-layout-barriers",
+                                             mediaBox: media,
+                                             lines: [
+                                                 ("The body describes motion", CGRect(x: 40, y: 330, width: 220, height: 14)),
+                                                 ("MODULE 2-3 ACCELERATION", CGRect(x: 40, y: 310, width: 220, height: 14)),
+                                                 ("The acceleration changes over time", CGRect(x: 40, y: 290, width: 240, height: 14)),
+                                                 ("x = u + at", CGRect(x: 40, y: 270, width: 100, height: 14)),
+                                                 ("The next paragraph explains velocity", CGRect(x: 40, y: 250, width: 245, height: 14))
+                                             ])
+        let barrierSource = try XCTUnwrap(ContextOCRSelectionSource(page: barrierPage))
+        let selectedAcceleration = try XCTUnwrap(barrierSource.entries.firstIndex {
+            $0.lineIndex == 2 && $0.word.text == "acceleration"
+        })
+        let body = try XCTUnwrap(barrierSource.contextualSelection(for: selectedAcceleration...selectedAcceleration,
+                                                                   generation: 5)?.sentenceContext)
+        XCTAssertEqual(body.text, "The acceleration changes over time")
+        XCTAssertFalse(body.text.contains("MODULE"))
+        XCTAssertFalse(body.text.contains("x = u + at"))
+
+        let formulaX = try XCTUnwrap(barrierSource.entries.firstIndex {
+            $0.lineIndex == 3 && $0.word.text == "x"
+        })
+        let formula = try XCTUnwrap(barrierSource.contextualSelection(for: formulaX...formulaX,
+                                                                      generation: 6)?.sentenceContext)
+        XCTAssertEqual(formula.text, "x = u + at")
+        XCTAssertFalse(formula.text.contains("velocity"))
+    }
+
+    func testOCRMergedTwoColumnLineDeclinesLayoutContext() throws {
+        let media = try XCTUnwrap(SourceRect(x: 0, y: 0, width: 400, height: 300))
+        let page = try makePage(sha: "ocr-layout-wide-gap",
+                                pageIndex: 0,
+                                mediaBox: media,
+                                blockID: "merged-columns",
+                                text: "take off now.",
+                                tokens: [
+                                    TokenFixture(text: "take", span: UTF16Span(location: 0, length: 4), kind: .word,
+                                                 rect: CGRect(x: 40, y: 180, width: 34, height: 18)),
+                                    TokenFixture(text: "off", span: UTF16Span(location: 5, length: 3), kind: .word,
+                                                 rect: CGRect(x: 230, y: 180, width: 25, height: 18)),
+                                    TokenFixture(text: "now", span: UTF16Span(location: 9, length: 3), kind: .word,
+                                                 rect: CGRect(x: 264, y: 180, width: 32, height: 18)
+                                    )
+                                ])
+        let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
+        let takeEntry = try XCTUnwrap(source.entries.firstIndex { $0.word.text == "take" })
+        let selection = try XCTUnwrap(source.contextualSelection(for: takeEntry...takeEntry, generation: 1))
+        XCTAssertNil(selection.sentenceContext,
+                     "A line-level OCR box must not bridge distant token boxes from separate columns")
     }
 
     func testVerifiedOCRPhraseGroupStaysOnOneLineAndRejectsColumnGap() throws {
@@ -46,7 +256,8 @@ final class ContextOCRSelectionTests: XCTestCase {
                                 ])
         let source = try XCTUnwrap(ContextOCRSelectionSource(page: page))
         let base = try XCTUnwrap(source.contextualSelection(for: 0...0, generation: 1))
-        let sentence = try XCTUnwrap(base.sentenceContext)
+        XCTAssertEqual(base.sentenceContext?.kind, .layoutBlock)
+        let sentence = try XCTUnwrap(base.phraseLookupContext)
         let group = try XCTUnwrap(VerifiedPhraseGroupResolver.resolve(in: sentence,
                                                                        selectedSourceSpans: base.sourceSpans,
                                                                        sourceText: page.lines[0].sourceText,
@@ -155,7 +366,7 @@ final class ContextOCRSelectionTests: XCTestCase {
         XCTAssertEqual(repeatedWord.tokens.map(\.sourceSurface), ["charge"])
         XCTAssertEqual(repeatedWord.sourceSpans, [UTF16Span(location: 7, length: 6)])
         XCTAssertEqual(repeatedWord.sentenceContext?.selectedSourceSpans, repeatedWord.sourceSpans)
-        XCTAssertEqual(repeatedWord.sentenceContext?.kind, .fragment)
+        XCTAssertEqual(repeatedWord.sentenceContext?.kind, .layoutBlock)
 
         let startHandle = try XCTUnwrap(fixture.view.subviews.compactMap { $0 as? SelectionHandleView }
             .first { $0.isStart })
@@ -761,6 +972,44 @@ final class ContextOCRSelectionTests: XCTestCase {
                               revision: revision,
                               mediaBox: mediaBox,
                               lines: [line])
+    }
+
+    private func makeLayoutPage(sha: String,
+                                mediaBox: SourceRect,
+                                lines fixtures: [(String, CGRect)]) throws -> ContextOCRPage {
+        let lines = try fixtures.enumerated().map { index, fixture in
+            let blockID = "layout-line-\(index)"
+            let canonical = SemanticTokenizer.canonicalize(fixture.0,
+                                                           documentSHA256: sha,
+                                                           pageIndex: 0,
+                                                           blockID: blockID)
+            let tokens = canonical.tokens.filter { $0.kind == .word || $0.kind == .number }
+                .map { $0.withGeometryQuality(.word) }
+            let tokenGeometry = try tokens.map { token -> SourceTokenGeometry in
+                let tokenRect = CGRect(x: fixture.1.minX + CGFloat(token.span.location) * 4.5,
+                                       y: fixture.1.minY + fixture.1.height * 0.1,
+                                       width: max(CGFloat(token.span.length) * 4, 4),
+                                       height: fixture.1.height * 0.8)
+                XCTAssertTrue(fixture.1.insetBy(dx: -0.01, dy: -0.01).contains(tokenRect),
+                              "Synthetic token boxes must remain inside their explicit row bounds")
+                return SourceTokenGeometry(tokenID: token.id,
+                                           span: token.span,
+                                           rect: try XCTUnwrap(SourceRect(rect: tokenRect)),
+                                           quality: .word)
+            }
+            let pageRect = try XCTUnwrap(SourceRect(rect: fixture.1))
+            return OCRLine(blockID: blockID,
+                           candidates: [OCRCandidate(text: fixture.0, confidence: 0.95)],
+                           regionRect: mediaBox,
+                           pageRect: pageRect,
+                           tokens: tokens,
+                           tokenGeometry: tokenGeometry)
+        }
+        return ContextOCRPage(documentSHA256: sha,
+                              pageIndex: 0,
+                              revision: ContextOCRPage.currentRevision,
+                              mediaBox: mediaBox,
+                              lines: lines)
     }
 
     private func makeBlankPDFView() throws -> PDFViewFixture {

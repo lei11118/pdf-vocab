@@ -1193,7 +1193,7 @@ final class ReaderCoordinator: NSObject {
               source.page.lines.indices.contains(source.entries[index].lineIndex),
               let base = source.contextualSelection(for: index...index,
                                                     generation: contextReadingGeneration),
-              let sentenceContext = base.sentenceContext,
+              let sentenceContext = base.phraseLookupContext ?? base.sentenceContext,
               let selectedSpan = base.sourceSpans.first,
               let phrase = cachedPhraseGroup(in: sentenceContext,
                                              selectedSourceSpans: [selectedSpan],

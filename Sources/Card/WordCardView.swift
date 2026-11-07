@@ -60,67 +60,22 @@ struct WordCardPanel: View {
     }
 }
 
-/// A local token surface with an honest context status and an optional path
-/// to the existing dictionary card. No source sentence or translation is shown.
+/// Keeps contextual status and the existing dictionary content in one card.
 struct ContextualCardView: View {
-    @Environment(\.readerPanelClose) private var panelClose
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     let selection: ContextualSelection
     let onClose: () -> Void
     var vocab: CardVocabBridge? = nil
-    @State private var showingDictionary = false
     @StateObject private var translationDriver = ContextualTranslationDriver()
 
     var body: some View {
-        Group {
-            if showingDictionary {
-                VStack(spacing: 0) {
-                    HStack {
-                        Button {
-                            showingDictionary = false
-                        } label: {
-                            Label("返回语境", systemImage: "chevron.left")
-                        }
-                        .buttonStyle(.plain)
-                        Spacer()
-                        if panelClose == nil { closeButton(onClose) }
-                    }
-                    .padding(.horizontal, DS.Space.l)
-                    .padding(.top, DS.Space.l)
-                    .padding(.trailing, panelClose == nil ? 0 : 44)
-                    WordCardView(term: selection.displaySurface, onClose: onClose, vocab: vocab)
-                }
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: DS.Space.l) {
-                        HStack(alignment: .top) {
-                            Text(selection.displaySurface)
-                                .font(DS.Fonts.wordTitle)
-                                .foregroundStyle(DS.foreground1)
-                                .textSelection(.enabled)
-                                .accessibilityAddTraits(.isHeader)
-                            Spacer(minLength: 0)
-                            if panelClose == nil { closeButton(onClose) }
-                        }
-                        .padding(.trailing, panelClose == nil ? 0 : 44)
-
-                        ContextualTranslationTaskView(selection: selection,
-                                                      isEnabled: contextReadingEnabled,
-                                                      driver: translationDriver)
-
-                        Button("查看词典释义") {
-                            showingDictionary = true
-                        }
-                        .buttonStyle(DSPillButtonStyle())
-                        .accessibilityHint("打开现有词典释义、发音和生词本信息")
-                    }
-                    .padding(DS.Space.l)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .accessibilityIdentifier("contextual-card")
-            }
-        }
-        .onChange(of: selection) { _, _ in showingDictionary = false }
+        WordCardView(term: selection.displaySurface,
+                     onClose: onClose,
+                     vocab: vocab,
+                     contextualSelection: selection,
+                     contextualTranslationEnabled: contextReadingEnabled,
+                     contextualTranslationDriver: translationDriver)
+            .accessibilityIdentifier("contextual-card")
     }
 }
 
@@ -131,6 +86,9 @@ struct WordCardView: View {
     let term: String
     let onClose: () -> Void
     var vocab: CardVocabBridge? = nil
+    var contextualSelection: ContextualSelection? = nil
+    var contextualTranslationEnabled = false
+    var contextualTranslationDriver: ContextualTranslationDriver? = nil
 
     private enum LoadState: Equatable {
         case loading
@@ -157,6 +115,12 @@ struct WordCardView: View {
                 if panelClose == nil { closeButton(onClose) }
             }
             .padding(.trailing,panelClose == nil ? 0 : 44)
+
+            if let contextualSelection, let contextualTranslationDriver {
+                ContextualTranslationTaskView(selection: contextualSelection,
+                                              isEnabled: contextualTranslationEnabled,
+                                              driver: contextualTranslationDriver)
+            }
 
             switch state {
             case .loading:
@@ -505,7 +469,7 @@ struct WrapLayout: Layout {
 
 // MARK: - 胶囊迷你卡
 
-/// 窗口缩小时仅显示选中文字和简要译文。
+/// 窗口缩小时，普通词句保留简要布局；语境词显示候选译义和完整中文词典义。
 struct CompactCardView: View {
     let content: ReaderCardContent
     let onClose: () -> Void
@@ -524,32 +488,36 @@ struct CompactCardView: View {
         }
     }
 
-    private var lookupTerm: String? {
-        if case .word(let term) = content {
-            return term
-        }
-        if case .contextual(let selection) = content {
-            return selection.displaySurface
-        }
-        return nil
-    }
-
+    @ViewBuilder
     var body: some View {
-        HStack(alignment:.center,spacing:10) {
-            Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
-            if let value = sentenceTranslation ?? translation, !value.isEmpty {
-                Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        if case .contextual(let selection) = content {
+            CompactContextualCardContent(selection: selection, dictionaryDefinitions: translation)
+                .task(id: content) { await loadTranslation(id: content) }
+        } else {
+            HStack(alignment:.center,spacing:10) {
+                Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if let value = sentenceTranslation ?? translation, !value.isEmpty {
+                    Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength:0)
             }
-            Spacer(minLength:0)
+            .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading)
+            .padding(.vertical,8).padding(.leading,16).padding(.trailing,92)
+            .task(id: content) { await loadTranslation(id: content) }
         }
-        .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading)
-        .padding(.vertical,8).padding(.leading,16).padding(.trailing,92)
-        .task(id:displayText) { await loadTranslation() }
     }
 
-    private func loadTranslation() async {
+    private func lookupTerm(for content: ReaderCardContent) -> String? {
+        switch content {
+        case .word(let term): return term
+        case .contextual(let selection): return selection.displaySurface
+        case .sentence: return nil
+        }
+    }
+
+    private func loadTranslation(id: ReaderCardContent) async {
         translation = nil
-        guard let term = lookupTerm else {
+        guard let term = lookupTerm(for: id) else {
             return
         }
         let outcome = await Task.detached(priority: .utility) {
@@ -557,9 +525,64 @@ struct CompactCardView: View {
         }.value
         guard !Task.isCancelled else { return }
         if case .found(let entry) = outcome {
-            translation = WordInteraction.chineseDetail(entry)?.components(separatedBy:"\n").prefix(2).joined(separator:"；")
+            let definitions = WordInteraction.chineseDetail(entry)
+            if case .contextual = id {
+                translation = definitions
+            } else {
+                translation = definitions?.components(separatedBy:"\n").prefix(2).joined(separator:"；")
+            }
         } else {
             translation = nil
         }
+    }
+}
+
+@MainActor
+struct CompactContextualCardContent: View {
+    @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
+    @StateObject private var translationDriver = ContextualTranslationDriver()
+    let selection: ContextualSelection
+    let dictionaryDefinitions: String?
+    var candidatePreview: String? = nil
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(selection.displaySurface)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("compact-contextual-term")
+
+                if let candidatePreview {
+                    ContextualTranslationHoverText(phrase: candidatePreview)
+                } else {
+                    ContextualTranslationTaskView(selection: selection,
+                                                  isEnabled: contextReadingEnabled,
+                                                  presentation: .hover,
+                                                  driver: translationDriver)
+                }
+
+                if let dictionaryDefinitions, !dictionaryDefinitions.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("词典释义")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(dictionaryDefinitions)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("compact-contextual-dictionary-definitions")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .padding(.leading, 16)
+            .padding(.trailing, 92)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("compact-contextual-scroll-content")
     }
 }

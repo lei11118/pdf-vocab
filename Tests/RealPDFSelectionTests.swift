@@ -94,7 +94,12 @@ final class GlyphSelectionTests: XCTestCase {
 
         func contextResultBucket(_ context: SentenceContext?) -> String {
             guard let context else { return "nil" }
-            let kind = context.kind == .completeSentence ? "complete" : "fragment"
+            let kind: String
+            switch context.kind {
+            case .completeSentence: kind = "complete"
+            case .fragment: kind = "fragment"
+            case .layoutBlock: kind = "layout-block"
+            }
             let length = context.text.utf16.count >= 32 ? "32plus" : "under32"
             return "\(kind)_\(length)"
         }
@@ -442,7 +447,7 @@ final class GlyphSelectionTests: XCTestCase {
         XCTAssertTrue(didRoutePhrase, "Expected an exact word-group range to survive PDFKit selection and routing")
     }
 
-    func testOpenStaxWordSeedBuildsExactCompleteTranslationRequest() throws {
+    func testOpenStaxWordSeedBuildsExactLayoutBlockTranslationRequest() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
         let document = try XCTUnwrap(PDFDocument(url: url))
         let pageIndex = 0
@@ -465,7 +470,7 @@ final class GlyphSelectionTests: XCTestCase {
                                                             geometryQuality: .word,
                                                             generation: 11),
                   let sentenceContext = routed.sentenceContext,
-                  sentenceContext.kind == .completeSentence,
+                  sentenceContext.kind == .layoutBlock,
                   sentenceContext.text.utf16.count >= 32 else { continue }
             let wordCount = SemanticTokenizer.canonicalize(sentenceContext.text,
                                                            documentSHA256: sentenceContext.documentSHA256,
