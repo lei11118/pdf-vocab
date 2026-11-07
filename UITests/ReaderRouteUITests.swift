@@ -27,6 +27,56 @@ final class ReaderRouteUITests:XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+    func testContextAndDictionaryShareScrollableSurfaces() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--context-display-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]
+        app.launch()
+
+        let identifiers = ["word-bubble-scroll-content",
+                            "contextual-hover-candidate",
+                            "hover-dictionary-definition",
+                            "compact-contextual-scroll-content",
+                            "compact-contextual-term",
+                            "compact-contextual-dictionary-definitions"]
+        for identifier in identifiers {
+            let element = app.descendants(matching:.any).matching(identifier:identifier).firstMatch
+            XCTAssertTrue(element.waitForExistence(timeout:15),"Missing accessibility identifier: \(identifier)")
+        }
+        let contextualCandidates = app.descendants(matching:.any).matching(identifier:"contextual-hover-candidate")
+        XCTAssertEqual(contextualCandidates.count,2,"Both surfaces expose their contextual meaning")
+
+        let hoverSurface = app.descendants(matching:.any).matching(identifier:"word-bubble-scroll-content").firstMatch
+        let compactSurface = app.descendants(matching:.any).matching(identifier:"compact-contextual-scroll-content").firstMatch
+        let hoverDictionary = app.descendants(matching:.any).matching(identifier:"hover-dictionary-definition").firstMatch
+        let compactDictionary = app.descendants(matching:.any).matching(identifier:"compact-contextual-dictionary-definitions").firstMatch
+        let hoverDictionaryStartY = hoverDictionary.frame.minY
+        let compactDictionaryStartY = compactDictionary.frame.minY
+        let initialScreenshot = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+        initialScreenshot.name = "context-dictionary-surfaces"
+        initialScreenshot.lifetime = .keepAlways
+        add(initialScreenshot)
+
+        XCTAssertTrue(hoverSurface.exists)
+        XCTAssertTrue(compactSurface.exists)
+        for _ in 0..<8 { hoverSurface.swipeUp() }
+        for _ in 0..<8 { compactSurface.swipeUp() }
+
+        let hoverValue = (hoverDictionary.value as? String) ?? hoverDictionary.label
+        let compactValue = (compactDictionary.value as? String) ?? compactDictionary.label
+        XCTAssertTrue(hoverValue.contains("末尾定义：Hover 字典释义可达。"))
+        XCTAssertTrue(compactValue.contains("末尾定义：Compact 胶囊释义可达。"))
+        XCTAssertLessThan(hoverDictionary.frame.minY,hoverDictionaryStartY-4,
+                          "The hover dictionary moves upward as its scroll surface advances")
+        XCTAssertLessThan(compactDictionary.frame.minY,compactDictionaryStartY-4,
+                          "The compact dictionary moves upward as its scroll surface advances")
+        XCTAssertTrue(hoverDictionary.isHittable,"The hover dictionary remains reachable after scrolling")
+        XCTAssertTrue(compactDictionary.isHittable,"The compact dictionary remains reachable after scrolling")
+
+        let scrolledScreenshot = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+        scrolledScreenshot.name = "scrolled-dictionary-content"
+        scrolledScreenshot.lifetime = .keepAlways
+        add(scrolledScreenshot)
+    }
     func testReaderCanvasAndOverlayRootStayFullBleedAcrossOrientations() {
         let app = XCUIApplication()
         app.launchArguments = ["--reader-route-audit","-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]

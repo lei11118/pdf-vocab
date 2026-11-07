@@ -644,7 +644,10 @@ final class ContextualTranslationServiceTests: XCTestCase {
         let text = "They read books daily."
         let first = try makeRequest(text: text, selected: "read")
         let second = try makeRequest(text: text, selected: "books")
-        let translator = fakeTranslator(calls: calls)
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makeWholeBlockPayload(request: request, source: source)
+        }
 
         do {
             _ = try await service.translate(first,

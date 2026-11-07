@@ -433,16 +433,14 @@ final class InteractionPolishTests:XCTestCase {
         try await Task.sleep(for:.milliseconds(100))
         host.view.layoutIfNeeded()
 
-        let identifiers = accessibilityIdentifiers(in:host.view)
-        XCTAssertTrue(identifiers.contains("word-bubble-scroll-content"))
-        XCTAssertTrue(identifiers.contains("contextual-hover-candidate"))
-        XCTAssertTrue(identifiers.contains("hover-dictionary-definition"))
         let views = descendantViews(of:host.view)
         let textView = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first)
+        XCTAssertEqual(textView.text,String(repeating:"n. 函数；功能；作用；职责。\n",count:30))
         XCTAssertFalse(textView.isScrollEnabled,"The outer bubble scroll view must own scrolling for both sections")
-        XCTAssertTrue(views.compactMap { $0 as? UIScrollView }.contains {
+        let outerScroll = try XCTUnwrap(views.compactMap { $0 as? UIScrollView }.first {
             $0 !== textView && $0.isScrollEnabled && $0.contentSize.height > $0.bounds.height
         },"The context and dictionary content must remain reachable in the capped bubble")
+        XCTAssertGreaterThan(outerScroll.contentSize.height,outerScroll.bounds.height)
     }
 
     func testCompactContextCardShowsContextAndAllDictionaryDefinitionsTogether() async throws {
@@ -471,11 +469,6 @@ final class InteractionPolishTests:XCTestCase {
         try await Task.sleep(for:.milliseconds(100))
         host.view.layoutIfNeeded()
 
-        let identifiers = accessibilityIdentifiers(in:host.view)
-        XCTAssertTrue(identifiers.contains("compact-contextual-scroll-content"))
-        XCTAssertTrue(identifiers.contains("compact-contextual-term"))
-        XCTAssertTrue(identifiers.contains("contextual-hover-candidate"))
-        XCTAssertTrue(identifiers.contains("compact-contextual-dictionary-definitions"))
         XCTAssertTrue(descendantViews(of:host.view).compactMap { $0 as? UIScrollView }.contains {
             $0.isScrollEnabled && $0.contentSize.height > $0.bounds.height
         },"The compact contextual card must keep both full texts reachable by scrolling")
@@ -1214,41 +1207,6 @@ final class InteractionPolishTests:XCTestCase {
 
     private func descendantViews(of root:UIView) -> [UIView] {
         [root] + root.subviews.flatMap { descendantViews(of:$0) }
-    }
-
-    private func accessibilityIdentifiers(in root:UIView) -> Set<String> {
-        var identifiers = Set<String>()
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ element:Any) {
-            guard let object = element as? NSObject,
-                  visited.insert(ObjectIdentifier(object)).inserted else { return }
-            if let identifiable = object as? UIAccessibilityIdentification,
-               let identifier = identifiable.accessibilityIdentifier {
-                identifiers.insert(identifier)
-            }
-            if let view = object as? UIView {
-                if let elements = view.accessibilityElements {
-                    elements.prefix(256).forEach { visit($0) }
-                } else {
-                    let count = object.accessibilityElementCount()
-                    if count != NSNotFound, count > 0 {
-                        for index in 0..<min(count,256) {
-                            if let child = object.accessibilityElement(at:index) { visit(child) }
-                        }
-                    }
-                }
-                view.subviews.forEach { visit($0) }
-            } else {
-                let count = object.accessibilityElementCount()
-                if count != NSNotFound, count > 0 {
-                    for index in 0..<min(count,256) {
-                        if let child = object.accessibilityElement(at:index) { visit(child) }
-                    }
-                }
-            }
-        }
-        visit(root)
-        return identifiers
     }
 
 }

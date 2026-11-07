@@ -7,7 +7,15 @@ struct PdfVocabApp: App {
 
     init() {
         RuntimeDiagnostics.beginSession()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--context-display-audit") {
+            self.store = nil
+        } else {
+            self.store = AppDatabase.shared.map { DocumentStore(db: $0) }
+        }
+        #else
         self.store = AppDatabase.shared.map { DocumentStore(db: $0) }
+        #endif
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         DiagLog.log("app launched v\(version)")
     }
@@ -15,7 +23,9 @@ struct PdfVocabApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--gesture-audit") {
+            if ProcessInfo.processInfo.arguments.contains("--context-display-audit") {
+                ContextDisplayAuditView()
+            } else if ProcessInfo.processInfo.arguments.contains("--gesture-audit") {
                 ReaderGestureAuditView()
             } else {
                 appContent
@@ -49,6 +59,47 @@ struct PdfVocabApp: App {
 }
 
 #if DEBUG
+/// Static, database-free surfaces for verifying contextual and dictionary AX layout.
+@MainActor
+private struct ContextDisplayAuditView: View {
+    private let hoverDefinition = String(repeating: "n. 函数；功能；作用；职责。\n", count: 18)
+        + "末尾定义：Hover 字典释义可达。"
+    private let compactDefinition = String(repeating: "费用；负责；冲锋；负荷。\n", count: 12)
+        + "末尾定义：Compact 胶囊释义可达。"
+    private let hoverCandidate = String(repeating: "在当前语境中，词义会完整显示并与词典释义并列。", count: 8)
+    private let compactCandidate = String(repeating: "在此语境中，charge表示“收取费用”。", count: 6)
+
+    private var compactSelection: ContextualSelection {
+        let canonical = SemanticTokenizer.canonicalize(
+            "charge", documentSHA256: "context-display-audit", pageIndex: 0)
+        guard let token = canonical.tokens.first?.withGeometryQuality(.word) else {
+            preconditionFailure("The fixed audit token must canonicalize")
+        }
+        return ContextualSelection(documentSHA256: canonical.documentSHA256,
+                                   pageIndex: canonical.pageIndex,
+                                   sourceSpans: [token.span],
+                                   tokens: [token],
+                                   displaySurface: "charge",
+                                   generation: 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            WordBubbleContent(term: "function",
+                              detail: hoverDefinition,
+                              contextualCandidate: hoverCandidate)
+                .frame(width: 320, height: 180)
+            CompactContextualCardContent(selection: compactSelection,
+                                         dictionaryDefinitions: compactDefinition,
+                                         candidatePreview: compactCandidate)
+                .frame(width: 320, height: 96)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(DS.background1)
+    }
+}
+
 /// Deterministic composition for real XCUITest drags, using the production
 /// window, menu and arc input components rather than mocked gesture handlers.
 private struct ReaderGestureAuditView:View {
