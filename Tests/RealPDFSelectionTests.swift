@@ -91,6 +91,169 @@ final class GlyphSelectionTests: XCTestCase {
             diagnostics[stage, default: 0] += 1
         }
 
+        func contextResultBucket(_ context: SentenceContext?) -> String {
+            guard let context else { return "nil" }
+            let kind = context.kind == .completeSentence ? "complete" : "fragment"
+            let length = context.text.utf16.count >= 32 ? "32plus" : "under32"
+            return "\(kind)_\(length)"
+        }
+
+        func diagnoseMissingSeedContext(selection: PDFSelection, displaySurface: String) {
+            let ranges = SelectionGeometry.sourceRanges(of: selection, on: page)
+            let sourceSpans = ranges.compactMap { UTF16Span(range: $0, in: source) }
+            guard !ranges.isEmpty, sourceSpans.count == ranges.count else {
+                record("native_diagnostic.source_spans_invalid")
+                return
+            }
+
+            let directContext = NativeSentenceContextBuilder.build(sourceText: source,
+                                                                    selectedSourceSpans: sourceSpans,
+                                                                    displaySurface: displaySurface,
+                                                                    documentSHA256: "openstax-phrase-fixture",
+                                                                    pageIndex: pageIndex,
+                                                                    allowsLineBreaks: true)
+            record("native_builder.direct.\(contextResultBucket(directContext))")
+
+            let sourceRows = NativeSentenceContextBuilder.physicalLineSpans(in: source)
+            let selectedRowIndices = sourceSpans.compactMap { selected -> Int? in
+                guard let selectedEnd = selected.endExclusive else { return nil }
+                return sourceRows.firstIndex { row in
+                    guard let rowEnd = row.endExclusive else { return false }
+                    return row.length > 0 && selected.location >= row.location && selectedEnd <= rowEnd
+                }
+            }
+            guard selectedRowIndices.count == sourceSpans.count,
+                  let seedRowIndex = selectedRowIndices.first,
+                  selectedRowIndices.allSatisfy({ $0 == seedRowIndex }) else {
+                record("native_trusted_block.seed_row_unmapped")
+                record("native_builder.trusted.not_attempted")
+                return
+            }
+
+            var rowBoundsCache: [Int: (bounds: CGRect?, reason: String)] = [:]
+            func rowBounds(for rowIndex: Int) -> (bounds: CGRect?, reason: String) {
+                if let cached = rowBoundsCache[rowIndex] { return cached }
+                let result: (bounds: CGRect?, reason: String)
+                guard sourceRows.indices.contains(rowIndex),
+                      let range = sourceRows[rowIndex].nsRange(in: source) else {
+                    result = (nil, "source_range_invalid")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                guard range.length > 0 else {
+                    result = (nil, "empty_source_row")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                guard let lineSelection = page.selection(for: range) else {
+                    result = (nil, "selection_missing")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                guard lineSelection.pages.count == 1,
+                      lineSelection.pages.first === page else {
+                    result = (nil, "page_mismatch")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                guard SelectionGeometry.sourceRanges(of: lineSelection, on: page) == [range] else {
+                    result = (nil, "source_ranges_mismatch")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                let lineSelections = lineSelection.selectionsByLine()
+                guard lineSelections.count == 1 else {
+                    result = (nil, "visual_line_count_\(lineSelections.count)")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                let bounds = lineSelections[0].bounds(for: page)
+                guard SelectionGeometry.isValid(bounds) else {
+                    result = (nil, "bounds_invalid")
+                    rowBoundsCache[rowIndex] = result
+                    record("native_row_bounds.\(result.reason)")
+                    return result
+                }
+                result = (bounds, "accepted")
+                rowBoundsCache[rowIndex] = result
+                record("native_row_bounds.\(result.reason)")
+                return result
+            }
+
+            func candidateGeometryResult(_ candidate: SentenceContext) -> String {
+                guard let candidateEnd = candidate.sourceSpan.endExclusive else {
+                    return "candidate_range_invalid"
+                }
+                let candidateRows = sourceRows.indices.filter { rowIndex in
+                    guard let rowEnd = sourceRows[rowIndex].endExclusive else { return false }
+                    return sourceRows[rowIndex].length > 0 &&
+                        sourceRows[rowIndex].location < candidateEnd && rowEnd > candidate.sourceSpan.location
+                }
+                guard candidateRows.count >= 2 else { return "candidate_has_fewer_than_two_rows" }
+                guard candidateRows.allSatisfy({ abs($0 - seedRowIndex) <= 9 }) else {
+                    return "candidate_outside_nine_rows"
+                }
+                let lineBoxes = candidateRows.compactMap { rowBounds(for: $0).bounds }
+                guard lineBoxes.count == candidateRows.count else { return "candidate_row_bounds_rejected" }
+                guard ContextSelectionRouter.isTrustedMultilineLayout(sourceText: source,
+                                                                       candidate: candidate,
+                                                                       lineBounds: lineBoxes) else {
+                    return "candidate_layout_untrusted"
+                }
+                return "accepted"
+            }
+
+            if let directContext,
+               let rawCandidate = directContext.sourceSpan.substring(in: source),
+               rawCandidate.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) {
+                record("native_candidate_geometry.\(candidateGeometryResult(directContext))")
+            } else if directContext != nil {
+                record("native_candidate_geometry.not_multiline")
+            } else {
+                record("native_candidate_geometry.not_applicable")
+            }
+
+            guard !sourceRows.isEmpty else {
+                record("native_trusted_block.no_source_rows")
+                record("native_builder.trusted.not_attempted")
+                return
+            }
+            var nearbyBounds = [CGRect?](repeating: nil, count: sourceRows.count)
+            let lower = max(0, seedRowIndex - 9)
+            let upper = min(sourceRows.count - 1, seedRowIndex + 9)
+            for rowIndex in lower...upper {
+                nearbyBounds[rowIndex] = rowBounds(for: rowIndex).bounds
+            }
+
+            guard let trustedBlock = NativeSentenceContextBuilder.trustedSourceBlock(sourceText: source,
+                                                                                       selectedSourceSpans: sourceSpans,
+                                                                                       lineBounds: nearbyBounds) else {
+                let seedBounds = rowBounds(for: seedRowIndex).bounds
+                record(seedBounds == nil
+                       ? "native_trusted_block.nil_seed_bounds_rejected"
+                       : "native_trusted_block.nil_with_seed_bounds")
+                record("native_builder.trusted.not_attempted")
+                return
+            }
+            record("native_trusted_block.created")
+            record("native_trusted_block.leading_truncated_\(trustedBlock.leadingEdgeTruncated)")
+            record("native_trusted_block.trailing_truncated_\(trustedBlock.trailingEdgeTruncated)")
+            let trustedContext = NativeSentenceContextBuilder.build(sourceText: source,
+                                                                    selectedSourceSpans: sourceSpans,
+                                                                    displaySurface: displaySurface,
+                                                                    documentSHA256: "openstax-phrase-fixture",
+                                                                    pageIndex: pageIndex,
+                                                                    allowsLineBreaks: true,
+                                                                    trustedSourceBlock: trustedBlock)
+            record("native_builder.trusted.\(contextResultBucket(trustedContext))")
+        }
+
         for seedToken in canonical.tokens.prefix(100) where seedToken.kind == .word {
             record("seed_attempt")
             guard let seedRange = seedToken.span.nsRange(in: source) else {
@@ -114,6 +277,7 @@ final class GlyphSelectionTests: XCTestCase {
             }
             guard let sentenceContext = seedContext.sentenceContext else {
                 record("seed_context_missing")
+                diagnoseMissingSeedContext(selection: seedSelection, displaySurface: display)
                 continue
             }
             guard let selectedSpan = seedContext.sourceSpans.first else {
