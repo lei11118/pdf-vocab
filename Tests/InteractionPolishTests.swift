@@ -1229,20 +1229,20 @@ final class InteractionPolishTests:XCTestCase {
             if let view = object as? UIView {
                 if let elements = view.accessibilityElements {
                     elements.prefix(256).forEach { visit($0) }
-                } else if let container = object as? UIAccessibilityContainer {
-                    let count = container.accessibilityElementCount()
+                } else {
+                    let count = object.accessibilityElementCount()
                     if count != NSNotFound, count > 0 {
                         for index in 0..<min(count,256) {
-                            if let child = container.accessibilityElement(at:index) { visit(child) }
+                            if let child = object.accessibilityElement(at:index) { visit(child) }
                         }
                     }
                 }
                 view.subviews.forEach { visit($0) }
-            } else if let container = object as? UIAccessibilityContainer {
-                let count = container.accessibilityElementCount()
+            } else {
+                let count = object.accessibilityElementCount()
                 if count != NSNotFound, count > 0 {
                     for index in 0..<min(count,256) {
-                        if let child = container.accessibilityElement(at:index) { visit(child) }
+                        if let child = object.accessibilityElement(at:index) { visit(child) }
                     }
                 }
             }
