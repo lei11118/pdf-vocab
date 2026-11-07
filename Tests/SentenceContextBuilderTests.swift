@@ -263,6 +263,159 @@ final class SentenceContextBuilderTests: XCTestCase {
             CGRect(x: 40, y: 250, width: 180, height: 16),
             CGRect(x: 42, y: 180, width: 140, height: 16)
         ]), "A large vertical jump is not an adjacent row")
+        XCTAssertFalse(NativeSentenceContextBuilder.hasTrustedAdjacentLineGeometry([
+            CGRect(x: 40, y: 220, width: 180, height: 32),
+            CGRect(x: 42, y: 200, width: 140, height: 16)
+        ]), "A heading-sized row cannot join body text")
+    }
+
+    func testTrustedSourceBlockStopsAtHeadingColumnAndBlankRows() throws {
+        let source = "Large heading\nBody sentence starts\nand continues here.\n\nOther column"
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "sentence"), in: source))
+        let lineBounds: [CGRect?] = [
+            CGRect(x: 40, y: 270, width: 220, height: 32),
+            CGRect(x: 42, y: 230, width: 180, height: 16),
+            CGRect(x: 44, y: 210, width: 160, height: 16),
+            nil,
+            CGRect(x: 400, y: 190, width: 150, height: 16)
+        ]
+
+        let block = try XCTUnwrap(NativeSentenceContextBuilder.trustedSourceBlock(
+            sourceText: source,
+            selectedSourceSpans: [selected],
+            lineBounds: lineBounds
+        ))
+        XCTAssertEqual(block.sourceSpan.substring(in: source), "Body sentence starts\nand continues here.")
+        XCTAssertEqual(block.sourceSpan.location, (source as NSString).range(of: "Body").location)
+        XCTAssertFalse(block.leadingEdgeTruncated)
+        XCTAssertFalse(block.trailingEdgeTruncated)
+
+        let selectedBodySentence = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "starts"), in: source))
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selectedBodySentence],
+                                                                        displaySurface: "starts",
+                                                                        documentSHA256: "native-heading-boundary",
+                                                                        pageIndex: 0,
+                                                                        allowsLineBreaks: true,
+                                                                        trustedSourceBlock: block))
+        XCTAssertEqual(context.text, "Body sentence starts and continues here.")
+        XCTAssertEqual(context.kind, .completeSentence)
+    }
+
+    func testTrustedTitleBoundaryKeepsCompleteBodySentenceEligible() throws {
+        let source = "Large title\nBody starts here.\nBody continues."
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "starts"), in: source))
+        let block = try XCTUnwrap(NativeSentenceContextBuilder.trustedSourceBlock(
+            sourceText: source,
+            selectedSourceSpans: [selected],
+            lineBounds: [
+                CGRect(x: 40, y: 270, width: 220, height: 32),
+                CGRect(x: 42, y: 230, width: 180, height: 16),
+                CGRect(x: 44, y: 210, width: 160, height: 16)
+            ]
+        ))
+        XCTAssertFalse(block.leadingEdgeTruncated)
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "starts",
+                                                                        documentSHA256: "native-title-body",
+                                                                        pageIndex: 0,
+                                                                        allowsLineBreaks: true,
+                                                                        trustedSourceBlock: block))
+        XCTAssertEqual(context.text, "Body starts here.")
+        XCTAssertEqual(context.kind, .completeSentence)
+    }
+
+    func testEightRowCapMarksOnlySentenceAtTruncatedEdgesAsFragment() throws {
+        var lines = Array(repeating: "continues", count: 21)
+        lines[0] = "Earlier page text."
+        lines[1] = "More page text."
+        lines[2] = "First sentence begins"
+        lines[10] = "selected first sentence ends."
+        lines[11] = "Second sentence begins"
+        lines[19] = "selected second sentence ends."
+        lines[20] = "Following body sentence."
+        let source = lines.joined(separator: "\n")
+        let lineBounds = lines.indices.map { index in
+            Optional(CGRect(x: 40, y: 600 - CGFloat(index) * 20, width: 180, height: 16))
+        }
+
+        let firstSelected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "selected"), in: source))
+        let firstBlock = try XCTUnwrap(NativeSentenceContextBuilder.trustedSourceBlock(
+            sourceText: source,
+            selectedSourceSpans: [firstSelected],
+            lineBounds: lineBounds
+        ))
+        XCTAssertTrue(firstBlock.leadingEdgeTruncated)
+        XCTAssertTrue(firstBlock.trailingEdgeTruncated)
+        let firstContext = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                             selectedSourceSpans: [firstSelected],
+                                                                             displaySurface: "selected",
+                                                                             documentSHA256: "native-leading-row-cap",
+                                                                             pageIndex: 0,
+                                                                             allowsLineBreaks: true,
+                                                                             trustedSourceBlock: firstBlock))
+        XCTAssertEqual(firstContext.kind, .fragment,
+                       "A sentence touching the capped leading edge is not complete evidence")
+
+        let lastSelected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "Second"), in: source))
+        let lastBlock = try XCTUnwrap(NativeSentenceContextBuilder.trustedSourceBlock(
+            sourceText: source,
+            selectedSourceSpans: [lastSelected],
+            lineBounds: lineBounds
+        ))
+        XCTAssertTrue(lastBlock.trailingEdgeTruncated)
+        let lastContext = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                            selectedSourceSpans: [lastSelected],
+                                                                            displaySurface: "Second",
+                                                                            documentSHA256: "native-trailing-row-cap",
+                                                                            pageIndex: 0,
+                                                                            allowsLineBreaks: true,
+                                                                            trustedSourceBlock: lastBlock))
+        XCTAssertEqual(lastContext.kind, .fragment,
+                       "A sentence touching the capped trailing edge is not complete evidence")
+    }
+
+    func testNativeBuilderIntersectsTrustedBlockWithBlankLineParagraphAndKeepsOffsets() throws {
+        let source = "Title\n\nBody starts here.\nBody continues?\n\nFooter"
+        let selectedRange = (source as NSString).range(of: "starts")
+        let selected = try XCTUnwrap(UTF16Span(range: selectedRange, in: source))
+        let trustedBlock = TrustedSourceBlock(sourceSpan: UTF16Span(location: 0, length: (source as NSString).length),
+                                              leadingEdgeTruncated: false,
+                                              trailingEdgeTruncated: false)
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "starts",
+                                                                        documentSHA256: "native-trusted-intersection",
+                                                                        pageIndex: 2,
+                                                                        allowsLineBreaks: true,
+                                                                        trustedSourceBlock: trustedBlock))
+        XCTAssertEqual(context.text, "Body starts here.")
+        XCTAssertEqual(context.sourceSpan.substring(in: source), "Body starts here.")
+        XCTAssertEqual(context.sourceSpan.location,
+                       (source as NSString).range(of: "Body starts here.").location)
+        XCTAssertEqual(context.selectedSourceSpans, [selected])
+    }
+
+    func testTrustedBlockBoundaryKeepsSentenceAsNonTranslatableFragment() throws {
+        let source = "Heading\nBody starts here.\nNext body line continues."
+        let bodyRange = (source as NSString).range(of: "Body starts here.\nNext body line continues.")
+        let trustedBlock = TrustedSourceBlock(sourceSpan: try XCTUnwrap(UTF16Span(range: bodyRange, in: source)),
+                                              leadingEdgeTruncated: true,
+                                              trailingEdgeTruncated: false)
+        let selected = try XCTUnwrap(UTF16Span(range: (source as NSString).range(of: "starts"), in: source))
+
+        let context = try XCTUnwrap(NativeSentenceContextBuilder.build(sourceText: source,
+                                                                        selectedSourceSpans: [selected],
+                                                                        displaySurface: "starts",
+                                                                        documentSHA256: "native-trusted-fragment",
+                                                                        pageIndex: 0,
+                                                                        allowsLineBreaks: true,
+                                                                        trustedSourceBlock: trustedBlock))
+        XCTAssertEqual(context.text, "Body starts here.")
+        XCTAssertEqual(context.kind, .fragment)
     }
 
     func testNativeBuilderUsesNearestBlankLineParagraphAndPreservesPageUTF16Offsets() throws {

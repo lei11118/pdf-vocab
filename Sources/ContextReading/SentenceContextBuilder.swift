@@ -271,6 +271,12 @@ enum SentenceContextBuilder {
     }
 }
 
+struct TrustedSourceBlock: Equatable, Sendable {
+    let sourceSpan: UTF16Span
+    let leadingEdgeTruncated: Bool
+    let trailingEdgeTruncated: Bool
+}
+
 /// Builds a native PDF sentence from the page's exact source ranges. PDFKit
 /// ranges stay page-relative; only CR/LF characters are changed to equal-width
 /// spaces in the text sent to the sentence service.
@@ -282,7 +288,8 @@ enum NativeSentenceContextBuilder {
                       displaySurface: String,
                       documentSHA256: String,
                       pageIndex: Int,
-                      allowsLineBreaks: Bool = false) -> SentenceContext? {
+                      allowsLineBreaks: Bool = false,
+                      trustedSourceBlock: TrustedSourceBlock? = nil) -> SentenceContext? {
         let source = sourceText as NSString
         guard source.length > 0,
               !documentSHA256.isEmpty, pageIndex >= 0,
@@ -312,12 +319,24 @@ enum NativeSentenceContextBuilder {
         guard let paragraphRange = paragraphRange(around: orderedSpans, in: sourceText) else {
             return reject("selection-crosses-blank-line")
         }
-        let paragraphEnd = NSMaxRange(paragraphRange)
-        let windowStart = max(paragraphRange.location,
+        let contextRange: NSRange
+        if let trustedSourceBlock {
+            guard let trustedRange = trustedSourceBlock.sourceSpan.nsRange(in: sourceText),
+                  trustedRange.length > 0,
+                  orderedSpans.allSatisfy({ contains(trustedRange, $0) }) else { return nil }
+            let intersectionStart = max(paragraphRange.location, trustedRange.location)
+            let intersectionEnd = min(NSMaxRange(paragraphRange), NSMaxRange(trustedRange))
+            guard intersectionStart < intersectionEnd else { return nil }
+            contextRange = NSRange(location: intersectionStart, length: intersectionEnd - intersectionStart)
+        } else {
+            contextRange = paragraphRange
+        }
+        let contextEnd = NSMaxRange(contextRange)
+        let windowStart = max(contextRange.location,
                               max(0, selectedStart - maximumSentenceUTF16Units))
         let (unboundedEnd, overflow) = selectedEnd.addingReportingOverflow(maximumSentenceUTF16Units)
         guard !overflow else { return nil }
-        let windowEnd = min(paragraphEnd, unboundedEnd)
+        let windowEnd = min(contextEnd, unboundedEnd)
         guard let windowRange = composedRange(from: windowStart,
                                               to: windowEnd,
                                               in: sourceText),
@@ -344,8 +363,8 @@ enum NativeSentenceContextBuilder {
         }
         guard containing.count == 1,
               let tokenizedRange = containing.first,
-              !(tokenizedRange.location == 0 && windowRange.location > paragraphRange.location),
-              !(NSMaxRange(tokenizedRange) == windowNSString.length && NSMaxRange(windowRange) < paragraphEnd),
+              !(tokenizedRange.location == 0 && windowRange.location > contextRange.location),
+              !(NSMaxRange(tokenizedRange) == windowNSString.length && NSMaxRange(windowRange) < contextEnd),
               let coreRange = trimmedRange(tokenizedRange, in: windowText),
               localSelections.allSatisfy({ contains(coreRange, $0) }) else {
             return reject("sentence-boundary-ambiguous")
@@ -365,6 +384,13 @@ enum NativeSentenceContextBuilder {
         }
 
         let normalizedSentence = windowNSString.substring(with: coreRange)
+        let leadingTrustedEdgeWasCapped = trustedSourceBlock?.leadingEdgeTruncated == true &&
+            contextRange.location > paragraphRange.location
+        let trailingTrustedEdgeWasCapped = trustedSourceBlock?.trailingEdgeTruncated == true &&
+            contextEnd < NSMaxRange(paragraphRange)
+        let touchesTrustedBoundary =
+            (leadingTrustedEdgeWasCapped && globalCoreRange.location == contextRange.location) ||
+            (trailingTrustedEdgeWasCapped && NSMaxRange(globalCoreRange) == contextEnd)
 
         let selectedDisplaySpans = selectedSourceSpans.compactMap { span -> UTF16Span? in
             guard span.location >= globalCoreRange.location,
@@ -386,7 +412,7 @@ enum NativeSentenceContextBuilder {
                                displaySpan: displaySpan,
                                selectedSourceSpans: selectedSourceSpans,
                                selectedDisplaySpans: selectedDisplaySpans,
-                               kind: SentenceContextBuilder.isCompleteSentence(normalizedSentence)
+                               kind: !touchesTrustedBoundary && SentenceContextBuilder.isCompleteSentence(normalizedSentence)
                                 ? .completeSentence : .fragment)
     }
 
@@ -454,6 +480,8 @@ enum NativeSentenceContextBuilder {
             let next = pair.1
             let minimumHeight = min(previous.height, next.height)
             let maximumHeight = max(previous.height, next.height)
+            guard minimumHeight > 0,
+                  maximumHeight / minimumHeight <= 1.8 else { return false }
             let downwardBaselineDelta = previous.midY - next.midY
             guard downwardBaselineDelta > minimumHeight * 0.3,
                   downwardBaselineDelta <= maximumHeight * 2.4 else { return false }
@@ -468,6 +496,96 @@ enum NativeSentenceContextBuilder {
             }
         }
         return true
+    }
+
+    /// Returns a page-relative source block around one selected physical row.
+    /// `lineBounds` has one entry per source row; nil entries mark blank or
+    /// PDFKit-unverifiable rows and stop expansion. The caller must derive each
+    /// bound from that exact row's PDFKit selection on the same page.
+    static func trustedSourceBlock(sourceText: String,
+                                   selectedSourceSpans: [UTF16Span],
+                                   lineBounds: [CGRect?],
+                                   maximumNeighborRows: Int = 8) -> TrustedSourceBlock? {
+        guard !selectedSourceSpans.isEmpty,
+              (0...8).contains(maximumNeighborRows) else { return nil }
+        let rows = physicalLineSpans(in: sourceText)
+        guard rows.count == lineBounds.count else { return nil }
+        let source = sourceText as NSString
+        let selectedRows = selectedSourceSpans.compactMap { selected -> Int? in
+            guard let selectedEnd = selected.endExclusive else { return nil }
+            return rows.firstIndex { row in
+                guard let rowEnd = row.endExclusive else { return false }
+                return row.length > 0 && selected.location >= row.location && selectedEnd <= rowEnd
+            }
+        }
+        guard selectedRows.count == selectedSourceSpans.count,
+              let selectedRow = selectedRows.first,
+              selectedRows.allSatisfy({ $0 == selectedRow }),
+              let seedBounds = lineBounds[selectedRow],
+              isValidGeometry(seedBounds),
+              !isBlank(rows[selectedRow], in: source) else { return nil }
+
+        func canJoin(_ earlierRow: Int, _ laterRow: Int) -> Bool {
+            guard let earlierBounds = lineBounds[earlierRow],
+                  let laterBounds = lineBounds[laterRow],
+                  !isBlank(rows[earlierRow], in: source),
+                  !isBlank(rows[laterRow], in: source) else { return false }
+            return hasTrustedAdjacentLineGeometry([earlierBounds, laterBounds])
+        }
+
+        var first = selectedRow
+        var last = selectedRow
+        var expanded = 0
+        while first > 0, expanded < maximumNeighborRows {
+            let neighbor = first - 1
+            guard canJoin(neighbor, first) else { break }
+            first = neighbor
+            expanded += 1
+        }
+        let leadingEdgeTruncated = expanded == maximumNeighborRows &&
+            first > 0 && canJoin(first - 1, first)
+
+        expanded = 0
+        while last + 1 < rows.count, expanded < maximumNeighborRows {
+            let neighbor = last + 1
+            guard canJoin(last, neighbor) else { break }
+            last = neighbor
+            expanded += 1
+        }
+        let trailingEdgeTruncated = expanded == maximumNeighborRows &&
+            last + 1 < rows.count && canJoin(last, last + 1)
+        guard let end = rows[last].endExclusive,
+              end > rows[first].location else { return nil }
+        return TrustedSourceBlock(sourceSpan: UTF16Span(location: rows[first].location,
+                                                        length: end - rows[first].location),
+                                  leadingEdgeTruncated: leadingEdgeTruncated,
+                                  trailingEdgeTruncated: trailingEdgeTruncated)
+    }
+
+    static func physicalLineSpans(in sourceText: String) -> [UTF16Span] {
+        let source = sourceText as NSString
+        var spans: [UTF16Span] = []
+        var start = 0
+        var offset = 0
+        while offset < source.length {
+            let unit = source.character(at: offset)
+            guard unit == 0x000A || unit == 0x000D else {
+                offset += 1
+                continue
+            }
+            spans.append(UTF16Span(location: start, length: offset - start))
+            let isCRLF = unit == 0x000D && offset + 1 < source.length && source.character(at: offset + 1) == 0x000A
+            offset += isCRLF ? 2 : 1
+            start = offset
+        }
+        spans.append(UTF16Span(location: start, length: source.length - start))
+        return spans
+    }
+
+    private static func isBlank(_ span: UTF16Span, in source: NSString) -> Bool {
+        guard let end = span.endExclusive, span.length > 0 else { return true }
+        return source.substring(with: NSRange(location: span.location, length: end - span.location))
+            .unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
     }
 
     static func lineSpans(in sourceText: String, sourceSpan: UTF16Span) -> [UTF16Span]? {

@@ -33,6 +33,63 @@ enum ContextSelectionRouter {
         let sourceSpans = ranges.compactMap { UTF16Span(range: $0, in: sourceText) }
         guard sourceSpans.count == ranges.count else { return nil }
 
+        let sourceRows = NativeSentenceContextBuilder.physicalLineSpans(in: sourceText)
+        let selectedRowIndices = sourceSpans.compactMap { selected -> Int? in
+            guard let selectedEnd = selected.endExclusive else { return nil }
+            return sourceRows.firstIndex { row in
+                guard let rowEnd = row.endExclusive else { return false }
+                return row.length > 0 && selected.location >= row.location && selectedEnd <= rowEnd
+            }
+        }
+        let seedRowIndex: Int?
+        if selectedRowIndices.count == sourceSpans.count,
+           let first = selectedRowIndices.first,
+           selectedRowIndices.allSatisfy({ $0 == first }) {
+            seedRowIndex = first
+        } else {
+            seedRowIndex = nil
+        }
+        var lineBoundsCache: [Int: CGRect] = [:]
+        var checkedLineBounds = Set<Int>()
+        func boundsForRow(_ rowIndex: Int) -> CGRect? {
+            if checkedLineBounds.contains(rowIndex) { return lineBoundsCache[rowIndex] }
+            guard sourceRows.indices.contains(rowIndex) else { return nil }
+            checkedLineBounds.insert(rowIndex)
+            let bounds = lineBounds(for: sourceRows[rowIndex], sourceText: sourceText, page: page)
+            if let bounds { lineBoundsCache[rowIndex] = bounds }
+            return bounds
+        }
+
+        func trustedSourceBlock() -> TrustedSourceBlock? {
+            guard let seedRowIndex, !sourceRows.isEmpty else { return nil }
+            var nearbyBounds = [CGRect?](repeating: nil, count: sourceRows.count)
+            let lower = max(0, seedRowIndex - 9)
+            let upper = min(sourceRows.count - 1, seedRowIndex + 9)
+            for rowIndex in lower...upper {
+                nearbyBounds[rowIndex] = boundsForRow(rowIndex)
+            }
+            return NativeSentenceContextBuilder.trustedSourceBlock(sourceText: sourceText,
+                                                                    selectedSourceSpans: sourceSpans,
+                                                                    lineBounds: nearbyBounds)
+        }
+
+        func candidateHasTrustedLineGeometry(_ candidate: SentenceContext) -> Bool {
+            guard let seedRowIndex,
+                  let candidateEnd = candidate.sourceSpan.endExclusive else { return false }
+            let candidateRows = sourceRows.indices.filter { rowIndex in
+                guard let rowEnd = sourceRows[rowIndex].endExclusive else { return false }
+                return sourceRows[rowIndex].length > 0 &&
+                    sourceRows[rowIndex].location < candidateEnd && rowEnd > candidate.sourceSpan.location
+            }
+            guard candidateRows.count >= 2,
+                  candidateRows.allSatisfy({ abs($0 - seedRowIndex) <= 9 }) else { return false }
+            let lineBoxes = candidateRows.compactMap(boundsForRow)
+            guard lineBoxes.count == candidateRows.count else { return false }
+            return isTrustedMultilineLayout(sourceText: sourceText,
+                                            candidate: candidate,
+                                            lineBounds: lineBoxes)
+        }
+
         let canonical = canonicalContent(sourceText: sourceText,
                                         documentSHA256: documentSHA256,
                                         pageIndex: pageIndex,
@@ -44,20 +101,28 @@ enum ContextSelectionRouter {
                                        generation: generation,
                                        allowsMultilineSentenceContext: true,
                                        verifiedPhraseGroupSpan: verifiedPhraseGroupSpan) else { return nil }
-        if let candidate = contextual.sentenceContext,
-           let rawCandidate = candidate.sourceSpan.substring(in: sourceText),
-           containsLineBreak(rawCandidate) {
-            guard let lineSpans = NativeSentenceContextBuilder.lineSpans(in: sourceText,
-                                                                          sourceSpan: candidate.sourceSpan) else {
-                contextual.sentenceContext = nil
-                return verifiedPhraseGroupSpan == nil ? contextual : nil
+        var shouldUseTrustedFallback = contextual.sentenceContext == nil
+        if let candidate = contextual.sentenceContext {
+            if let rawCandidate = candidate.sourceSpan.substring(in: sourceText) {
+                if containsLineBreak(rawCandidate) {
+                    shouldUseTrustedFallback = !candidateHasTrustedLineGeometry(candidate)
+                }
+            } else {
+                shouldUseTrustedFallback = true
             }
-            let lineBoxes = lineSpans.compactMap { lineBounds(for: $0, sourceText: sourceText, page: page) }
-            guard isTrustedMultilineLayout(sourceText: sourceText,
-                                           candidate: candidate,
-                                           lineBounds: lineBoxes) else {
-                contextual.sentenceContext = nil
-                return verifiedPhraseGroupSpan == nil ? contextual : nil
+        }
+        if shouldUseTrustedFallback {
+            contextual.sentenceContext = nil
+            if let block = trustedSourceBlock(),
+               let fallback = resolve(canonical: canonical,
+                                      sourceSpans: sourceSpans,
+                                      displaySurface: displaySurface,
+                                      geometryQuality: geometryQuality,
+                                      generation: generation,
+                                      allowsMultilineSentenceContext: true,
+                                      verifiedPhraseGroupSpan: verifiedPhraseGroupSpan,
+                                      trustedSourceBlock: block) {
+                contextual = fallback
             }
         }
         if let verifiedPhraseGroupSpan {
@@ -80,7 +145,8 @@ enum ContextSelectionRouter {
                         geometryQuality: SourceGeometryQuality,
                         generation: Int,
                         allowsMultilineSentenceContext: Bool = false,
-                        verifiedPhraseGroupSpan: UTF16Span? = nil) -> ContextualSelection? {
+                        verifiedPhraseGroupSpan: UTF16Span? = nil,
+                        trustedSourceBlock: TrustedSourceBlock? = nil) -> ContextualSelection? {
         guard !sourceSpans.isEmpty,
               !displaySurface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
@@ -119,7 +185,8 @@ enum ContextSelectionRouter {
                                      displaySurface: displaySurface,
                                      geometryQuality: geometryQuality,
                                      generation: generation,
-                                     allowsMultilineSentenceContext: allowsMultilineSentenceContext)
+                                     allowsMultilineSentenceContext: allowsMultilineSentenceContext,
+                                     trustedSourceBlock: trustedSourceBlock)
             }
             selectedTokens = [token.withGeometryQuality(geometryQuality)]
         }
@@ -130,7 +197,8 @@ enum ContextSelectionRouter {
             displaySurface: displaySurface,
             documentSHA256: canonical.documentSHA256,
             pageIndex: canonical.pageIndex,
-            allowsLineBreaks: allowsMultilineSentenceContext
+            allowsLineBreaks: allowsMultilineSentenceContext,
+            trustedSourceBlock: trustedSourceBlock
         )
         return ContextualSelection(documentSHA256: canonical.documentSHA256,
                                    pageIndex: canonical.pageIndex,
@@ -198,7 +266,8 @@ enum ContextSelectionRouter {
                                       displaySurface: String,
                                       geometryQuality: SourceGeometryQuality,
                                       generation: Int,
-                                      allowsMultilineSentenceContext: Bool) -> ContextualSelection? {
+                                      allowsMultilineSentenceContext: Bool,
+                                      trustedSourceBlock: TrustedSourceBlock?) -> ContextualSelection? {
         guard sourceSpans.count == 1,
               let span = sourceSpans.first,
               let composedRange = span.composedCharacterRange(in: canonical.sourceText),
@@ -217,7 +286,8 @@ enum ContextSelectionRouter {
             displaySurface: displaySurface,
             documentSHA256: canonical.documentSHA256,
             pageIndex: canonical.pageIndex,
-            allowsLineBreaks: allowsMultilineSentenceContext
+            allowsLineBreaks: allowsMultilineSentenceContext,
+            trustedSourceBlock: trustedSourceBlock
         )
         return ContextualSelection(documentSHA256: canonical.documentSHA256,
                                    pageIndex: canonical.pageIndex,
@@ -243,6 +313,9 @@ enum ContextSelectionRouter {
                                    page: PDFPage) -> CGRect? {
         guard let range = lineSpan.nsRange(in: sourceText), range.length > 0 else { return nil }
         guard let selection = page.selection(for: range) else { return nil }
+        guard selection.pages.count == 1,
+              selection.pages.first === page,
+              SelectionGeometry.sourceRanges(of: selection, on: page) == [range] else { return nil }
         let lineSelections = selection.selectionsByLine()
         // A source row that wraps into several visual rows is ambiguous here;
         // retain the word selection and omit sentence context.

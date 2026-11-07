@@ -255,6 +255,57 @@ final class GlyphSelectionTests: XCTestCase {
         XCTAssertTrue(didRoutePhrase, "Expected an exact word-group range to survive PDFKit selection and routing")
     }
 
+    func testOpenStaxWordSeedBuildsExactCompleteTranslationRequest() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "OpenStax-selection", withExtension: "pdf"))
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let pageIndex = 0
+        let page = try XCTUnwrap(document.page(at: pageIndex))
+        let source = try XCTUnwrap(page.string)
+        let canonical = SemanticTokenizer.canonicalize(source,
+                                                       documentSHA256: "openstax-complete-request-fixture",
+                                                       pageIndex: pageIndex)
+        var didBuildRequest = false
+
+        for seedToken in canonical.tokens.prefix(200) where seedToken.kind == .word {
+            guard let seedRange = seedToken.span.nsRange(in: source),
+                  let seedSelection = page.selection(for: seedRange) else { continue }
+            let displaySurface = SelectionGeometry.lookupText(for: seedSelection)
+            guard let routed = ContextSelectionRouter.route(selection: seedSelection,
+                                                            page: page,
+                                                            documentSHA256: "openstax-complete-request-fixture",
+                                                            pageIndex: pageIndex,
+                                                            displaySurface: displaySurface,
+                                                            geometryQuality: .word,
+                                                            generation: 11),
+                  let sentenceContext = routed.sentenceContext,
+                  sentenceContext.kind == .completeSentence,
+                  sentenceContext.text.utf16.count >= 32 else { continue }
+            let wordCount = SemanticTokenizer.canonicalize(sentenceContext.text,
+                                                           documentSHA256: sentenceContext.documentSHA256,
+                                                           pageIndex: sentenceContext.pageIndex,
+                                                           blockID: sentenceContext.blockID)
+                .tokens.filter { $0.kind == .word }.count
+            guard wordCount >= 5 else { continue }
+
+            XCTAssertEqual(sentenceContext.selectedSourceSpans, routed.sourceSpans)
+            XCTAssertEqual(sentenceContext.selectedSourceSpans.first?.substring(in: source), seedToken.sourceSurface)
+            let request = try ContextualTranslationRequest.make(from: sentenceContext)
+            let globalSeedSpan = try XCTUnwrap(routed.sourceSpans.first)
+            let expectedLocalSpan = UTF16Span(location: globalSeedSpan.location - sentenceContext.sourceSpan.location,
+                                              length: globalSeedSpan.length)
+            XCTAssertEqual(request.selectedSourceSpans, [expectedLocalSpan])
+            XCTAssertEqual(request.selectedSourceSpans, sentenceContext.selectedDisplaySpans)
+            XCTAssertEqual(request.selectedSourceSpans.first?.substring(in: request.sentenceText),
+                           request.selectedSourcePhrase)
+            XCTAssertEqual(request.sentenceText, sentenceContext.text)
+            didBuildRequest = true
+            break
+        }
+
+        XCTAssertTrue(didBuildRequest,
+                      "Expected an exact word seed to recover a body sentence and form a valid translation request")
+    }
+
     func testEveryVisibleCharacterHasAnAlignedSelection() throws {
         struct Hit: Decodable { let page: Int; let text: String; let point: [Double] }
         let bundle = Bundle(for:Self.self)
