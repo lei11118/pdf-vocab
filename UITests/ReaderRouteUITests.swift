@@ -61,10 +61,12 @@ final class ReaderRouteUITests:XCTestCase {
         for _ in 0..<8 { hoverSurface.swipeUp() }
         for _ in 0..<8 { compactSurface.swipeUp() }
 
-        let hoverValue = (hoverDictionary.value as? String) ?? hoverDictionary.label
-        let compactValue = (compactDictionary.value as? String) ?? compactDictionary.label
-        XCTAssertTrue(hoverValue.contains("末尾定义：Hover 字典释义可达。"))
-        XCTAssertTrue(compactValue.contains("末尾定义：Compact 胶囊释义可达。"))
+        let hoverValue = [hoverDictionary.value as? String, hoverDictionary.label].compactMap { $0 }.joined(separator: " ")
+        let compactValue = [compactDictionary.value as? String, compactDictionary.label].compactMap { $0 }.joined(separator: " ")
+        XCTAssertTrue(hoverValue.contains("末尾定义：Hover 字典释义可达。"),
+                      "value=\(String(describing:hoverDictionary.value)); label=\(hoverDictionary.label)")
+        XCTAssertTrue(compactValue.contains("末尾定义：Compact 胶囊释义可达。"),
+                      "value=\(String(describing:compactDictionary.value)); label=\(compactDictionary.label)")
         XCTAssertLessThan(hoverDictionary.frame.minY,hoverDictionaryStartY-4,
                           "The hover dictionary moves upward as its scroll surface advances")
         XCTAssertLessThan(compactDictionary.frame.minY,compactDictionaryStartY-4,
