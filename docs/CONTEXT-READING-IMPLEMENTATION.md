@@ -1,17 +1,19 @@
 # ★标记★ iPadOS 26 语境 Token 与数学识别实施现状
 
-> 当前在研增量：v0.72.0 / build 123，核对日期 2026-11-07。工作树包含语境布局块、Translation attributes 对齐和同屏释义显示改动；尚未有本轮 CI 结果。具体样本、研究候选与 OCR 测试状态见 [语境布局块与翻译对齐证据](CONTEXT-BLOCK-ALIGNMENT.md)。
-> 最新已验证基线是 `18ba9a5`： [test-ink run 42339957440](https://github.com/lei11118/pdf-vocab/actions/runs/42339957440) 通过 251 项、0 失败；[build-ipa run 42339957547](https://github.com/lei11118/pdf-vocab/actions/runs/42339957547) 成功，产物为 v0.71.1 / build 122。这两条记录只适用于该基线，不验证当前工作树的 v0.72.0 改动。
-> `project.yml` 当前工作树候选值为 v0.72.0 / build 123；本轮代码审查、`test-ink`、`build-ipa`、真实 iPad/Pencil 验收仍待完成。数学识别和外部模型阶段未完成。
+> 当前在研增量：v0.72.0 / build 123，核对日期 2026-11-07，最新提交为 `440d08d9593c3e466707200a20a931e94d63d64a`。[test-ink run 42367223532](https://github.com/lei11118/pdf-vocab/actions/runs/42367223532) 已通过：276 项 unit/integration + 7 项 UI，共 283 项，零失败；同 SHA 的 [build-ipa run 42367236564](https://github.com/lei11118/pdf-vocab/actions/runs/42367236564) 成功，IPA 为 v0.72.0 / build 123 / minimum iOS 26.0，48,159,484 bytes，SHA-256 `84be36fe83031f27b62c46823a249807c23c254cc6ab6a3b21cd0e647c875364`。
+> 历史失败记录仍保留在下文：候选 `2418b0c` 的 run `42363494350` 有 8 项断言失败；中间提交 `eb728dc` 的 run `42365503411` 有 1 项 compact AX 文本断言失败，已由最新提交修正。IELTS 单张两行裁剪 OCR 样本 CER 0.019 / WER 0.105 / 2 行，只是单张样本证据，不是整本精度或真机 OCR 证据。具体样本、候选与日志见 [语境布局块与翻译对齐证据](CONTEXT-BLOCK-ALIGNMENT.md)。
+> `project.yml` 当前候选仍为 v0.72.0 / build 123。真机 iPad/Pencil 验收、Apple Translation 实际属性回传与译义验证仍待完成；数学识别和外部模型阶段未完成。
 > 设计来源：`pdf-vocab：iPadOS 26 语境 Token 与数学表达式智能阅读系统`。设计文档描述目标，不证明功能已实现。
 
-## 当前增量状态（权威，2026-11-07；CI 待跑）
+## 当前增量状态（权威，2026-11-07；CI 与 IPA 已通过）
 
-- 当前工作树候选为 v0.72.0 / build 123。最近通过的 `18ba9a5` 基线及其 run 不覆盖本轮变更。
-- 工作树正在构造受可信几何约束的 `.layoutBlock` context：原生 PDF/OCR 行保留来源映射，只在有效的同栏邻接与结构边界检查后生成有界块。当前实现受 2,048 UTF-16 单元限制；OCR 行布局最多向每侧检查 8 行。源码和算法细节见 [新证据文档](CONTEXT-BLOCK-ALIGNMENT.md)。
-- 工作树继续复用 TranslationSession attributed-string Token ID 路径，并调整卡片与悬浮释义显示。候选服务目前不是设备验收结果；iOS 26.4+ 语言包、Apple 返回属性、词义和真机显示均待验证。
-- 新增 `Tests/Fixtures/LayoutBlock-Samples.json` 与 `Tests/LayoutBlockContextBuilderTests.swift`，覆盖人工转录扫描行和原生 PDF 文本层行的范围/几何映射。新增 `Tests/Fixtures/IELTS-context-strip.png` 与 `Tests/RealScanContextTests.swift`，测试真实 Vision OCR → `classroom` source span → `.layoutBlock` → 翻译请求的路径；该 XCTest 尚未运行，CI 待跑。扫描页字符串是人工参照，不是 OCR 输出或精度结论。
-- 0.72.0 的本轮 `test-ink` / `build-ipa` 尚未验证。数学符号识别、数学 OCR、外部模型安全与发布验收仍未完成；真实 iPad/Pencil 回归仍待完成。
+- 最新 v0.72.0 / build 123 增量提交为 `440d08d9593c3e466707200a20a931e94d63d64a`。[test-ink run 42367223532](https://github.com/lei11118/pdf-vocab/actions/runs/42367223532) 已通过：276 项 unit/integration + 7 项 UI，共 283 项，零失败。
+- 同 SHA 的 [build-ipa run 42367236564](https://github.com/lei11118/pdf-vocab/actions/runs/42367236564) 已成功；IPA 为 48,159,484 bytes，SHA-256 `84be36fe83031f27b62c46823a249807c23c254cc6ab6a3b21cd0e647c875364`。包检查确认 v0.72.0 / build 123、minimum iOS 26.0、ARM64、ZIP CRC 与 3 个 SQLite headers。
+- 历史候选 `2418b0c` 的 [test-ink run 42363494350](https://github.com/lei11118/pdf-vocab/actions/runs/42363494350) 有 8 项断言失败（1 项服务测试使用旧 fake 数据，7 项依赖 UIView 手工 accessibility 标识），6 项既有 UI 测试通过；同 SHA 的 [build-ipa run 42363498841](https://github.com/lei11118/pdf-vocab/actions/runs/42363498841) 曾成功。中间提交 `eb728dc` 的 [test-ink run 42365503411](https://github.com/lei11118/pdf-vocab/actions/runs/42365503411) 有 1 项 compact AX 文本断言失败，其余 276 项 unit/integration 与 6 项 UI 通过；同 SHA 的 [build-ipa run 42365515271](https://github.com/lei11118/pdf-vocab/actions/runs/42365515271) 曾成功，IPA SHA-256 为 `1b94aa4ee6f81c086d5ddae71ef5693137c29b34130f26dd24a57df3b46afd41`。这些均为已修正的历史结果。
+- IELTS 单张两行裁剪的 `RealScanContextTests` 链路在最新 run `42367223532` 中通过，CER 0.019、WER 0.105、2 行。这是单一测试图片的 OCR 结果，不表示整本或一般扫描页的识别精度。
+- 本轮增量构造受可信几何约束的 `.layoutBlock` context：原生 PDF/OCR 行保留来源映射，只在有效的同栏邻接与结构边界检查后生成有界块。实现受 2,048 UTF-16 单元限制；OCR 行布局最多向每侧检查 8 行。源码、样本与调研候选见 [新证据文档](CONTEXT-BLOCK-ALIGNMENT.md)。
+- 增量继续复用 TranslationSession attributed-string Token ID 路径，并调整卡片与悬浮释义显示。iOS 26.4+ 语言包、Apple 返回属性、真实候选译义和真机显示尚未验收。真实 iPad/Pencil 回归仍待完成；数学符号识别、数学 OCR 与外部模型阶段未完成。
+- 新增的 `--context-display-audit` DEBUG UI 审查路由用两个固定文本 surface 检查同屏滚动和可访问性；静态候选只是显示夹具，不是 Apple 模型译义。
 
 下方保留 v0.71.0 与更早阶段的源代码说明和验证记录作为历史归档；历史通过结果只适用于对应 SHA，不代表当前增量通过。若归档文字与本节冲突，以本节为准。
 
@@ -71,4 +73,10 @@ G0-G3 的状态和 run 链接是对应历史 SHA 的记录；G3 描述 v0.71.0 �
 | G7 外部模型 | 未开始 | 导入、安全、卸载与设备验证通过前不开放。 |
 | G8 发布验收 | IPA 构建和 CI 通过；真机待验收 | 当前 `build-ipa` run 42182468504 的 IPA 元数据、主 app ZIP CRC、ARM64 和 science/ecdict 资源头检查通过；`test-ink` run 42182468786 已通过（223 项 unit/integration + 6 项 UI，零失败）。主脑已审阅 44 张 UIReview PNG 中的 4 张代表图，静态布局结论见文首。 | 动态 Gaussian 质量、iPadOS 26.4+ 语言/Token 行为与 iPad 手指/Pencil 真机回归仍待验证。 |
 
-任何未运行或未通过的 CI、真机和质量评测均保持待验证，不以设计或代码存在代替验收。
+## 当前验证状态（v0.72.0 / build 123）
+
+- `440d08d9593c3e466707200a20a931e94d63d64a` 的 [test-ink run 42367223532](https://github.com/lei11118/pdf-vocab/actions/runs/42367223532) 与 [build-ipa run 42367236564](https://github.com/lei11118/pdf-vocab/actions/runs/42367236564) 均成功；测试为 276 项 unit/integration + 7 项 UI，共 283 项、零失败。IPA SHA-256 为 `84be36fe83031f27b62c46823a249807c23c254cc6ab6a3b21cd0e647c875364`，大小 48,159,484 bytes。
+- DEBUG 审查 UI 使用固定文字检查两个同屏滚动 surface；截图和 XCUITest 验证的是显示布局，不是真实 Apple 模型译义。
+- 真实 iPad 的译义/属性回传及整本 OCR 准确率仍未验收；数学识别与外部模型阶段未完成。
+
+任何其他未运行或未通过的 CI、真机和质量评测均保持待验证，不以设计或代码存在代替验收。

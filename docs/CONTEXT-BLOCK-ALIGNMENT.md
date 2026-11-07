@@ -1,15 +1,15 @@
 # ★标记★ 语境布局块与翻译对齐证据
 
-> 状态：v0.72.0 / build 123 在研记录，核对日期 2026-11-07。仓库基线为 `18ba9a5`；本轮改动仍在工作树中，尚无本轮 CI 结果。本文只记录已检查的源码、样本与官方资料，不代表候选已通过质量验收。
+> 状态：v0.72.0 / build 123 在研记录，核对日期 2026-11-07。当前增量提交为 `440d08d9593c3e466707200a20a931e94d63d64a`。[test-ink run 42367223532](https://github.com/lei11118/pdf-vocab/actions/runs/42367223532) 已通过：276 项 unit/integration + 7 项 UI，共 283 项，零失败；同 SHA 的 [build-ipa run 42367236564](https://github.com/lei11118/pdf-vocab/actions/runs/42367236564) 成功产出 IPA，大小 48,159,484 bytes，SHA-256 `84be36fe83031f27b62c46823a249807c23c254cc6ab6a3b21cd0e647c875364`。前一候选和中间提交的失败记录见“验证状态”，均为历史结果。本文记录已检查的源码、样本与官方资料，不代表质量或真机验收完成。
 
 ## 本轮决策
 
 - 保留已有的 Apple `TranslationSession` attributed-string 路径和项目自定义 Token ID 属性。Apple 文档说明 `translate(AttributedString)` 会保留格式及自定义属性；当前代码仍以 `iOS 26.4` 可用性检查保护请求。此处复用现有候选能力，不宣称真实 iPad 上的译义或 Token 对齐已验收。
 - 保留当前 Vision `.accurate` 识别的词级框，以及已有的原文 UTF-16 / DP 对齐与 `verifiedCharacter` 完整性门槛。新增代码只把有界的 PDF 行布局和列几何接到上下文构造；不将 Vision 词框冒称字符框，也不让外部模型替换现有翻译对齐路径。
-- 只有可信行几何、同列邻接关系和源文本映射都通过验证时，才生成 `.layoutBlock`。编号题目、标题、公式等结构边界会截断上下文；长度受 2,048 UTF-16 单元上限约束，OCR 邻接扩展当前至多检查每侧 8 行。其他情况继续使用现有回退路径。代码仍在本轮工作树中，行为须由本轮 XCTest 和 CI 证明。
+- 只有可信行几何、同列邻接关系和源文本映射都通过验证时，才生成 `.layoutBlock`。编号题目、标题、公式等结构边界会截断上下文；长度受 2,048 UTF-16 单元上限约束，OCR 邻接扩展当前至多检查每侧 8 行。其他情况继续使用现有回退路径。该实现已纳入 `eb728dc`；当前测试结果见“验证状态”，尚不构成最终验收。
 - `Apple Vision RecognizeDocumentsRequest`、PaddleOCR PP-StructureV3、awesome-align 和 SimAlign 都是评估候选；本轮未接入它们。对齐方案先复用 Apple Translation attributes 和已有几何 / DP 校验，避免再加入一个独立模型输出协议。
 
-相关代码：`Sources/ContextReading/LayoutBlockContextBuilder.swift`、`Sources/ContextReading/SentenceContextBuilder.swift`、`Sources/ContextReading/OCR/ContextOCRSelectionSource.swift`、`Sources/ContextReading/ContextualTranslationAlignment.swift`、`Sources/Card/ContextualTranslationTaskView.swift`。当前工作树尚未完成代码审查和本轮 CI。
+相关代码：`Sources/ContextReading/LayoutBlockContextBuilder.swift`、`Sources/ContextReading/SentenceContextBuilder.swift`、`Sources/ContextReading/OCR/ContextOCRSelectionSource.swift`、`Sources/ContextReading/ContextualTranslationAlignment.swift`、`Sources/Card/ContextualTranslationTaskView.swift`。该增量已提交；当前 CI 状态见“验证状态”。
 
 ## PDF 样本事实
 
@@ -28,7 +28,7 @@ physics 文件首页 MediaBox 为 666 × 783.36 pt；`pdfinfo` 的整本摘要�
 
 `Tests/Fixtures/IELTS-context-strip.png` 是 IELTS PDF 第 10 页正文两行的独立裁剪图，尺寸 1056 × 105 px；由 300 dpi 页面渲染裁出，页面像素边界为左上原点 `(54, 690)–(1110, 795)`，对应 MediaBox 左下原点约 `[12.96, 577.2, 253.44, 25.2]` pt。裁剪图只含两行正文和边白，不含整页。
 
-两行参考字符串由人根据扫描图转录，保存在 fixture 与测试中；不是 PDF 文字层，也不是 Vision 输出。`Tests/RealScanContextTests.swift` 将该图置入约 293.44 × 65.2 pt 的纯图像 PDF，调用现有 `OCRService.recognizeContextPage`，从实际识别的 `classroom` 建立选择、验证 `.layoutBlock` 和 `ContextualTranslationRequest.make`，并只打印 CER/WER 数值与行数、不输出识别全文、不设准确率阈值。该 XCTest 尚未在 iOS Simulator / iPad 上运行；CI 结果待补。
+两行参考字符串由人根据扫描图转录，保存在 fixture 与测试中；不是 PDF 文字层，也不是 Vision 输出。`Tests/RealScanContextTests.swift` 将该图置入约 293.44 × 65.2 pt 的纯图像 PDF，调用现有 `OCRService.recognizeContextPage`，从实际识别的 `classroom` 建立选择、验证 `.layoutBlock` 和 `ContextualTranslationRequest.make`，并只打印 CER/WER 数值与行数、不输出识别全文、不设准确率阈值。该真实裁剪链路在 run `42363494350` 中通过，CER 0.019、WER 0.105、2 行；这是单张两行裁剪的 CI 证据，不代表整本 OCR 精度或真实 iPad 识别表现。
 
 ## 官方资料与运行 / 许可核查
 
@@ -46,9 +46,11 @@ physics 文件首页 MediaBox 为 666 × 783.36 pt；`pdfinfo` 的整本摘要�
 
 ## 验证状态
 
-- `Tests/LayoutBlockContextBuilderTests.swift` 已引用 JSON 样本；`Tests/RealScanContextTests.swift` 已建立真实 Vision OCR 测试链路。测试代码和资源尚未在本机执行。
-- 最新已通过的仍是 `18ba9a5` 基线：`test-ink` run `42339957440`（251 项，0 失败）和 `build-ipa` run `42339957547`（IPA `0.71.1` / build `122`）。两条 run 均不覆盖本轮 0.72.0 工作树改动。
-- 本轮 `test-ink`、`build-ipa`、iPadOS 26.4+ Translation 行为、真实 iPad OCR 与选词精度均待验证；数学识别、外部模型集成和 release acceptance 仍未完成。
+- `Tests/LayoutBlockContextBuilderTests.swift` 使用 JSON 样本；`Tests/RealScanContextTests.swift` 的 IELTS 两行裁剪真实 Vision OCR 链路在最新 `test-ink` run `42367223532` 中通过，CER 0.019、WER 0.105、2 行。该数据只描述这一张裁剪图，不可外推为整书精度。
+- 前一候选 `2418b0c` 的 [test-ink run 42363494350](https://github.com/lei11118/pdf-vocab/actions/runs/42363494350) 总体失败：276 项 unit/integration 中有 8 项断言失败（1 项服务测试仍用旧 fake 数据，7 项依赖 UIView 手工 accessibility 标识）；6 项既有 UI 测试通过。同 SHA 的 [build-ipa run 42363498841](https://github.com/lei11118/pdf-vocab/actions/runs/42363498841) 成功，IPA 元数据为 v0.72.0 / build 123、minimum iOS 26.0；ARM64、ZIP CRC 与 3 个 SQLite headers 检查通过。
+- 中间提交 `eb728dc440ee65fefc9ae5d0b56cc3b322098a1e` 增加同屏展示与滚动的 XCUITest 覆盖；历史 [test-ink run 42365503411](https://github.com/lei11118/pdf-vocab/actions/runs/42365503411) 有 1 项 compact dictionary 的 AX 文本断言未通过（当时只检查 `value` 字符串）；后续改为合并 `value` 与 `label` 校验并在最新提交重跑通过，其余 276 项 unit/integration 与 6 项 UI 通过。同 SHA 的 [build-ipa run 42365515271](https://github.com/lei11118/pdf-vocab/actions/runs/42365515271) 成功，旧包大小 48,159,484 bytes，SHA-256 `1b94aa4ee6f81c086d5ddae71ef5693137c29b34130f26dd24a57df3b46afd41`。该中间结果已由以下提交重新验证。
+- 最新提交 `440d08d9593c3e466707200a20a931e94d63d64a` 修正 AX 文本读取。[test-ink run 42367223532](https://github.com/lei11118/pdf-vocab/actions/runs/42367223532) 已通过：276 项 unit/integration + 7 项 UI，共 283 项，零失败；同 SHA 的 [build-ipa run 42367236564](https://github.com/lei11118/pdf-vocab/actions/runs/42367236564) 成功，IPA 大小 48,159,484 bytes，SHA-256 `84be36fe83031f27b62c46823a249807c23c254cc6ab6a3b21cd0e647c875364`。包元数据为 v0.72.0 / build 123、minimum iOS 26.0、ARM64，ZIP CRC 与 3 个 SQLite headers 检查通过。
+- iPadOS 26.4+ Translation 行为、真实 iPad OCR 与选词精度仍待验证；数学识别、外部模型集成和 release acceptance 未完成。
 
 ## 参考链接
 
