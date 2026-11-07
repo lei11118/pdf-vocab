@@ -113,6 +113,112 @@ final class ContextReadingModelTests: XCTestCase {
         ], in: source), "NSNotFound rejects the entire selection")
     }
 
+    func testSourceRowRangeClassificationAcceptsOnlyWhitespaceDifferences() throws {
+        func sourceRange(_ needle: String, in source: String) throws -> NSRange {
+            let range = (source as NSString).range(of: needle)
+            return try XCTUnwrap(UTF16Span(range: range, in: source)?.composedCharacterRange(in: source))
+        }
+
+        let padded = "  charge  "
+        let paddedRange = NSRange(location: 0, length: (padded as NSString).length)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: paddedRange,
+                                                                      returned: [paddedRange],
+                                                                      sourceText: padded),
+                       .exact)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: paddedRange,
+                                                                      returned: [try sourceRange("charge", in: padded)],
+                                                                      sourceText: padded),
+                       .whitespaceOnly,
+                       "Trimming leading and trailing whitespace preserves every non-whitespace grapheme")
+
+        let splitWhitespace = "alpha beta"
+        let splitRange = NSRange(location: 0, length: (splitWhitespace as NSString).length)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: splitRange,
+                                                                      returned: [try sourceRange("alpha", in: splitWhitespace),
+                                                                                 try sourceRange("beta", in: splitWhitespace)],
+                                                                      sourceText: splitWhitespace),
+                       .whitespaceOnly,
+                       "Separate returned ranges may omit only the whitespace between words")
+
+        let overlapping = "charge"
+        let overlappingRange = NSRange(location: 0, length: (overlapping as NSString).length)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: overlappingRange,
+                                                                      returned: [NSRange(location: 3, length: 3),
+                                                                                 NSRange(location: 0, length: 4)],
+                                                                      sourceText: overlapping),
+                       .exact,
+                       "Overlapping ranges whose merged union is exact preserve the row source")
+
+        let internalGap = "charge"
+        let internalGapRange = NSRange(location: 0, length: (internalGap as NSString).length)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: internalGapRange,
+                                                                      returned: [NSRange(location: 0, length: 3),
+                                                                                 NSRange(location: 4, length: 2)],
+                                                                      sourceText: internalGap),
+                       .missingNonWhitespace)
+
+        let duplicate = "charge x charge"
+        let duplicateNSString = duplicate as NSString
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: duplicateNSString.range(of: "charge", options: .backwards),
+                                                                      returned: [duplicateNSString.range(of: "charge")],
+                                                                      sourceText: duplicate),
+                       .missingAndOutsideNonWhitespace,
+                       "Equal text at another UTF-16 offset is not source-equivalent")
+
+        let outside = "A B"
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: try sourceRange("A", in: outside),
+                                                                      returned: [NSRange(location: 0, length: (outside as NSString).length)],
+                                                                      sourceText: outside),
+                       .outsideNonWhitespace)
+
+        let both = "x ABC y"
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: try sourceRange("ABC", in: both),
+                                                                      returned: [NSRange(location: 0, length: 3)],
+                                                                      sourceText: both),
+                       .missingAndOutsideNonWhitespace)
+
+        let crlf = "A\r\nB"
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: try sourceRange("A", in: crlf),
+                                                                      returned: [NSRange(location: 0, length: 3)],
+                                                                      sourceText: crlf),
+                       .whitespaceOnly,
+                       "CRLF outside a physical row is whitespace")
+
+        let unicode = "👩🏽‍💻 Cafe\u{0301}"
+        let emojiRange = try sourceRange("👩🏽‍💻", in: unicode)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: emojiRange,
+                                                                      returned: [emojiRange],
+                                                                      sourceText: unicode),
+                       .exact)
+        let combiningRange = try sourceRange("e\u{0301}", in: unicode)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: combiningRange,
+                                                                      returned: [NSRange(location: combiningRange.location, length: 1)],
+                                                                      sourceText: unicode),
+                       .invalid,
+                       "A returned range cannot split a combining grapheme")
+
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: NSRange(location: NSNotFound, length: 1),
+                                                                      returned: [overlappingRange],
+                                                                      sourceText: overlapping),
+                       .invalid)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: overlappingRange,
+                                                                      returned: [NSRange(location: 100, length: 1)],
+                                                                      sourceText: overlapping),
+                       .invalid)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: NSRange(location: 0, length: 0),
+                                                                      returned: [overlappingRange],
+                                                                      sourceText: overlapping),
+                       .invalid)
+
+        let whitespaceOnly = "  \t"
+        let whitespaceRange = NSRange(location: 0, length: (whitespaceOnly as NSString).length)
+        XCTAssertEqual(ContextSelectionRouter.classifySourceRowRanges(requested: whitespaceRange,
+                                                                      returned: [whitespaceRange],
+                                                                      sourceText: whitespaceOnly),
+                       .invalid,
+                       "A blank row cannot be trusted solely because PDFKit returned an exact range")
+    }
+
     func testVisualSeedKeepsCanonicalSourceAndDisplaySurfaceSeparate() throws {
         let source = "c h a r g e next"
         let canonical = SemanticTokenizer.canonicalize(source, documentSHA256: "fixture-doc", pageIndex: 2)

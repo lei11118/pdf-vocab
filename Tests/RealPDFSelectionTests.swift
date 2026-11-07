@@ -87,6 +87,7 @@ final class GlyphSelectionTests: XCTestCase {
                                                        pageIndex: pageIndex)
         var didRoutePhrase = false
         var diagnostics: [String: Int] = [:]
+        var rowRangeMismatchSamples: [String] = []
         func record(_ stage: String) {
             diagnostics[stage, default: 0] += 1
         }
@@ -98,7 +99,7 @@ final class GlyphSelectionTests: XCTestCase {
             return "\(kind)_\(length)"
         }
 
-        func diagnoseMissingSeedContext(selection: PDFSelection, displaySurface: String) {
+        func diagnoseSeedContextPath(selection: PDFSelection, displaySurface: String) {
             let ranges = SelectionGeometry.sourceRanges(of: selection, on: page)
             let sourceSpans = ranges.compactMap { UTF16Span(range: $0, in: source) }
             guard !ranges.isEmpty, sourceSpans.count == ranges.count else {
@@ -160,12 +161,24 @@ final class GlyphSelectionTests: XCTestCase {
                     record("native_row_bounds.\(result.reason)")
                     return result
                 }
-                guard SelectionGeometry.sourceRanges(of: lineSelection, on: page) == [range] else {
-                    result = (nil, "source_ranges_mismatch")
+                let returnedRanges = SelectionGeometry.sourceRanges(of: lineSelection, on: page)
+                let rangeMatch = ContextSelectionRouter.classifySourceRowRanges(requested: range,
+                                                                                 returned: returnedRanges,
+                                                                                 sourceText: source)
+                if rangeMatch != .exact, rowRangeMismatchSamples.count < 3 {
+                    let returnedSummary = returnedRanges.prefix(3).map {
+                        "\($0.location):\($0.length)"
+                    }.joined(separator: ",")
+                    let remainder = returnedRanges.count > 3 ? ",more=\(returnedRanges.count - 3)" : ""
+                    rowRangeMismatchSamples.append("kind=\(rangeMatch.rawValue) requested=\(range.location):\(range.length) returned=[\(returnedSummary)]\(remainder)")
+                }
+                guard rangeMatch == .exact || rangeMatch == .whitespaceOnly else {
+                    result = (nil, rangeMatch.rawValue)
                     rowBoundsCache[rowIndex] = result
                     record("native_row_bounds.\(result.reason)")
                     return result
                 }
+                record("native_row_bounds.\(rangeMatch.rawValue)")
                 let lineSelections = lineSelection.selectionsByLine()
                 guard lineSelections.count == 1 else {
                     result = (nil, "visual_line_count_\(lineSelections.count)")
@@ -255,6 +268,16 @@ final class GlyphSelectionTests: XCTestCase {
         }
 
         for seedToken in canonical.tokens.prefix(100) where seedToken.kind == .word {
+            guard let seedRange = seedToken.span.nsRange(in: source),
+                  let seedSelection = page.selection(for: seedRange) else {
+                record("native_diagnostic.seed_selection_unavailable")
+                continue
+            }
+            diagnoseSeedContextPath(selection: seedSelection,
+                                    displaySurface: SelectionGeometry.lookupText(for: seedSelection))
+        }
+
+        for seedToken in canonical.tokens.prefix(100) where seedToken.kind == .word {
             record("seed_attempt")
             guard let seedRange = seedToken.span.nsRange(in: source) else {
                 record("invalid_seed_range")
@@ -277,7 +300,6 @@ final class GlyphSelectionTests: XCTestCase {
             }
             guard let sentenceContext = seedContext.sentenceContext else {
                 record("seed_context_missing")
-                diagnoseMissingSeedContext(selection: seedSelection, displaySurface: display)
                 continue
             }
             guard let selectedSpan = seedContext.sourceSpans.first else {
@@ -412,9 +434,10 @@ final class GlyphSelectionTests: XCTestCase {
             break
         }
 
-        if !didRoutePhrase {
-            let summary = diagnostics.keys.sorted().map { "\($0)=\(diagnostics[$0] ?? 0)" }.joined(separator: " ")
-            print("PHRASE_ROUTE_DIAGNOSTICS \(summary)")
+        let summary = diagnostics.keys.sorted().map { "\($0)=\(diagnostics[$0] ?? 0)" }.joined(separator: " ")
+        print("PHRASE_ROUTE_DIAGNOSTICS \(summary)")
+        if !rowRangeMismatchSamples.isEmpty {
+            print("NATIVE_ROW_RANGE_SAMPLES \(rowRangeMismatchSamples.joined(separator: ";"))")
         }
         XCTAssertTrue(didRoutePhrase, "Expected an exact word-group range to survive PDFKit selection and routing")
     }

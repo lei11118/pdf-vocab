@@ -5,6 +5,16 @@ import PDFKit
 /// Joins a trusted PDFKit selection seed to source tokens. It never grows a
 /// seed to a neighbouring token when the tokenizer and visual selection differ.
 enum ContextSelectionRouter {
+    /// Describes positional coverage before a row selection is trusted for layout.
+    enum SourceRowRangeMatch: String, Equatable {
+        case exact
+        case whitespaceOnly
+        case missingNonWhitespace
+        case outsideNonWhitespace
+        case missingAndOutsideNonWhitespace
+        case invalid
+    }
+
     private struct CacheKey: Hashable {
         let documentSHA256: String
         let pageIndex: Int
@@ -314,14 +324,140 @@ enum ContextSelectionRouter {
         guard let range = lineSpan.nsRange(in: sourceText), range.length > 0 else { return nil }
         guard let selection = page.selection(for: range) else { return nil }
         guard selection.pages.count == 1,
-              selection.pages.first === page,
-              SelectionGeometry.sourceRanges(of: selection, on: page) == [range] else { return nil }
+              selection.pages.first === page else { return nil }
+        let returnedRanges = SelectionGeometry.sourceRanges(of: selection, on: page)
+        switch classifySourceRowRanges(requested: range,
+                                       returned: returnedRanges,
+                                       sourceText: sourceText) {
+        case .exact, .whitespaceOnly:
+            break
+        case .missingNonWhitespace, .outsideNonWhitespace, .missingAndOutsideNonWhitespace, .invalid:
+            return nil
+        }
         let lineSelections = selection.selectionsByLine()
         // A source row that wraps into several visual rows is ambiguous here;
         // retain the word selection and omit sentence context.
         guard lineSelections.count == 1 else { return nil }
         let bounds = lineSelections[0].bounds(for: page)
         return SelectionGeometry.isValid(bounds) ? bounds : nil
+    }
+
+    /// Accepts only exact non-whitespace coverage, with optional whitespace-only omissions or extensions.
+    static func classifySourceRowRanges(requested: NSRange,
+                                        returned: [NSRange],
+                                        sourceText: String) -> SourceRowRangeMatch {
+        guard requested.length > 0,
+              let requestedSpan = UTF16Span(range: requested, in: sourceText),
+              requestedSpan.composedCharacterRange(in: sourceText) == requested,
+              let validatedReturned = SelectionGeometry.validatedSourceRanges(returned, in: sourceText),
+              validatedReturned.allSatisfy({ range in
+                  guard let span = UTF16Span(range: range, in: sourceText) else { return false }
+                  return span.composedCharacterRange(in: sourceText) == range
+              }),
+              let requestedNonWhitespace = nonWhitespaceComposedRanges(in: requested, sourceText: sourceText),
+              !requestedNonWhitespace.isEmpty else { return .invalid }
+
+        let normalizedReturned = mergedRanges(validatedReturned)
+        if normalizedReturned == [requested] { return .exact }
+
+        let requestedEnd = NSMaxRange(requested)
+        let missingNonWhitespace = requestedNonWhitespace.contains { target in
+            !isRangeCovered(target, by: normalizedReturned)
+        }
+        let outsideNonWhitespace = normalizedReturned.contains { range in
+            let rangeEnd = NSMaxRange(range)
+            if range.location < requested.location {
+                let outsideEnd = min(rangeEnd, requested.location)
+                if outsideEnd > range.location,
+                   !containsOnlyWhitespace(NSRange(location: range.location,
+                                                   length: outsideEnd - range.location),
+                                          sourceText: sourceText) {
+                    return true
+                }
+            }
+            if rangeEnd > requestedEnd {
+                let outsideStart = max(range.location, requestedEnd)
+                if rangeEnd > outsideStart,
+                   !containsOnlyWhitespace(NSRange(location: outsideStart,
+                                                   length: rangeEnd - outsideStart),
+                                          sourceText: sourceText) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        switch (missingNonWhitespace, outsideNonWhitespace) {
+        case (false, false): return .whitespaceOnly
+        case (true, false): return .missingNonWhitespace
+        case (false, true): return .outsideNonWhitespace
+        case (true, true): return .missingAndOutsideNonWhitespace
+        }
+    }
+
+    private static func nonWhitespaceComposedRanges(in range: NSRange,
+                                                    sourceText: String) -> [NSRange]? {
+        let source = sourceText as NSString
+        let rangeEnd = NSMaxRange(range)
+        var offset = range.location
+        var output: [NSRange] = []
+        while offset < rangeEnd {
+            let composedRange = source.rangeOfComposedCharacterSequence(at: offset)
+            guard composedRange.location == offset,
+                  NSMaxRange(composedRange) <= rangeEnd else { return nil }
+            let surface = source.substring(with: composedRange)
+            let isWhitespace = surface.unicodeScalars.allSatisfy {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }
+            if !isWhitespace { output.append(composedRange) }
+            offset = NSMaxRange(composedRange)
+        }
+        return output
+    }
+
+    private static func mergedRanges(_ ranges: [NSRange]) -> [NSRange] {
+        let ordered = ranges.sorted {
+            $0.location == $1.location ? $0.length < $1.length : $0.location < $1.location
+        }
+        var merged: [NSRange] = []
+        for range in ordered {
+            if let last = merged.last, range.location <= NSMaxRange(last) {
+                let end = max(NSMaxRange(last), NSMaxRange(range))
+                merged[merged.count - 1] = NSRange(location: last.location, length: end - last.location)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
+    }
+
+    private static func isRangeCovered(_ target: NSRange, by ranges: [NSRange]) -> Bool {
+        let targetEnd = NSMaxRange(target)
+        var coveredUntil = target.location
+        for range in ranges where NSMaxRange(range) > coveredUntil {
+            guard range.location <= coveredUntil else { return false }
+            coveredUntil = NSMaxRange(range)
+            if coveredUntil >= targetEnd { return true }
+        }
+        return false
+    }
+
+    private static func containsOnlyWhitespace(_ range: NSRange,
+                                               sourceText: String) -> Bool {
+        let source = sourceText as NSString
+        let rangeEnd = NSMaxRange(range)
+        var offset = range.location
+        while offset < rangeEnd {
+            let composedRange = source.rangeOfComposedCharacterSequence(at: offset)
+            guard composedRange.location == offset,
+                  NSMaxRange(composedRange) <= rangeEnd else { return false }
+            let surface = source.substring(with: composedRange)
+            guard surface.unicodeScalars.allSatisfy({
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }) else { return false }
+            offset = NSMaxRange(composedRange)
+        }
+        return true
     }
 
     private static func containsLineBreak(_ text: String) -> Bool {
