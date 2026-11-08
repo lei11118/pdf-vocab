@@ -1535,14 +1535,32 @@ final class ReaderCoordinator: NSObject {
              "source": source]
         }
 
+        func characterScreenPoint(at utf16Index: Int) -> CGPoint? {
+            guard utf16Index >= 0, utf16Index < sourceNSString.length else { return nil }
+            let characterRange = sourceNSString.rangeOfComposedCharacterSequence(at: utf16Index)
+            guard let selection = page.selection(for: characterRange) else { return nil }
+            let rect = selection.bounds(for: page)
+            guard SelectionGeometry.isValid(rect) else { return nil }
+            return screenPoint(CGPoint(x: rect.midX, y: rect.midY))
+        }
+
         let wordPattern = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}αΑ²]+(?:[=^][\\p{L}\\p{N}αΑ²]+)*")
         for match in (wordPattern?.matches(in: source, range: NSRange(location: 0, length: sourceNSString.length)) ?? []).prefix(240) {
-            guard let selection = page.selection(for: match.range) else { continue }
+            guard match.range.length > 0,
+                  let selection = page.selection(for: match.range) else { continue }
             let rect = selection.bounds(for: page)
             guard SelectionGeometry.isValid(rect), let point = screenPoint(CGPoint(x: rect.midX, y: rect.midY)) else { continue }
+            let lastCharacterIndex = NSMaxRange(match.range) - 1
+            guard let startPoint = characterScreenPoint(at: match.range.location),
+                  let endPoint = characterScreenPoint(at: lastCharacterIndex) else { continue }
             let text = sourceNSString.substring(with: match.range)
             nativeWordRects.append((text, rect))
-            wordPoints.append(pointEntry(text: text, point: point, source: "text"))
+            var entry = pointEntry(text: text, point: point, source: "text")
+            entry["startX"] = Double(startPoint.x)
+            entry["startY"] = Double(startPoint.y)
+            entry["endX"] = Double(endPoint.x)
+            entry["endY"] = Double(endPoint.y)
+            wordPoints.append(entry)
         }
 
         var lineStart = 0

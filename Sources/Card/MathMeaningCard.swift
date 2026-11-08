@@ -21,6 +21,7 @@ struct MathMeaningCard: View {
     let onClose: () -> Void
     @State private var copied = false
     @State private var copiedLatex = false
+    @ScaledMetric(relativeTo: .title2) private var formulaFontSize: CGFloat = 24
 
     private var isParsed: Bool { result.status == .parsedText }
 
@@ -29,8 +30,8 @@ struct MathMeaningCard: View {
             VStack(alignment: .leading, spacing: DS.Space.m) {
                 HStack(alignment: .top, spacing: DS.Space.s) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("数学符号与公式文字")
-                            .font(DS.Fonts.wordTitle)
+                        Text("数学释义")
+                            .font(DS.Fonts.title2)
                             .foregroundStyle(DS.foreground1)
                         Text(isParsed ? "文字结构已解析" : "结构待核对")
                             .font(.caption.weight(.medium))
@@ -69,7 +70,7 @@ struct MathMeaningCard: View {
                             .font(DS.Fonts.caption)
                             .foregroundStyle(DS.foreground2)
                         ScrollView(.horizontal) {
-                            MathFormulaLabel(latex: latex)
+                            MathFormulaLabel(latex: latex, fontSize: formulaFontSize)
                                 .fixedSize(horizontal: true, vertical: true)
                                 .padding(DS.Space.s)
                         }
@@ -88,6 +89,8 @@ struct MathMeaningCard: View {
                                 Label(copiedLatex ? "已复制" : "复制 LaTeX",
                                       systemImage: copiedLatex ? "checkmark" : "doc.on.doc")
                                     .font(.caption.weight(.medium))
+                                    .frame(minWidth: 44, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("math-card-copy-latex")
@@ -137,6 +140,8 @@ struct MathMeaningCard: View {
                             } label: {
                                 Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
                                     .font(.caption.weight(.medium))
+                                    .frame(minWidth: 44, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("math-card-copy-unicode")
@@ -176,6 +181,7 @@ struct MathMeaningCard: View {
 
 private struct MathFormulaLabel: UIViewRepresentable {
     let latex: String
+    let fontSize: CGFloat
 
     func makeUIView(context: Context) -> MTMathUILabel {
         let label = MTMathUILabel()
@@ -188,7 +194,7 @@ private struct MathFormulaLabel: UIViewRepresentable {
         label.latex = latex
         label.labelMode = .text
         label.textAlignment = .left
-        label.fontSize = 24
+        label.fontSize = fontSize
         label.textColor = UIColor.label
         label.invalidateIntrinsicContentSize()
     }

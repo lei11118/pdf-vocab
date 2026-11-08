@@ -367,9 +367,10 @@ extension ReaderRouteUITests {
         XCTAssertTrue(observer.waitForExistence(timeout: 15))
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
         let initial = waitForAudit(observer, timeout: 20) { snapshot in
-            point(in: snapshot, key: "wordPoints", text: "function", source: "text") != nil
-                && point(in: snapshot, key: "wordPoints", text: "E=mc²", source: "text") != nil
-                && point(in: snapshot, key: "linkPoints", text: "classroom", source: "link") != nil
+            self.point(in: snapshot, key: "wordPoints", text: "function", source: "text") != nil
+                && self.point(in: snapshot, key: "wordPoints", text: "E=mc²", source: "text", edge: .start) != nil
+                && self.point(in: snapshot, key: "wordPoints", text: "E=mc²", source: "text", edge: .end) != nil
+                && self.point(in: snapshot, key: "linkPoints", text: "classroom", source: "link") != nil
         }
         XCTAssertNotNil(initial, "The read-only observer reports real text, line, and link geometry from the imported PDF")
         attachAuditScreenshot("synthetic-searchable-pdf-before-interaction", app: app)
@@ -380,7 +381,7 @@ extension ReaderRouteUITests {
         XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty })
         XCTAssertFalse(app.staticTexts["word-card-title"].exists, "A single tap on ordinary text does not open a word card")
 
-        coordinate(for: try XCTUnwrap(functionPoint), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        coordinate(for: try XCTUnwrap(functionPoint), in: app).doubleTap()
         XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "function" })
         XCTAssertTrue(app.staticTexts["word-card-title"].waitForExistence(timeout: 10))
         let dictionaryEntry = app.descendants(matching: .any).matching(identifier: "word-card-dictionary-entry").firstMatch
@@ -422,7 +423,7 @@ extension ReaderRouteUITests {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-        let cacheAttachment = XCTAttachment(string: "human-reading-audit cache clear: \(cacheMessage)", uniformTypeIdentifier: "public.plain-text")
+        let cacheAttachment = XCTAttachment(string: "human-reading-audit cache clear: \(cacheMessage)")
         cacheAttachment.lifetime = .keepAlways
         add(cacheAttachment)
         XCTAssertTrue(cacheMessage.contains("语境翻译缓存已清理"), "Cache clear should succeed on the healthy audit database; actual result: \(cacheMessage)")
@@ -436,13 +437,28 @@ extension ReaderRouteUITests {
         setSwitch(mathSwitch, to: true)
         closeReaderPanel(in: app, title: "设置")
 
-        let formulaLine = point(in: waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 },
-                                key: "wordPoints", text: "E=mc²", source: "text")
+        let formulaSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let formulaLine = point(in: formulaSnapshot, key: "wordPoints", text: "E=mc²", source: "text")
         XCTAssertNotNil(formulaLine)
-        coordinate(for: try XCTUnwrap(formulaLine), in: app).tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        let formulaText = try XCTUnwrap(formulaLine).text
+        let formulaStart = point(in: formulaSnapshot, key: "wordPoints", text: formulaText, source: "text", edge: .start)
+        let formulaEnd = point(in: formulaSnapshot, key: "wordPoints", text: formulaText, source: "text", edge: .end)
+        XCTAssertNotNil(formulaStart)
+        XCTAssertNotNil(formulaEnd)
+        coordinate(for: try XCTUnwrap(formulaStart), in: app).press(
+            forDuration: 0.8,
+            thenDragTo: coordinate(for: try XCTUnwrap(formulaEnd), in: app),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        let selectedFormula = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == formulaText
+        }
+        XCTAssertEqual(selectedFormula?["selectedText"] as? String, formulaText,
+                       "A long-press drag from the first to last actual PDF character selects the complete formula")
         let mathSource = app.staticTexts["math-card-source"]
-        XCTAssertTrue(mathSource.waitForExistence(timeout: 15), "Triple tap routes selected formula text through MathReadingService")
-        XCTAssertTrue(mathSource.label.contains("E=mc²"))
+        XCTAssertTrue(mathSource.waitForExistence(timeout: 15), "Selecting the full PDF formula routes it through MathReadingService")
+        XCTAssertTrue(mathSource.label.contains(formulaText))
         XCTAssertTrue(app.staticTexts["math-card-status"].label.contains("已解析"))
         let latexCopy = app.buttons["math-card-copy-latex"]
         XCTAssertTrue(latexCopy.waitForExistence(timeout: 10))
@@ -474,10 +490,25 @@ extension ReaderRouteUITests {
         setSwitch(app.switches["math-reading-toggle"], to: true)
         closeReaderPanel(in: app, title: "设置")
 
-        let formulaAgain = point(in: waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 },
-                                 key: "wordPoints", text: "E=mc²", source: "text")
+        let formulaAgainSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let formulaAgain = point(in: formulaAgainSnapshot, key: "wordPoints", text: "E=mc²", source: "text")
         XCTAssertNotNil(formulaAgain)
-        coordinate(for: try XCTUnwrap(formulaAgain), in: app).tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        let formulaAgainText = try XCTUnwrap(formulaAgain).text
+        let formulaAgainStart = point(in: formulaAgainSnapshot, key: "wordPoints", text: formulaAgainText, source: "text", edge: .start)
+        let formulaAgainEnd = point(in: formulaAgainSnapshot, key: "wordPoints", text: formulaAgainText, source: "text", edge: .end)
+        XCTAssertNotNil(formulaAgainStart)
+        XCTAssertNotNil(formulaAgainEnd)
+        coordinate(for: try XCTUnwrap(formulaAgainStart), in: app).press(
+            forDuration: 0.8,
+            thenDragTo: coordinate(for: try XCTUnwrap(formulaAgainEnd), in: app),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        let selectedFormulaAgain = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == formulaAgainText
+        }
+        XCTAssertEqual(selectedFormulaAgain?["selectedText"] as? String, formulaAgainText,
+                       "The second selection also spans the formula's first and last actual PDF characters")
         XCTAssertTrue(mathSource.waitForExistence(timeout: 15))
         openReaderSettings(app)
         setSwitch(app.switches["context-reading-toggle"], to: false)
@@ -492,7 +523,7 @@ extension ReaderRouteUITests {
         let currentSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
         let functionAgain = point(in: currentSnapshot, key: "wordPoints", text: "function", source: "text")
         XCTAssertNotNil(functionAgain)
-        coordinate(for: try XCTUnwrap(functionAgain), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        coordinate(for: try XCTUnwrap(functionAgain), in: app).doubleTap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "contextual-translation-section").firstMatch
             .waitForExistence(timeout: 15), "Contextual translation uses the production ReaderView card and TranslationSession adapter")
         XCTAssertTrue(dictionaryEntry.waitForExistence(timeout: 15), "The dictionary fallback remains available")
@@ -516,8 +547,7 @@ extension ReaderRouteUITests {
             .map { "\($0.identifier)=\($0.label)" }
             .joined(separator: "\n")
         print("HUMAN_READING_AUDIT_TRANSLATION_STATE\n\(translationState)")
-        let translationAttachment = XCTAttachment(string: "Production TranslationSession state (a candidate is a real system result; other states are not translation success):\n\(translationState)",
-                                                   uniformTypeIdentifier: "public.plain-text")
+        let translationAttachment = XCTAttachment(string: "Production TranslationSession state (a candidate is a real system result; other states are not translation success):\n\(translationState)")
         translationAttachment.lifetime = .keepAlways
         add(translationAttachment)
         XCTAssertTrue(candidate.exists || preparation.exists || unsupported.exists
@@ -555,13 +585,13 @@ extension ReaderRouteUITests {
         let scanSnapshot = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
         XCTAssertTrue(scanSnapshot.waitForExistence(timeout: 10))
         let ocrReady = waitForAudit(scanSnapshot, timeout: 90) {
-            point(in: $0, key: "wordPoints", text: "classroom", source: "ocr") != nil
+            self.point(in: $0, key: "wordPoints", text: "classroom", source: "ocr") != nil
         }
         XCTAssertNotNil(ocrReady, "The raster-only PDF exposes words returned by the existing Vision OCR path")
         attachAuditScreenshot("synthetic-raster-pdf-after-vision-ocr", app: app)
         let ocrPoint = point(in: ocrReady, key: "wordPoints", text: "classroom", source: "ocr")
         XCTAssertNotNil(ocrPoint)
-        coordinate(for: try XCTUnwrap(ocrPoint), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        coordinate(for: try XCTUnwrap(ocrPoint), in: app).doubleTap()
         XCTAssertNotNil(waitForAudit(scanSnapshot, timeout: 20) { ($0["selectedText"] as? String)?.contains("classroom") == true },
                          "Double tap uses the current Vision word rectangle through ReaderCoordinator")
         attachAuditScreenshot("synthetic-raster-pdf-vision-word-selection", app: app)
@@ -631,14 +661,16 @@ extension ReaderRouteUITests {
     private func point(in snapshot: [String: Any]?,
                        key: String,
                        text: String,
-                       source: String) -> HumanAuditPoint? {
+                       source: String,
+                       edge: HumanAuditPointEdge? = nil) -> HumanAuditPoint? {
+        let coordinateKeys: (x: String, y: String) = edge?.coordinateKeys ?? (x: "x", y: "y")
         guard let snapshot,
               let entries = snapshot[key] as? [[String: Any]],
               let match = entries.first(where: {
                   $0["text"] as? String == text && $0["source"] as? String == source
               }),
-              let x = match["x"] as? NSNumber,
-              let y = match["y"] as? NSNumber else { return nil }
+              let x = match[coordinateKeys.x] as? NSNumber,
+              let y = match[coordinateKeys.y] as? NSNumber else { return nil }
         return HumanAuditPoint(text: text, source: source, x: CGFloat(truncating: x), y: CGFloat(truncating: y))
     }
 
@@ -660,4 +692,16 @@ private struct HumanAuditPoint {
     let source: String
     let x: CGFloat
     let y: CGFloat
+}
+
+private enum HumanAuditPointEdge {
+    case start
+    case end
+
+    var coordinateKeys: (x: String, y: String) {
+        switch self {
+        case .start: return ("startX", "startY")
+        case .end: return ("endX", "endY")
+        }
+    }
 }
