@@ -1,0 +1,145 @@
+{
+  "manifest_schema_version": 1,
+  "candidate_id": "pp-formulanet-plus-l-coreml-cpu-smoke",
+  "license": "Apache-2.0",
+  "size_budget_bytes": 268435456,
+  "sources": {
+    "coreml": {
+      "repo": "MoraxCheng/ohmyshot-ppformulanet-plus-l-coreml",
+      "revision": "a994339cda5fe6ba90170981219395dfb025332b",
+      "api": "https://huggingface.co/api/models/MoraxCheng/ohmyshot-ppformulanet-plus-l-coreml/revision/a994339cda5fe6ba90170981219395dfb025332b?blobs=true"
+    },
+    "weights_reference": {
+      "repo": "PaddlePaddle/PP-FormulaNet_plus-L_safetensors",
+      "revision": "6cc004a8e91ea3f3819b05317f40b290cbe99c2b",
+      "downloaded": false,
+      "note": "Pinned provenance for the Apache-2.0 source weights; qualification uses only the pinned Core ML conversion."
+    },
+    "processor": {
+      "repo": "PaddlePaddle/PP-FormulaNet_plus-L_safetensors",
+      "revision": "6cc004a8e91ea3f3819b05317f40b290cbe99c2b",
+      "api": "https://huggingface.co/api/models/PaddlePaddle/PP-FormulaNet_plus-L_safetensors/revision/6cc004a8e91ea3f3819b05317f40b290cbe99c2b?blobs=true"
+    }
+  },
+  "total_size_bytes": 184930188,
+  "files": [
+    {
+      "source": "coreml",
+      "path": "encoder.mlpackage/Manifest.json",
+      "size_bytes": 617,
+      "sha256": "80b712d7f2fd957a5f504df05b50ca1eef829b92a4557e1be491d314f75b388d",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "c7968f990cc742aeb02b6756b0726f9c900c0dcc"
+    },
+    {
+      "source": "coreml",
+      "path": "encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+      "size_bytes": 248151,
+      "sha256": "001a7421192cd23aca54fe84ab83bfbad0184bc116d48f1b947da57a6237d762",
+      "hash_source": "hf_lfs_sha256",
+      "hf_blob_id": "1a89a938109cc7f6b44942496f04247fe3ad229a"
+    },
+    {
+      "source": "coreml",
+      "path": "encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+      "size_bytes": 101601728,
+      "sha256": "3c298327ddbbf36e713c5f11422121098eff897abd28918d978b3d2dc161b694",
+      "hash_source": "hf_lfs_sha256",
+      "hf_blob_id": "41e66a7e65bced1b01ca14283c804afe420f7e77"
+    },
+    {
+      "source": "coreml",
+      "path": "decoder.mlpackage/Manifest.json",
+      "size_bytes": 617,
+      "sha256": "109a0d931308b09a23c8914cfd12e6b56c3d033210c3e55ccdf2228a2c7d288a",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "dfbeab02995d8bb3bd1367b9ff5024094d854465"
+    },
+    {
+      "source": "coreml",
+      "path": "decoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+      "size_bytes": 213277,
+      "sha256": "65076981addc92d1408c7b6d06cfd7eded00d05f8fb2608f28cc5e6d97e55566",
+      "hash_source": "hf_lfs_sha256",
+      "hf_blob_id": "56b8dbff7a033e80ee562cb5ed4da5d2a185c895"
+    },
+    {
+      "source": "coreml",
+      "path": "decoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+      "size_bytes": 82426720,
+      "sha256": "7e3e7ea8340e989d2e0c2b0d0b81955e6c3a2a6da47a83c17bef2f7ed49d712c",
+      "hash_source": "hf_lfs_sha256",
+      "hf_blob_id": "3b7d7c6a51c234f07478d62993907b96374f437a"
+    },
+    {
+      "source": "coreml",
+      "path": "tokens.txt",
+      "size_bytes": 424069,
+      "sha256": "1ad57fdc1a3b0fa2545f9cd241f7caaffec92d73186afffcc3ec67547e2df321",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "0b6cdc1835b48ed8aa93889df0372b251ea8b59b"
+    },
+    {
+      "source": "coreml",
+      "path": "config.json",
+      "size_bytes": 1068,
+      "sha256": "4c3cb1ebce4f5c5278abf381dd7bec0822c7cec1047bd88329df713d9346e1e2",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "7fa866141e674feb173276fcb8d9f4361f8bf651"
+    },
+    {
+      "source": "coreml",
+      "path": "LICENSE.txt",
+      "size_bytes": 13357,
+      "sha256": "ba28caa1f2207e9975828cd4e3f657ca0f61399dde7de4b2ee7ec18aa35fa6c8",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "119e2154d55ffe0afd81090c5e07bf5f6db049e0"
+    },
+    {
+      "source": "processor",
+      "path": "processor_config.json",
+      "size_bytes": 584,
+      "sha256": "f1454999fcb5930c2d93e9dcd03f1adf046245e98e96a7f601dabc6ee01c3b78",
+      "hash_source": "downloaded_raw_bytes",
+      "hf_blob_id": "59b7d94064a5591a3e182082453012771d360cc4"
+    }
+  ],
+  "signature": {
+    "encoder": {
+      "inputs": {
+        "pixel_values": [1, 3, 768, 768]
+      },
+      "outputs": {
+        "cross_k": [8, 1, 16, 144, 32],
+        "cross_v": [8, 1, 16, 144, 32]
+      }
+    },
+    "decoder": {
+      "inputs": {
+        "ids": [1, 1],
+        "pos": [1],
+        "mask": [1, 1, 1, 1024],
+        "cross_k": [8, 1, 16, 144, 32],
+        "cross_v": [8, 1, 16, 144, 32]
+      },
+      "output_name_candidates": ["next", "logits"],
+      "state_names": ["k_cache", "v_cache"]
+    }
+  },
+  "processor_expectations": {
+    "processor_class": "PPFormulaNetProcessor",
+    "image_processor_type": "PPFormulaNetImageProcessor",
+    "do_crop_margin": true,
+    "do_resize": true,
+    "do_thumbnail": true,
+    "do_pad": true,
+    "do_rescale": true,
+    "do_normalize": true,
+    "do_align_long_axis": false,
+    "size": {"height": 768, "width": 768},
+    "image_mean": [0.7931, 0.7931, 0.7931],
+    "image_std": [0.1738, 0.1738, 0.1738],
+    "resample": 2,
+    "return_tensors": "pt"
+  }
+}

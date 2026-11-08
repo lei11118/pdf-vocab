@@ -2,7 +2,7 @@
 
 ## Persistent payload cache
 
-`ContextTranslationService.shared` uses the optional `AppDatabase` backed store. Newly constructed services keep persistence disabled by default, which keeps unit tests and injected translators isolated unless a store is passed explicitly. `clearCache()` keeps its existing in-memory-only behavior; `clearAllCaches()` clears both in-memory and persistent contextual-translation entries.
+`ContextualTranslationService.shared` uses the optional `AppDatabase` backed store. Newly constructed services keep persistence disabled by default, which keeps unit tests and injected translators isolated unless a store is passed explicitly. `clearCache()` keeps its existing in-memory-only behavior; `clearAllCaches()` clears both in-memory and persistent contextual-translation entries.
 
 The disk identity is a SHA-256 digest of canonical JSON containing the document SHA, exact source text, every token ID and UTF-16 span, the verified phrase-group identity when present, source and target language identifiers, backend version, context-alignment algorithm version, and payload-snapshot schema version. Rows reference `document.sha256` with cascade deletion. The store limits each snapshot to 256 KiB and total retained snapshots to 16 MiB, evicting least-recently-used rows transactionally.
 

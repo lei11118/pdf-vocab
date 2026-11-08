@@ -1,0 +1,125 @@
+name: Qualify isolated Core ML math model candidate
+
+on:
+  push:
+    branches:
+      - codex/v062-interaction-rebuild
+    paths:
+      - .github/workflows/qualify-math-model.yml
+      - scripts/qualify_math_model.py
+      - scripts/math_model_candidate.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      QUALIFICATION_OUT: ${{ runner.temp }}/math-model-qualification-artifacts
+      MODEL_CACHE: ${{ runner.temp }}/math-model-qualification-model
+      QUALIFICATION_VENV: ${{ runner.temp }}/math-model-qualification-venv
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out pinned qualification code
+        uses: actions/checkout@v4
+
+      - name: Prepare artifact directory
+        run: mkdir -p "$QUALIFICATION_OUT" "$MODEL_CACHE"
+
+      - name: Select Xcode 26.6
+        run: |
+          xcodebuild -version | tee "$QUALIFICATION_OUT/xcode-version.txt"
+          grep -q '^Xcode 26\.6$' "$QUALIFICATION_OUT/xcode-version.txt"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache only fixed-revision model assets
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/math-model-qualification-model
+          key: pp-formulanet-coreml-macos-26-a994339cda5fe6ba90170981219395dfb025332b-6cc004a8e91ea3f3819b05317f40b290cbe99c2b
+
+      - name: Create isolated environment and render fixtures
+        run: |
+          python -m venv "$QUALIFICATION_VENV"
+          "$QUALIFICATION_VENV/bin/python" -m pip install matplotlib==3.11.2
+          "$QUALIFICATION_VENV/bin/python" scripts/qualify_math_model.py \
+            --render-only \
+            --output-dir "$QUALIFICATION_OUT"
+
+      - name: Install pinned qualification runtime
+        run: |
+          "$QUALIFICATION_VENV/bin/python" -m pip install \
+            coremltools==9.0 \
+            torch==2.14.1 \
+            torchvision==0.29.2 \
+            transformers==5.18.0 \
+            matplotlib==3.11.2
+          "$QUALIFICATION_VENV/bin/python" -m pip freeze --all \
+            > "$QUALIFICATION_OUT/environment-packages.txt"
+
+      - name: Run bounded CPU Core ML qualification
+        run: |
+          "$QUALIFICATION_VENV/bin/python" scripts/qualify_math_model.py \
+            --manifest scripts/math_model_candidate.json \
+            --model-dir "$MODEL_CACHE" \
+            --output-dir "$QUALIFICATION_OUT" \
+            --sample-timeout-seconds 90
+
+      - name: Record setup failure if inference did not run
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import platform
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          out = Path(os.environ["QUALIFICATION_OUT"])
+          report_path = out / "report.json"
+          report = None
+          if report_path.is_file():
+              try:
+                  report = json.loads(report_path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  report = None
+          if not isinstance(report, dict):
+              report = {
+                  "candidate_id": "pp-formulanet-plus-l-coreml-cpu-smoke",
+                  "started_at": datetime.now(timezone.utc).isoformat(),
+                  "status": "not_run",
+                  "qualification_scope": "synthetic mathtext smoke only; not human gold or iPad qualification",
+                  "environment": {"python": platform.python_version(), "platform": platform.platform()},
+                  "samples": [],
+              }
+          if report.get("status") == "not_run":
+              report["status"] = "failed"
+              report["reason"] = "Workflow setup did not reach real Core ML inference; inspect earlier workflow steps."
+              report["coreml_inference"] = "not_run"
+              report["environment"] = report.get("environment") or {
+                  "python": platform.python_version(),
+                  "platform": platform.platform(),
+              }
+              report["finished_at"] = datetime.now(timezone.utc).isoformat()
+              report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          PY
+          if [ ! -f "$QUALIFICATION_OUT/environment-packages.txt" ] && [ -x "$QUALIFICATION_VENV/bin/python" ]; then
+            "$QUALIFICATION_VENV/bin/python" -m pip freeze --all \
+              > "$QUALIFICATION_OUT/environment-packages.txt" || true
+          fi
+
+      - name: Upload report, fixture images, and environment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: math-model-qualification-${{ github.run_id }}
+          path: ${{ runner.temp }}/math-model-qualification-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
