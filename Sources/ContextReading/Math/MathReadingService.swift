@@ -233,16 +233,16 @@ public enum MathReadingService {
         var hasScriptableBase = false
         while index < characters.count {
             let character = characters[index]
-            if let scriptKind = scriptKind(for: character) {
+            if let currentScriptKind = scriptKind(for: character) {
                 guard hasScriptableBase else { return nil }
                 var script = ""
-                while index < characters.count, scriptKind(for: characters[index]) == scriptKind {
+                while index < characters.count, scriptKind(for: characters[index]) == currentScriptKind {
                     guard let scalar = characters[index].unicodeScalars.first,
-                          let value = scriptValue(for: scalar, kind: scriptKind) else { return nil }
+                          let value = scriptValue(for: scalar, kind: currentScriptKind) else { return nil }
                     script += latexAtom(value)
                     index += 1
                 }
-                switch scriptKind {
+                switch currentScriptKind {
                 case .superscript: output += "^{\(script)}"
                 case .subscriptValue: output += "_{\(script)}"
                 }
