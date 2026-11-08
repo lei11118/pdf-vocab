@@ -309,7 +309,7 @@ actor ContextualTranslationService {
 /// translationTask callback, matching Apple's session ownership model.
 @available(iOS 26.4, *)
 enum AppleContextualTranslationAdapter {
-    static let backendVersion = "apple-attributed-token-alignment-v3"
+    static let backendVersion = "apple-attributed-token-alignment-v3-\(ProcessInfo.processInfo.operatingSystemVersionString)"
 
     @MainActor
     static func makeTranslator(using session: TranslationSession,

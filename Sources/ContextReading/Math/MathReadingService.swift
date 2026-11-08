@@ -27,7 +27,7 @@ public enum MathReadingService {
 
     private enum ScriptKind: Equatable {
         case superscript
-        case subscript
+        case subscriptValue
     }
 
     private struct ASTBudget {
@@ -244,7 +244,7 @@ public enum MathReadingService {
                 }
                 switch scriptKind {
                 case .superscript: output += "^{\(script)}"
-                case .subscript: output += "_{\(script)}"
+                case .subscriptValue: output += "_{\(script)}"
                 }
                 continue
             }
@@ -380,14 +380,14 @@ public enum MathReadingService {
     private static func scriptKind(for character: Character) -> ScriptKind? {
         guard let scalar = character.unicodeScalars.first else { return nil }
         if superscriptValue(for: scalar) != nil { return .superscript }
-        if subscriptValue(for: scalar) != nil { return .subscript }
+        if subscriptValue(for: scalar) != nil { return .subscriptValue }
         return nil
     }
 
     private static func scriptValue(for scalar: Unicode.Scalar, kind: ScriptKind) -> String? {
         switch kind {
         case .superscript: return superscriptValue(for: scalar)
-        case .subscript: return subscriptValue(for: scalar)
+        case .subscriptValue: return subscriptValue(for: scalar)
         }
     }
 

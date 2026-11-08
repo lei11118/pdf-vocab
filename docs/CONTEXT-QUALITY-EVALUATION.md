@@ -6,6 +6,8 @@
 
 The disk identity is a SHA-256 digest of canonical JSON containing the document SHA, exact source text, every token ID and UTF-16 span, the verified phrase-group identity when present, source and target language identifiers, backend version, context-alignment algorithm version, and payload-snapshot schema version. Rows reference `document.sha256` with cascade deletion. The store limits each snapshot to 256 KiB and total retained snapshots to 16 MiB, evicting least-recently-used rows transactionally.
 
+The Apple backend identity includes the runtime operating-system version, so an OS upgrade gets a separate cache identity. Language-pack updates can happen independently and are not represented as model-version identities; after a language-pack update, clear the cache and perform a real quality evaluation.
+
 Snapshots keep source and target text plus only the token-ID and phrase-group-ID UTF-16 runs. Text lengths, run counts, identifiers, payload bytes, and composed-character boundaries are bounded and checked before reconstruction. A loaded snapshot is only a candidate: every use still runs `ContextualTranslationAlignment.decode` against the current selection. Corrupt data, missing attributes, or an unaligned current token becomes a cache miss and invokes the translator again. Cache reads and writes are best-effort and do not turn cache failures or a not-yet-imported document into a translation failure.
 
 ## G4 alignment metrics
