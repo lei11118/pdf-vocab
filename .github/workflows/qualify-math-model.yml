@@ -18,16 +18,22 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 35
     env:
-      QUALIFICATION_OUT: ${{ runner.temp }}/math-model-qualification-artifacts
-      MODEL_CACHE: ${{ runner.temp }}/math-model-qualification-model
-      QUALIFICATION_VENV: ${{ runner.temp }}/math-model-qualification-venv
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out pinned qualification code
         uses: actions/checkout@v4
 
       - name: Prepare artifact directory
-        run: mkdir -p "$QUALIFICATION_OUT" "$MODEL_CACHE"
+        run: |
+          QUALIFICATION_OUT="$RUNNER_TEMP/math-model-qualification-artifacts"
+          MODEL_CACHE="$RUNNER_TEMP/math-model-qualification-model"
+          QUALIFICATION_VENV="$RUNNER_TEMP/math-model-qualification-venv"
+          mkdir -p "$QUALIFICATION_OUT" "$MODEL_CACHE"
+          {
+            echo "QUALIFICATION_OUT=$QUALIFICATION_OUT"
+            echo "MODEL_CACHE=$MODEL_CACHE"
+            echo "QUALIFICATION_VENV=$QUALIFICATION_VENV"
+          } >> "$GITHUB_ENV"
 
       - name: Select Xcode 26.6
         run: |
