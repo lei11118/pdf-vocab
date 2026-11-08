@@ -29,6 +29,7 @@ struct LibraryView: View {
     @State private var activeDocument: DocumentRecord?
     #if DEBUG
     @State private var didLaunchRouteAudit = false
+    @State private var didLaunchHumanReadingAudit = false
     #endif
     @State private var readerJump: VocabJumpTarget?
     @State private var query = ""
@@ -200,6 +201,15 @@ struct LibraryView: View {
                     _ = try? store.importFile(from:url)
                     reload()
                     try? FileManager.default.removeItem(at:url)
+                }
+                if ProcessInfo.processInfo.arguments.contains("--human-reading-audit"), !didLaunchHumanReadingAudit {
+                    didLaunchHumanReadingAudit = true
+                    do {
+                        try HumanReadingAuditFixture.importFixtures(into: store)
+                        reload()
+                    } catch {
+                        errorMessage = "Human reading audit fixtures failed: \(error.localizedDescription)"
+                    }
                 }
                 #endif
             }

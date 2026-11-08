@@ -9,12 +9,15 @@ actor ContextualTranslationService {
                                       _ sourceLanguageIdentifier: String,
                                       _ targetLanguageIdentifier: String) async throws -> ContextualTranslationPayload
 
-    static let shared = ContextualTranslationService()
+    static let shared = ContextualTranslationService(
+        payloadStore: AppDatabase.shared.map { ContextTranslationStore(db: $0) }
+    )
     static let defaultMaximumCachedEntries = 32
     static let maximumOutputUTF16Units = 8_192
     static let contextAlgorithmVersion = "layout-block-v1"
 
     private struct CacheKey: Hashable {
+        let documentSHA256: String
         let sentenceUTF8: [UInt8]
         let selectedSourceUTF8: [UInt8]
         let selectedTokenSpans: [UTF16Span]
@@ -34,6 +37,7 @@ actor ContextualTranslationService {
     /// Reuses a validated whole-block Translation payload across selections
     /// from the same source. Selection-specific extraction still runs per call.
     private struct PayloadCacheKey: Hashable {
+        let documentSHA256: String
         let sourceUTF8: [UInt8]
         let tokens: [TokenIdentity]
         let phraseGroupID: String?
@@ -47,6 +51,7 @@ actor ContextualTranslationService {
     private let maximumCachedEntries: Int
     private let maximumCachedPayloadEntries: Int
     private let isEnabled: @Sendable () -> Bool
+    private let payloadStore: ContextTranslationStore?
     private var cache: [CacheKey: ContextualTranslationCandidate] = [:]
     private var cacheOrder: [CacheKey] = []
     private var payloadCache: [PayloadCacheKey: ContextualTranslationPayload] = [:]
@@ -55,10 +60,12 @@ actor ContextualTranslationService {
     private var requestGeneration = 0
 
     init(maximumCachedEntries: Int = ContextualTranslationService.defaultMaximumCachedEntries,
-         isEnabled: @escaping @Sendable () -> Bool = { FeatureFlags.contextReadingEnabled() }) {
+         isEnabled: @escaping @Sendable () -> Bool = { FeatureFlags.contextReadingEnabled() },
+         payloadStore: ContextTranslationStore? = nil) {
         self.maximumCachedEntries = max(0, maximumCachedEntries)
         self.maximumCachedPayloadEntries = min(8, max(0, maximumCachedEntries))
         self.isEnabled = isEnabled
+        self.payloadStore = payloadStore
     }
 
     func translate(_ request: ContextualTranslationRequest,
@@ -75,7 +82,8 @@ actor ContextualTranslationService {
             throw ContextualTranslationError.invalidConfiguration
         }
 
-        let key = CacheKey(sentenceUTF8: Array(request.sentenceText.utf8),
+        let key = CacheKey(documentSHA256: request.documentSHA256,
+                           sentenceUTF8: Array(request.sentenceText.utf8),
                            selectedSourceUTF8: Array(request.selectedSourcePhrase.utf8),
                            selectedTokenSpans: request.selectedSourceSpans,
                            phraseGroupSpan: request.selectedPhraseGroup?.sourceSpan,
@@ -90,7 +98,8 @@ actor ContextualTranslationService {
         }
 
         let generation = cacheGeneration
-        let payloadKey = PayloadCacheKey(sourceUTF8: Array(request.sentenceText.utf8),
+        let payloadKey = PayloadCacheKey(documentSHA256: request.documentSHA256,
+                                         sourceUTF8: Array(request.sentenceText.utf8),
                                          tokens: request.tokens.map {
                                              TokenIdentity(id: $0.id, sourceSpan: $0.sourceSpan)
                                          },
@@ -100,17 +109,61 @@ actor ContextualTranslationService {
                                          targetLanguageIdentifier: targetLanguageIdentifier,
                                          backendVersion: backendVersion,
                                          contextAlgorithmVersion: Self.contextAlgorithmVersion)
+        let persistentCacheKey = ContextTranslationPayloadCacheIdentity.cacheKey(
+            request: request,
+            sourceLanguageIdentifier: sourceLanguageIdentifier,
+            targetLanguageIdentifier: targetLanguageIdentifier,
+            backendVersion: backendVersion,
+            contextAlgorithmVersion: Self.contextAlgorithmVersion
+        )
+        var cachedPayload = payloadCache[payloadKey]
+        var loadedFromPersistentStore = false
+        if cachedPayload != nil {
+            touchPayload(payloadKey)
+        } else if maximumCachedPayloadEntries > 0,
+                  let payloadStore,
+                  let persistentCacheKey {
+            do {
+                if let encodedSnapshot = try payloadStore.load(cacheKey: persistentCacheKey,
+                                                               documentSHA256: request.documentSHA256) {
+                    if let restored = ContextualTranslationPayloadSnapshot.decode(encodedSnapshot) {
+                        cachedPayload = restored
+                        loadedFromPersistentStore = true
+                    } else {
+                        try payloadStore.remove(cacheKey: persistentCacheKey,
+                                                documentSHA256: request.documentSHA256)
+                        DiagLog.log("context translation: corrupt payload cache key=\(persistentCacheKey.prefix(8))")
+                    }
+                }
+            } catch {
+                DiagLog.log("context translation: payload cache read failed key=\(persistentCacheKey.prefix(8)) error=\(error.localizedDescription)")
+            }
+        }
+        try Task.checkCancellation()
+        guard requestGeneration == self.requestGeneration else {
+            throw ContextualTranslationError.staleRequest
+        }
+        guard isEnabled() else { throw ContextualTranslationError.disabled }
         let candidate: ContextualTranslationCandidate
         var payloadToCache: ContextualTranslationPayload?
-        if let cachedPayload = payloadCache[payloadKey] {
-            touchPayload(payloadKey)
+        var payloadToPersist: ContextualTranslationPayload?
+        if let cachedPayload {
             do {
                 candidate = try ContextualTranslationAlignment.decode(request: request,
                                                                         payload: cachedPayload)
+                if loadedFromPersistentStore { payloadToCache = cachedPayload }
             } catch {
                 // A payload can be valid for one selected token and omit another.
                 // Never reuse its candidate blindly; retry the translator once.
                 removePayload(payloadKey)
+                if loadedFromPersistentStore, let payloadStore, let persistentCacheKey {
+                    do {
+                        try payloadStore.remove(cacheKey: persistentCacheKey,
+                                                documentSHA256: request.documentSHA256)
+                    } catch {
+                        DiagLog.log("context translation: payload cache invalidation failed key=\(persistentCacheKey.prefix(8)) error=\(error.localizedDescription)")
+                    }
+                }
                 let payload = try await translatedPayload(request: request,
                                                           sourceLanguageIdentifier: sourceLanguageIdentifier,
                                                           targetLanguageIdentifier: targetLanguageIdentifier,
@@ -118,6 +171,7 @@ actor ContextualTranslationService {
                                                           using: translator)
                 candidate = try ContextualTranslationAlignment.decode(request: request, payload: payload)
                 payloadToCache = payload
+                payloadToPersist = payload
             }
         } else {
             let payload = try await translatedPayload(request: request,
@@ -127,15 +181,37 @@ actor ContextualTranslationService {
                                                       using: translator)
             candidate = try ContextualTranslationAlignment.decode(request: request, payload: payload)
             payloadToCache = payload
+            payloadToPersist = payload
         }
-        if generation == cacheGeneration, maximumCachedEntries > 0 {
-            cache[key] = candidate
-            touch(key)
-            evictIfNeeded()
-        }
-        if generation == cacheGeneration, maximumCachedPayloadEntries > 0,
-           let payloadToCache {
-            storePayload(payloadToCache, for: payloadKey)
+        try Task.checkCancellation()
+        if generation == cacheGeneration,
+           requestGeneration == self.requestGeneration,
+           !Task.isCancelled,
+           isEnabled() {
+            if maximumCachedEntries > 0 {
+                cache[key] = candidate
+                touch(key)
+                evictIfNeeded()
+            }
+            if maximumCachedPayloadEntries > 0, let payloadToCache {
+                storePayload(payloadToCache, for: payloadKey)
+            }
+            if let payloadToPersist,
+               maximumCachedPayloadEntries > 0,
+               let payloadStore,
+               let persistentCacheKey {
+                if let encodedSnapshot = ContextualTranslationPayloadSnapshot.encode(payloadToPersist) {
+                    do {
+                        _ = try payloadStore.save(cacheKey: persistentCacheKey,
+                                                  documentSHA256: request.documentSHA256,
+                                                  payload: encodedSnapshot)
+                    } catch {
+                        DiagLog.log("context translation: payload cache write failed key=\(persistentCacheKey.prefix(8)) error=\(error.localizedDescription)")
+                    }
+                } else {
+                    DiagLog.log("context translation: payload snapshot exceeded validation bounds key=\(persistentCacheKey.prefix(8))")
+                }
+            }
         }
         return candidate
     }
@@ -146,6 +222,12 @@ actor ContextualTranslationService {
         payloadCache.removeAll(keepingCapacity: false)
         payloadCacheOrder.removeAll(keepingCapacity: false)
         cacheGeneration &+= 1
+    }
+
+    /// Clears both in-memory translation caches and the optional disk cache.
+    func clearAllCaches() throws {
+        clearCache()
+        try payloadStore?.clearAll()
     }
 
     func invalidatePendingRequests() {

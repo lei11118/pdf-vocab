@@ -11,8 +11,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.72.0"
-    CURRENT_PROJECT_VERSION: "123"
+    MARKETING_VERSION: "0.73.0"
+    CURRENT_PROJECT_VERSION: "124"
 
 packages:
   GRDB:
@@ -21,6 +21,9 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation
     from: 0.9.19
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath.git
+    revision: fa8244ed032f4a1ade4cb0571bf87d2f1a9fd2d7
 
 targets:
   PdfVocab:
@@ -63,6 +66,7 @@ targets:
     dependencies:
       - package: GRDB
       - package: ZIPFoundation
+      - package: SwiftMath
 
   PdfVocabTests:
     type: bundle.unit-test

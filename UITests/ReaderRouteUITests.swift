@@ -352,3 +352,312 @@ final class ReaderRouteUITests:XCTestCase {
     }
 
 }
+
+extension ReaderRouteUITests {
+    @objc func testHumanReadingAuditUsesLiveReaderDictionaryMathAndVisionOCR() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+
+        let nativeDocument = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
+        XCTAssertTrue(nativeDocument.waitForExistence(timeout: 20), "The DEBUG route imports the generated searchable PDF fixture through DocumentStore")
+        nativeDocument.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let canvas = app.descendants(matching: .any).matching(identifier: "reader.pdf-canvas").firstMatch
+        XCTAssertTrue(observer.waitForExistence(timeout: 15))
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        let initial = waitForAudit(observer, timeout: 20) { snapshot in
+            point(in: snapshot, key: "wordPoints", text: "function", source: "text") != nil
+                && point(in: snapshot, key: "wordPoints", text: "E=mc²", source: "text") != nil
+                && point(in: snapshot, key: "linkPoints", text: "classroom", source: "link") != nil
+        }
+        XCTAssertNotNil(initial, "The read-only observer reports real text, line, and link geometry from the imported PDF")
+        attachAuditScreenshot("synthetic-searchable-pdf-before-interaction", app: app)
+
+        let functionPoint = point(in: initial, key: "wordPoints", text: "function", source: "text")
+        XCTAssertNotNil(functionPoint)
+        coordinate(for: try XCTUnwrap(functionPoint), in: app).tap()
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty })
+        XCTAssertFalse(app.staticTexts["word-card-title"].exists, "A single tap on ordinary text does not open a word card")
+
+        coordinate(for: try XCTUnwrap(functionPoint), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "function" })
+        XCTAssertTrue(app.staticTexts["word-card-title"].waitForExistence(timeout: 10))
+        let dictionaryEntry = app.descendants(matching: .any).matching(identifier: "word-card-dictionary-entry").firstMatch
+        XCTAssertTrue(dictionaryEntry.waitForExistence(timeout: 15), "The selection card uses the production DictionaryService")
+        attachAuditScreenshot("synthetic-searchable-pdf-double-tap-dictionary", app: app)
+
+        let linkPoint = point(in: initial, key: "linkPoints", text: "classroom", source: "link")
+        XCTAssertNotNil(linkPoint)
+        coordinate(for: try XCTUnwrap(linkPoint), in: app).tap()
+        XCTAssertEqual(waitForAudit(observer, timeout: 15) { ($0["page"] as? Int) == 1 }?["page"] as? Int, 1,
+                       "A single tap on the actual PDF link annotation navigates to its destination")
+
+        let pageIndicator = app.buttons["reader.page-indicator"].firstMatch
+        XCTAssertTrue(pageIndicator.waitForExistence(timeout: 10))
+        pageIndicator.tap()
+        let pageInput = app.textFields.firstMatch
+        XCTAssertTrue(pageInput.waitForExistence(timeout: 10))
+        pageInput.tap()
+        pageInput.typeText("1")
+        app.buttons["跳转"].tap()
+        XCTAssertEqual(waitForAudit(observer, timeout: 15) { ($0["page"] as? Int) == 0 }?["page"] as? Int, 0)
+
+        let pageZero = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let classroomWord = point(in: pageZero, key: "wordPoints", text: "classroom", source: "text")
+        XCTAssertNotNil(classroomWord)
+        coordinate(for: try XCTUnwrap(classroomWord), in: app).press(forDuration: 1.0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "classroom" },
+                         "Long press on linked text selects it instead of following the link")
+        attachAuditScreenshot("synthetic-searchable-pdf-long-press-linked-word", app: app)
+
+        closeReaderWindow(in: app)
+        openReaderSettings(app)
+        let cacheButton = app.buttons["clear-context-translation-cache"].firstMatch
+        XCTAssertTrue(cacheButton.waitForExistence(timeout: 10))
+        cacheButton.tap()
+        let cacheResult = app.descendants(matching: .any).matching(identifier: "context-translation-cache-result").firstMatch
+        XCTAssertTrue(cacheResult.waitForExistence(timeout: 20), "Cache clearing reports its actual success or failure")
+        let cacheMessage = [(cacheResult.value as? String), cacheResult.label]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let cacheAttachment = XCTAttachment(string: "human-reading-audit cache clear: \(cacheMessage)", uniformTypeIdentifier: "public.plain-text")
+        cacheAttachment.lifetime = .keepAlways
+        add(cacheAttachment)
+        XCTAssertTrue(cacheMessage.contains("语境翻译缓存已清理"), "Cache clear should succeed on the healthy audit database; actual result: \(cacheMessage)")
+
+        let masterSwitch = app.switches["context-reading-toggle"]
+        let mathSwitch = app.switches["math-reading-toggle"]
+        XCTAssertTrue(masterSwitch.waitForExistence(timeout: 10))
+        XCTAssertTrue(mathSwitch.waitForExistence(timeout: 10))
+        setSwitch(masterSwitch, to: true)
+        XCTAssertTrue(mathSwitch.isEnabled, "The math subfeature is enabled only under the master switch")
+        setSwitch(mathSwitch, to: true)
+        closeReaderPanel(in: app, title: "设置")
+
+        let formulaLine = point(in: waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 },
+                                key: "wordPoints", text: "E=mc²", source: "text")
+        XCTAssertNotNil(formulaLine)
+        coordinate(for: try XCTUnwrap(formulaLine), in: app).tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        let mathSource = app.staticTexts["math-card-source"]
+        XCTAssertTrue(mathSource.waitForExistence(timeout: 15), "Triple tap routes selected formula text through MathReadingService")
+        XCTAssertTrue(mathSource.label.contains("E=mc²"))
+        XCTAssertTrue(app.staticTexts["math-card-status"].label.contains("已解析"))
+        let latexCopy = app.buttons["math-card-copy-latex"]
+        XCTAssertTrue(latexCopy.waitForExistence(timeout: 10))
+        latexCopy.tap()
+        XCTAssertTrue(latexCopy.label.contains("已复制"), "The LaTeX copy action writes to UIPasteboard")
+        attachAuditScreenshot("synthetic-searchable-pdf-math-card", app: app)
+
+        let resizeGrip = app.otherElements["window-resize-grip"].firstMatch
+        XCTAssertTrue(resizeGrip.waitForExistence(timeout: 10))
+        let resizeRoot = app.coordinate(withNormalizedOffset: .zero)
+        let gripBefore = resizeGrip.frame
+        let gripStart = resizeRoot.withOffset(CGVector(dx: gripBefore.midX, dy: gripBefore.midY))
+        gripStart.press(forDuration: 0.12,
+                        thenDragTo: gripStart.withOffset(CGVector(dx: 0, dy: -360)),
+                        withVelocity: .slow,
+                        thenHoldForDuration: 0.1)
+        let compactMath = app.descendants(matching: .any).matching(identifier: "compact-math-card").firstMatch
+        XCTAssertTrue(compactMath.waitForExistence(timeout: 10), "The capsule exposes a compact math source and parse status")
+        XCTAssertTrue(app.staticTexts["compact-math-source"].label.contains("E=mc²"))
+        attachAuditScreenshot("synthetic-searchable-pdf-compact-math-summary", app: app)
+        app.staticTexts["compact-math-source"].firstMatch.tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        XCTAssertTrue(mathSource.waitForExistence(timeout: 10))
+
+        openReaderSettings(app)
+        setSwitch(app.switches["math-reading-toggle"], to: false)
+        XCTAssertFalse(app.staticTexts["math-card-source"].exists, "Turning math off clears its card")
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty },
+                         "Turning math off also clears the live PDF selection")
+        setSwitch(app.switches["math-reading-toggle"], to: true)
+        closeReaderPanel(in: app, title: "设置")
+
+        let formulaAgain = point(in: waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 },
+                                 key: "wordPoints", text: "E=mc²", source: "text")
+        XCTAssertNotNil(formulaAgain)
+        coordinate(for: try XCTUnwrap(formulaAgain), in: app).tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        XCTAssertTrue(mathSource.waitForExistence(timeout: 15))
+        openReaderSettings(app)
+        setSwitch(app.switches["context-reading-toggle"], to: false)
+        XCTAssertFalse(app.switches["math-reading-toggle"].isEnabled)
+        XCTAssertFalse(app.staticTexts["math-card-source"].exists, "Turning master off clears its math card")
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty },
+                         "Turning master off also clears the live PDF selection")
+        setSwitch(app.switches["context-reading-toggle"], to: true)
+        setSwitch(app.switches["math-reading-toggle"], to: false)
+        closeReaderPanel(in: app, title: "设置")
+
+        let currentSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let functionAgain = point(in: currentSnapshot, key: "wordPoints", text: "function", source: "text")
+        XCTAssertNotNil(functionAgain)
+        coordinate(for: try XCTUnwrap(functionAgain), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "contextual-translation-section").firstMatch
+            .waitForExistence(timeout: 15), "Contextual translation uses the production ReaderView card and TranslationSession adapter")
+        XCTAssertTrue(dictionaryEntry.waitForExistence(timeout: 15), "The dictionary fallback remains available")
+
+        let candidate = app.staticTexts["contextual-translation-candidate"].firstMatch
+        let preparation = app.staticTexts["contextual-translation-status-preparation"].firstMatch
+        let unavailable = app.staticTexts["contextual-translation-status-unavailable"].firstMatch
+        let unsupported = app.staticTexts["contextual-translation-status-unsupported"].firstMatch
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let olderThanTranslationAlignmentOS = osVersion.majorVersion < 26
+            || (osVersion.majorVersion == 26 && osVersion.minorVersion < 4)
+        let translationSettled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            candidate.exists || preparation.exists || unsupported.exists
+                || (unavailable.exists && olderThanTranslationAlignmentOS
+                    && unavailable.label.contains("iPadOS 26.4"))
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [translationSettled], timeout: 60), .completed,
+                       "Record a live candidate or its actual language/system preparation state")
+        let translationState = [candidate, preparation, unavailable, unsupported]
+            .filter(\.exists)
+            .map { "\($0.identifier)=\($0.label)" }
+            .joined(separator: "\n")
+        print("HUMAN_READING_AUDIT_TRANSLATION_STATE\n\(translationState)")
+        let translationAttachment = XCTAttachment(string: "Production TranslationSession state (a candidate is a real system result; other states are not translation success):\n\(translationState)",
+                                                   uniformTypeIdentifier: "public.plain-text")
+        translationAttachment.lifetime = .keepAlways
+        add(translationAttachment)
+        XCTAssertTrue(candidate.exists || preparation.exists || unsupported.exists
+                      || (unavailable.exists && olderThanTranslationAlignmentOS
+                          && unavailable.label.contains("iPadOS 26.4")),
+                      "An unavailable translation state must identify the actual pre-26.4 OS requirement; state: \(translationState)")
+        attachAuditScreenshot("synthetic-searchable-pdf-live-context-translation-state", app: app)
+
+        closeReaderWindow(in: app)
+        app.buttons["reader.more-menu"].tap()
+        app.cells.buttons["全文搜索"].tap()
+        XCTAssertTrue(app.textFields["在文档中搜索"].waitForExistence(timeout: 10))
+        closeReaderPanel(in: app, title: "全文搜索")
+        XCTAssertTrue(app.buttons["reader.page-indicator"].exists, "Closing search leaves the production Reader open")
+
+        app.buttons["reader.more-menu"].tap()
+        app.cells.buttons["缩放"].tap()
+        app.buttons["200%"].tap()
+        XCTAssertTrue(canvas.exists, "Zoom leaves the same Reader canvas installed")
+        app.buttons["reader.more-menu"].tap()
+        app.cells.buttons["页面排布"].tap()
+        app.cells.buttons["横向连续"].tap()
+        XCTAssertTrue(canvas.exists)
+        app.buttons["reader.more-menu"].tap()
+        app.cells.buttons["页面排布"].tap()
+        app.cells.buttons["纵向连续"].tap()
+        XCTAssertTrue(app.buttons["reader.page-indicator"].exists)
+
+        app.buttons["返回文档库"].tap()
+        let scanDocument = app.buttons.containing(.staticText, identifier: "Human-reading-audit-scan").firstMatch
+        XCTAssertTrue(scanDocument.waitForExistence(timeout: 20))
+        scanDocument.tap()
+        let scanCanvas = app.descendants(matching: .any).matching(identifier: "reader.pdf-canvas").firstMatch
+        XCTAssertTrue(scanCanvas.waitForExistence(timeout: 15))
+        let scanSnapshot = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        XCTAssertTrue(scanSnapshot.waitForExistence(timeout: 10))
+        let ocrReady = waitForAudit(scanSnapshot, timeout: 90) {
+            point(in: $0, key: "wordPoints", text: "classroom", source: "ocr") != nil
+        }
+        XCTAssertNotNil(ocrReady, "The raster-only PDF exposes words returned by the existing Vision OCR path")
+        attachAuditScreenshot("synthetic-raster-pdf-after-vision-ocr", app: app)
+        let ocrPoint = point(in: ocrReady, key: "wordPoints", text: "classroom", source: "ocr")
+        XCTAssertNotNil(ocrPoint)
+        coordinate(for: try XCTUnwrap(ocrPoint), in: app).tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        XCTAssertNotNil(waitForAudit(scanSnapshot, timeout: 20) { ($0["selectedText"] as? String)?.contains("classroom") == true },
+                         "Double tap uses the current Vision word rectangle through ReaderCoordinator")
+        attachAuditScreenshot("synthetic-raster-pdf-vision-word-selection", app: app)
+    }
+
+    private func openReaderSettings(_ app: XCUIApplication) {
+        let more = app.buttons["reader.more-menu"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10))
+        if !more.isHittable {
+            let close = app.buttons["关闭窗口"].firstMatch
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            let start = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: close.frame.midX - 280, dy: close.frame.minY + 6))
+            start.press(forDuration: 0.12,
+                        thenDragTo: start.withOffset(CGVector(dx: -320, dy: 500)),
+                        withVelocity: .slow,
+                        thenHoldForDuration: 0.1)
+        }
+        XCTAssertTrue(more.isHittable)
+        more.tap()
+        let settings = app.cells.buttons["设置"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+    }
+
+    private func closeReaderWindow(in app: XCUIApplication) {
+        let close = app.buttons["关闭窗口"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        close.tap()
+    }
+
+    private func closeReaderPanel(in app: XCUIApplication, title: String) {
+        let panel = app.descendants(matching: .any)
+            .matching(identifier: "reader-panel.\(title)")
+            .firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), "The \(title) panel must be open before closing it")
+        let close = panel.buttons["关闭窗口"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "Close the \(title) panel, leaving any word or math card intact")
+        close.tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: panel)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 10), .completed)
+    }
+
+    private func setSwitch(_ control: XCUIElement, to enabled: Bool) {
+        let value = control.value as? String
+        let isEnabled = value == "1" || value?.lowercased() == "on"
+        if isEnabled != enabled { control.tap() }
+    }
+
+    private func auditJSON(_ observer: XCUIElement) -> [String: Any]? {
+        let value = (observer.value as? String) ?? observer.label
+        guard let data = value.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private func waitForAudit(_ observer: XCUIElement,
+                              timeout: TimeInterval,
+                              condition: @escaping ([String: Any]) -> Bool) -> [String: Any]? {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let snapshot = self.auditJSON(observer) else { return false }
+            return condition(snapshot)
+        }, object: observer)
+        guard XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed else { return nil }
+        return auditJSON(observer)
+    }
+
+    private func point(in snapshot: [String: Any]?,
+                       key: String,
+                       text: String,
+                       source: String) -> HumanAuditPoint? {
+        guard let snapshot,
+              let entries = snapshot[key] as? [[String: Any]],
+              let match = entries.first(where: {
+                  $0["text"] as? String == text && $0["source"] as? String == source
+              }),
+              let x = match["x"] as? NSNumber,
+              let y = match["y"] as? NSNumber else { return nil }
+        return HumanAuditPoint(text: text, source: source, x: CGFloat(truncating: x), y: CGFloat(truncating: y))
+    }
+
+    private func coordinate(for point: HumanAuditPoint, in app: XCUIApplication) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x, dy: point.y))
+    }
+
+    private func attachAuditScreenshot(_ name: String, app: XCUIApplication) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}
+
+private struct HumanAuditPoint {
+    let text: String
+    let source: String
+    let x: CGFloat
+    let y: CGFloat
+}

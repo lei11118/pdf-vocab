@@ -19,6 +19,7 @@ struct ContextualTranslationPhraseGroup: Equatable, Sendable {
 /// A validated, sentence-local request. The sentence is sent to Translation,
 /// while only the selected token range is ever returned to the card.
 struct ContextualTranslationRequest: Equatable, Sendable {
+    let documentSHA256: String
     let sentenceText: String
     let tokens: [ContextualTranslationToken]
     let selectedTokenIDs: [String]
@@ -176,7 +177,8 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         }
         let selectedIDs = phraseGroup.map { [$0.id] } ?? selectedIndices.map { tokens[$0].id }
         let resolvedSelectedPhrase = phraseGroup?.sourceSurface ?? selectedPhrase
-        return ContextualTranslationRequest(sentenceText: context.text,
+        return ContextualTranslationRequest(documentSHA256: context.documentSHA256,
+                                            sentenceText: context.text,
                                             tokens: tokens,
                                             selectedTokenIDs: selectedIDs,
                                             selectedSourceSpans: localSelections,

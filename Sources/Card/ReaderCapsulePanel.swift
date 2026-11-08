@@ -44,6 +44,8 @@ struct ReaderCapsulePanel<Content:View>: View {
         } compact: {
             EmptyView()
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reader-panel.\(title)")
     }
 }
 

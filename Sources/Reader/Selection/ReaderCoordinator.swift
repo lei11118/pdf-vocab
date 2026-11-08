@@ -1508,6 +1508,91 @@ final class ReaderCoordinator: NSObject {
         pdfView?.document?.index(for: page) ?? -1
     }
 
+    #if DEBUG
+    /// Read-only geometry snapshot for the DEBUG-only human-reading UI fixture.
+    /// It reports PDF text/OCR data already owned by this reader and never selects text.
+    func humanReadingAuditSnapshotJSON() -> String {
+        guard let pdfView, let page = pdfView.currentPage else { return "{}" }
+        let pageIndex = currentPageIndexFor(page: page)
+        guard pageIndex >= 0 else { return "{}" }
+        let pageBounds = page.bounds(for: .mediaBox)
+        var wordPoints: [[String: Any]] = []
+        var nativeWordRects: [(text: String, rect: CGRect)] = []
+        var linePoints: [[String: Any]] = []
+        let source = page.string ?? ""
+        let sourceNSString = source as NSString
+
+        func screenPoint(_ pagePoint: CGPoint) -> CGPoint? {
+            let viewPoint = pdfView.convert(pagePoint, from: page)
+            guard let window = pdfView.window else { return nil }
+            return pdfView.convert(viewPoint, to: window)
+        }
+
+        func pointEntry(text: String, point: CGPoint, source: String) -> [String: Any] {
+            ["text": text,
+             "x": Double(point.x),
+             "y": Double(point.y),
+             "source": source]
+        }
+
+        let wordPattern = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}αΑ²]+(?:[=^][\\p{L}\\p{N}αΑ²]+)*")
+        for match in (wordPattern?.matches(in: source, range: NSRange(location: 0, length: sourceNSString.length)) ?? []).prefix(240) {
+            guard let selection = page.selection(for: match.range) else { continue }
+            let rect = selection.bounds(for: page)
+            guard SelectionGeometry.isValid(rect), let point = screenPoint(CGPoint(x: rect.midX, y: rect.midY)) else { continue }
+            let text = sourceNSString.substring(with: match.range)
+            nativeWordRects.append((text, rect))
+            wordPoints.append(pointEntry(text: text, point: point, source: "text"))
+        }
+
+        var lineStart = 0
+        while lineStart < sourceNSString.length {
+            let lineRange = sourceNSString.lineRange(for: NSRange(location: lineStart, length: 0))
+            lineStart = NSMaxRange(lineRange)
+            let trimmedLine = sourceNSString.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
+            let contentRange = sourceNSString.range(of: trimmedLine, options: [], range: lineRange)
+            guard contentRange.location != NSNotFound,
+                  let selection = page.selection(for: contentRange) else { continue }
+            let rect = selection.bounds(for: page)
+            guard SelectionGeometry.isValid(rect), let point = screenPoint(CGPoint(x: rect.midX, y: rect.midY)) else { continue }
+            let text = sourceNSString.substring(with: contentRange)
+            linePoints.append(pointEntry(text: text, point: point, source: "text"))
+        }
+
+        if let words = ocrWords(for: page) {
+            for word in words.prefix(240) {
+                let rect = OCRService.pageRect(from: word, pageBounds: pageBounds)
+                guard SelectionGeometry.isValid(rect), let point = screenPoint(CGPoint(x: rect.midX, y: rect.midY)) else { continue }
+                wordPoints.append(pointEntry(text: word.text, point: point, source: "ocr"))
+            }
+        }
+
+        let linkPoints: [[String: Any]] = page.annotations.compactMap { annotation in
+            guard annotation.type == "Link", SelectionGeometry.isValid(annotation.bounds),
+                  let point = screenPoint(CGPoint(x: annotation.bounds.midX, y: annotation.bounds.midY)) else { return nil }
+            let nearest = nativeWordRects.min {
+                hypot($0.rect.midX - annotation.bounds.midX, $0.rect.midY - annotation.bounds.midY)
+                    < hypot($1.rect.midX - annotation.bounds.midX, $1.rect.midY - annotation.bounds.midY)
+            }
+            return pointEntry(text: nearest?.text ?? "", point: point, source: "link")
+        }
+
+        let snapshot: [String: Any] = [
+            "page": pageIndex,
+            "scale": Double(pdfView.scaleFactor),
+            "selectedText": selectionText,
+            "wordPoints": wordPoints,
+            "linePoints": linePoints,
+            "linkPoints": linkPoints
+        ]
+        guard JSONSerialization.isValidJSONObject(snapshot),
+              let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
+    }
+    #endif
+
     /// 识别全部完成后清缓存(宿主在 OCR 结束时调用,让下一页读取新数据)。
     func ocrDidFinish() {
         ocrWordsCache.removeAll()

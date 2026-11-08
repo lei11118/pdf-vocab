@@ -301,13 +301,18 @@ struct ContextualTranslationTaskView: View {
             case .needsPreparation:
                 Text("需要先由你准备英语到简体中文的离线翻译语言。准备状态不代表 Token 对齐成功。")
                     .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
+                    .accessibilityIdentifier("contextual-translation-status-preparation")
                 OfflineTranslationPreparationView(model: preparationModel)
                 retryButton
             case .unsupported:
                 Text("此设备当前不支持英语到简体中文的端侧语境翻译；下方仍显示词典释义。")
                     .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
+                    .accessibilityIdentifier("contextual-translation-status-unsupported")
             case .unavailable(let message), .failed(let message):
-                Text(message).font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
+                Text(message)
+                    .font(DS.Fonts.caption)
+                    .foregroundStyle(DS.foreground2)
+                    .accessibilityIdentifier("contextual-translation-status-unavailable")
                 retryButton
             case .translating:
                 ProgressView("正在生成选中 Token 的系统对齐候选…").font(DS.Fonts.caption)

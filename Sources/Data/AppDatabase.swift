@@ -242,6 +242,18 @@ final class AppDatabase: @unchecked Sendable {
                           on: "ocr_character_geometry",
                           columns: ["lastAccess"])
         }
+        migrator.registerMigration("v16.contextTranslationPayloads") { db in
+            try db.create(table: "context_translation_payload") { t in
+                t.column("cacheKey", .text).primaryKey()
+                t.column("docSha", .text).notNull()
+                    .references("document", column: "sha256", onDelete: .cascade)
+                t.column("payload", .blob).notNull()
+                t.column("lastAccess", .double).notNull()
+            }
+            try db.create(index: "idx_context_translation_payload_last_access",
+                          on: "context_translation_payload",
+                          columns: ["lastAccess"])
+        }
         return migrator
     }
 }

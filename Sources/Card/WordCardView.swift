@@ -5,6 +5,7 @@ enum ReaderCardContent: Equatable {
     case word(String)
     case sentence(String, Int)
     case contextual(ContextualSelection)
+    case math(MathReadingResult)
 }
 
 /// 词卡与生词本之间的查询、收录及义项选择接口。
@@ -54,6 +55,8 @@ struct WordCardPanel: View {
                 }
             case .contextual(let selection):
                 ContextualCardView(selection: selection, onClose: onClose, vocab: vocab)
+            case .math(let result):
+                MathMeaningCard(result: result, onClose: onClose)
             }
         }
         .onChange(of:content) { _, _ in selectedSentenceWord = nil }
@@ -111,6 +114,7 @@ struct WordCardView: View {
                     .font(DS.Fonts.wordTitle)
                     .foregroundStyle(DS.foreground1)
                     .textSelection(.enabled)
+                    .accessibilityIdentifier("word-card-title")
                 Spacer()
                 if panelClose == nil { closeButton(onClose) }
             }
@@ -128,6 +132,7 @@ struct WordCardView: View {
                     .padding(.top, 24)
             case .found(let entry):
                 foundBody(entry)
+                    .accessibilityIdentifier("word-card-dictionary-entry")
             case .notFound:
                 Text("词库中未找到「\(term)」")
                     .font(.callout)
@@ -485,12 +490,16 @@ struct CompactCardView: View {
             return text
         case .contextual(let selection):
             return selection.displaySurface
+        case .math(let result):
+            return result.sourceText
         }
     }
 
     @ViewBuilder
     var body: some View {
-        if case .contextual(let selection) = content {
+        if case .math(let result) = content {
+            CompactMathCardContent(result: result)
+        } else if case .contextual(let selection) = content {
             CompactContextualCardContent(selection: selection, dictionaryDefinitions: translation)
                 .task(id: content) { await loadTranslation(id: content) }
         } else {
@@ -511,6 +520,7 @@ struct CompactCardView: View {
         switch content {
         case .word(let term): return term
         case .contextual(let selection): return selection.displaySurface
+        case .math: return nil
         case .sentence: return nil
         }
     }

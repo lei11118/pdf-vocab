@@ -27,6 +27,7 @@ struct ReaderView: View {
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
+    @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
     @State private var contextReadingGeneration = 0
     @State private var contextOCRPage: ContextOCRPage?
     @State private var activeContextOCRRunID: UUID?
@@ -117,7 +118,17 @@ struct ReaderView: View {
                 if let cardContent, case .contextual = cardContent {
                     self.cardContent = nil
                     translationRequest = nil
+                } else if let cardContent, case .math = cardContent {
+                    readerHandle.coordinator?.dismissSelection()
+                    self.cardContent = nil
+                    translationRequest = nil
                 }
+            }
+            .onChange(of: mathReadingEnabled) { _, enabled in
+                guard !enabled, let cardContent, case .math = cardContent else { return }
+                readerHandle.coordinator?.dismissSelection()
+                self.cardContent = nil
+                translationRequest = nil
             }
             .onChange(of: pencilHoverPreview) { _, enabled in
                 if !enabled { readerHandle.coordinator?.clearHover() }
@@ -542,6 +553,7 @@ struct ReaderView: View {
                 }
                 .buttonStyle(DSPressableButtonStyle())
                 .accessibilityLabel("第 \(min(currentPage + 1, doc.pageCount)) 页,点按跳转")
+                .accessibilityIdentifier("reader.page-indicator")
 
                 DSIconButton(
                     systemImage: "rectangle.compress.vertical",
@@ -784,6 +796,13 @@ struct ReaderView: View {
             .animation(reduceMotion ? nil : DS.Motion.spring,value:arcAnchor)
             .overlay { captureOverlay }
             .overlay(alignment:.bottom) { captureToast }
+#if DEBUG
+            .overlay(alignment: .topLeading) {
+                if ProcessInfo.processInfo.arguments.contains("--human-reading-audit") {
+                    HumanReadingAuditSnapshotView(handle: readerHandle)
+                }
+            }
+#endif
             // PDFKit and every coordinate-based overlay share this full-bleed root;
             // the reader chrome remains composed by chromeContent in the safe area.
             .ignoresSafeArea()
@@ -793,6 +812,9 @@ struct ReaderView: View {
 
     private func closeReaderCard() {
         if let cardContent, case .contextual = cardContent {
+            readerHandle.coordinator?.dismissSelection()
+            translationRequest = nil
+        } else if let cardContent, case .math = cardContent {
             readerHandle.coordinator?.dismissSelection()
             translationRequest = nil
         }
@@ -1136,6 +1158,19 @@ struct ReaderView: View {
                         if let contextual = info.contextual {
                             guard contextReadingEnabled,
                                   contextual.generation == contextReadingGeneration else { return }
+                        }
+                        let mathSourceText = info.contextual?.displaySurface ?? info.text
+                        if let math = MathCardRouting.resolve(
+                            sourceText: mathSourceText,
+                            contextReadingEnabled: contextReadingEnabled,
+                            mathEnabled: mathReadingEnabled,
+                            contextualSelectionIsCurrent: info.contextual == nil
+                                || info.contextual?.generation == contextReadingGeneration) {
+                            translationRequest = nil
+                            cardContent = .math(math)
+                            return
+                        }
+                        if let contextual = info.contextual {
                             if contextual.tokens.count == 1 || contextual.verifiedPhraseGroupSpan != nil {
                                 translationRequest = nil
                                 cardContent = .contextual(contextual)
@@ -1160,6 +1195,14 @@ struct ReaderView: View {
                         saveProgressNow()
                     },
                     onTranslate: { text in
+                        if let math = MathCardRouting.resolve(
+                            sourceText: text,
+                            contextReadingEnabled: contextReadingEnabled,
+                            mathEnabled: mathReadingEnabled) {
+                            translationRequest = nil
+                            cardContent = .math(math)
+                            return
+                        }
                         let count = WordPicker.countWords(in:text)
                         if SelectionGeometry.isSingleWordText(text) {
                             cardContent = .word(text)

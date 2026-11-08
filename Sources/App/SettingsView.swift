@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
+    @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
     @AppStorage("autoCollectOnSelect") private var autoCollectOnSelect = false
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
@@ -34,6 +35,8 @@ struct SettingsView: View {
     @State private var restoreMessage: String?
     @State private var showStarDictPicker = false
     @State private var dictImporting = false
+    @State private var clearingContextTranslationCache = false
+    @State private var contextTranslationCacheMessage: String?
     @State private var dictionarySources: [DictionarySource] = []
     @State private var dictionaryRevision = 0
     @AppStorage("toolArc.leftHanded") private var leftHanded = false
@@ -55,10 +58,39 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("语境 Token 阅读", isOn: $contextReadingEnabled)
+                        .accessibilityIdentifier("context-reading-toggle")
+                    Toggle("数学符号与公式文字", isOn: $mathReadingEnabled)
+                        .disabled(!contextReadingEnabled)
+                        .accessibilityIdentifier("math-reading-toggle")
+                    Button {
+                        clearingContextTranslationCache = true
+                        contextTranslationCacheMessage = nil
+                        Task { @MainActor in
+                            defer { clearingContextTranslationCache = false }
+                            do {
+                                try await ContextualTranslationService.shared.clearAllCaches()
+                                contextTranslationCacheMessage = "语境翻译缓存已清理。"
+                            } catch {
+                                contextTranslationCacheMessage = "清理语境翻译缓存失败：\(error.localizedDescription)"
+                            }
+                        }
+                    } label: {
+                        Label(clearingContextTranslationCache ? "正在清理语境翻译缓存…" : "清理语境翻译缓存",
+                              systemImage: clearingContextTranslationCache ? "hourglass" : "trash")
+                    }
+                    .disabled(clearingContextTranslationCache)
+                    .accessibilityIdentifier("clear-context-translation-cache")
+                    if let contextTranslationCacheMessage {
+                        Text(contextTranslationCacheMessage)
+                            .font(.caption)
+                            .foregroundStyle(contextTranslationCacheMessage.hasPrefix("清理语境翻译缓存失败")
+                                             ? DS.caution : DS.foreground2)
+                            .accessibilityIdentifier("context-translation-cache-result")
+                    }
                 } header: {
                     Text("实验功能")
                 } footer: {
-                    Text("默认关闭。开启后可试用 iPadOS 26.4+ 的系统 Token 语境候选；未对齐时可回到词典释义。数学识别暂未开放。")
+                    Text("默认关闭。Token 阅读可试用 iPadOS 26.4+ 的系统语境候选。数学功能只解析选中文字中的公式文本；不识别公式图片，也不提供图像 OCR。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)
