@@ -325,6 +325,8 @@ final class ContextTranslationPersistenceTests: XCTestCase {
         XCTAssertEqual(try payloadCount(documentSHA256, db: db), 0)
     }
 
+    private func uniqueDocumentSHA() -> String { "context-translation-test-\(UUID().uuidString)" }
+
     private func insertDocument(_ sha: String, db: AppDatabase) throws {
         try db.dbQueue.write { database in
             try database.execute(sql: """
