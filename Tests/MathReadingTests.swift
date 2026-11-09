@@ -75,7 +75,7 @@ final class MathReadingTests: XCTestCase {
         let power = try XCTUnwrap(findNodes(in: try XCTUnwrap(negativePower.ast), kind: .scripts).first)
         XCTAssertEqual(power.base?.kind, .sequence)
         XCTAssertEqual(power.base?.children.compactMap(\.value).joined(), "10")
-        XCTAssertEqual(power.superscriptExpression?.children.compactMap(\.value).joined(), "-3")
+        XCTAssertEqual(power.superscriptExpression?.children.compactMap(\.value).joined(), "−3")
 
         let partial = try parsed("∂²ψ/∂x²")
         let partialLatex = try XCTUnwrap(partial.latex)
