@@ -354,7 +354,7 @@ final class ReaderRouteUITests:XCTestCase {
 }
 
 extension ReaderRouteUITests {
-    @objc func testHumanReadingAuditUsesLiveReaderDictionaryMathAndVisionOCR() throws {
+    @objc func testHumanReadingAuditUsesLiveReaderDictionaryAndMath() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
@@ -578,7 +578,36 @@ extension ReaderRouteUITests {
         guard setSwitch(app.switches["context-reading-toggle"], to: true, in: app) else { return }
         guard setSwitch(app.switches["math-reading-toggle"], to: false, in: app) else { return }
         closeReaderPanel(in: app, title: "设置")
+    }
 
+    @objc func testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+
+        let nativeDocument = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
+        XCTAssertTrue(nativeDocument.waitForExistence(timeout: 20), "The DEBUG route imports the generated searchable PDF fixture through DocumentStore")
+        nativeDocument.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let canvas = app.descendants(matching: .any).matching(identifier: "reader.pdf-canvas").firstMatch
+        XCTAssertTrue(observer.waitForExistence(timeout: 15))
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        let initial = waitForAudit(observer, timeout: 20) { snapshot in
+            self.point(in: snapshot, key: "wordPoints", text: "function", source: "text") != nil
+        }
+        XCTAssertNotNil(initial, "The imported searchable PDF exposes real text geometry for live translation")
+        attachAuditScreenshot("synthetic-searchable-pdf-translation-before-interaction", app: app)
+
+        openReaderSettings(app)
+        let masterSwitch = app.switches["context-reading-toggle"]
+        let mathSwitch = app.switches["math-reading-toggle"]
+        XCTAssertTrue(masterSwitch.waitForExistence(timeout: 10))
+        XCTAssertTrue(mathSwitch.waitForExistence(timeout: 10))
+        guard setSwitch(masterSwitch, to: true, in: app) else { return }
+        XCTAssertFalse(switchValue(mathSwitch) ?? true, "The DEBUG audit fixture starts with math reading off")
+        closeReaderPanel(in: app, title: "设置")
+
+        let dictionaryEntry = app.descendants(matching: .any).matching(identifier: "word-card-dictionary-entry").firstMatch
         let currentSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
         let functionAgain = point(in: currentSnapshot, key: "wordPoints", text: "function", source: "text")
         XCTAssertNotNil(functionAgain)

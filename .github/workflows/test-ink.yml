@@ -18,7 +18,7 @@ on:
         required: false
         default: false
       human_reading_only:
-        description: "Run only the live searchable-PDF math reading workflow"
+        description: "Run only the searchable-PDF math and live translation/OCR UI audits"
         type: boolean
         required: false
         default: false
@@ -88,7 +88,10 @@ jobs:
           if [ "${{ inputs.unit_only }}" = "true" ]; then
             TEST_ARGS=(-only-testing:PdfVocabTests)
           elif [ "${{ inputs.human_reading_only }}" = "true" ]; then
-            TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryMathAndVisionOCR)
+            TEST_ARGS=(
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryAndMath
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR
+            )
           elif [ "${{ inputs.gesture_only }}" = "true" ]; then
             xcodebuild -help 2>&1 | sed -n '/only-testing/p'
             TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen)
@@ -96,6 +99,81 @@ jobs:
             TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testWorkspaceNavigationAtPortraitAndLandscapeWidths)
           fi
           xcodebuild test -project PdfVocab.xcodeproj -scheme PdfVocab -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath build/InkTests.xcresult "${TEST_ARGS[@]}" CODE_SIGNING_ALLOWED=NO
+      - name: Collect simulator app diagnostics
+        if: ${{ always() && inputs.human_reading_only }}
+        run: |
+          mkdir -p build/SimulatorDiagnostics
+          python3 - <<'PY'
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          import uuid
+          from pathlib import Path
+
+          base_udid = os.environ.get("SIMULATOR_UDID", "")
+          try:
+              uuid.UUID(base_udid)
+          except ValueError:
+              print("Selected simulator UUID unavailable; no app diagnostics collected.")
+              sys.exit(0)
+
+          try:
+              output = subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "-j"],
+                  text=True,
+                  stderr=subprocess.DEVNULL,
+              )
+              devices_by_runtime = json.loads(output).get("devices", {})
+          except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+              print("Simulator inventory unavailable; no app diagnostics collected.")
+              sys.exit(0)
+
+          selected_runtime = next(
+              (runtime for runtime, devices in devices_by_runtime.items()
+               if any(device.get("udid") == base_udid for device in devices)),
+              None,
+          )
+          if selected_runtime is None:
+              print("Selected simulator not found; no app diagnostics collected.")
+              sys.exit(0)
+
+          output_dir = Path("build/SimulatorDiagnostics")
+          captured = 0
+          candidates = [
+              device for device in devices_by_runtime[selected_runtime]
+              if device.get("udid") == base_udid
+              or ("iPad" in device.get("name", "") and "clone" in device.get("name", "").lower())
+          ]
+          for device in candidates:
+              udid = device.get("udid", "")
+              try:
+                  safe_udid = str(uuid.UUID(udid))
+              except ValueError:
+                  continue
+              if not device.get("isAvailable", True) or device.get("state") not in {"Booted", "Shutdown"}:
+                  continue
+              result = subprocess.run(
+                  ["xcrun", "simctl", "get_app_container", udid, "com.lei11118.pdfvocab", "data"],
+                  capture_output=True,
+                  text=True,
+              )
+              if result.returncode != 0:
+                  continue
+              log_path = Path(result.stdout.strip()) / "Documents" / "diagnostics.log"
+              if not log_path.is_file():
+                  continue
+              shutil.copy2(log_path, output_dir / f"{safe_udid}.log")
+              captured += 1
+          print(f"Collected {captured} simulator diagnostics.log file(s).")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.human_reading_only }}
+        with:
+          name: SimulatorDiagnostics
+          path: build/SimulatorDiagnostics
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
