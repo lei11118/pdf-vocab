@@ -366,6 +366,8 @@ extension ReaderRouteUITests {
         let canvas = app.descendants(matching: .any).matching(identifier: "reader.pdf-canvas").firstMatch
         XCTAssertTrue(observer.waitForExistence(timeout: 15))
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        let pageIndicator = app.buttons["reader.page-indicator"].firstMatch
+        XCTAssertTrue(pageIndicator.waitForExistence(timeout: 10))
         let initial = waitForAudit(observer, timeout: 20) { snapshot in
             self.point(in: snapshot, key: "wordPoints", text: "function", source: "text") != nil
                 && self.point(in: snapshot, key: "wordPoints", text: "E=mc²", source: "text", edge: .start) != nil
@@ -383,7 +385,11 @@ extension ReaderRouteUITests {
 
         coordinate(for: try XCTUnwrap(functionPoint), in: app).doubleTap()
         XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "function" })
-        XCTAssertTrue(app.staticTexts["word-card-title"].waitForExistence(timeout: 10))
+        let wordCardTitle = app.staticTexts["word-card-title"].firstMatch
+        XCTAssertTrue(wordCardTitle.waitForExistence(timeout: 10))
+        XCTAssertTrue(wordCardTitle.isHittable, "The selected word card title is visible")
+        XCTAssertGreaterThan(wordCardTitle.frame.minY, pageIndicator.frame.maxY,
+                             "The selected word card title appears below the reader top-bar page indicator")
         let dictionaryEntry = app.descendants(matching: .any).matching(identifier: "word-card-dictionary-entry").firstMatch
         XCTAssertTrue(dictionaryEntry.waitForExistence(timeout: 15), "The selection card uses the production DictionaryService")
         attachAuditScreenshot("synthetic-searchable-pdf-double-tap-dictionary", app: app)
@@ -394,7 +400,6 @@ extension ReaderRouteUITests {
         XCTAssertEqual(waitForAudit(observer, timeout: 15) { ($0["page"] as? Int) == 1 }?["page"] as? Int, 1,
                        "A single tap on the actual PDF link annotation navigates to its destination")
 
-        let pageIndicator = app.buttons["reader.page-indicator"].firstMatch
         XCTAssertTrue(pageIndicator.waitForExistence(timeout: 10))
         pageIndicator.tap()
         let pageInput = app.textFields.firstMatch
@@ -432,12 +437,38 @@ extension ReaderRouteUITests {
         let mathSwitch = app.switches["math-reading-toggle"]
         XCTAssertTrue(masterSwitch.waitForExistence(timeout: 10))
         XCTAssertTrue(mathSwitch.waitForExistence(timeout: 10))
-        setSwitch(masterSwitch, to: true)
-        XCTAssertTrue(mathSwitch.isEnabled, "The math subfeature is enabled only under the master switch")
-        setSwitch(mathSwitch, to: true)
+        guard setSwitch(masterSwitch, to: true, in: app) else { return }
+        let mathSwitchBecameEnabled = waitForEnabled(mathSwitch, to: true, timeout: 5)
+        if !mathSwitchBecameEnabled {
+            attachSwitchDiagnostic("math-switch-not-enabled-after-master",
+                                   control: mathSwitch,
+                                   expectedEnabled: true,
+                                   in: app)
+        }
+        XCTAssertTrue(mathSwitchBecameEnabled, "The math subfeature is enabled only under the master switch")
+        guard mathSwitchBecameEnabled else { return }
+        guard setSwitch(mathSwitch, to: true, in: app) else { return }
         closeReaderPanel(in: app, title: "设置")
 
-        let formulaSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
+        let clearedOldSelection = waitForAudit(observer, timeout: 10) {
+            ($0["selectedText"] as? String ?? "").isEmpty
+        }
+        XCTAssertNotNil(clearedOldSelection,
+                        "Clear the previous linked-word selection by tapping blank PDF content before selecting the formula")
+        guard clearedOldSelection != nil else {
+            attachAuditDiagnostics("formula-selection-not-cleared", app: app, observer: observer)
+            return
+        }
+
+        let formulaSnapshot = waitForAudit(observer, timeout: 10) {
+            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+        }
+        XCTAssertNotNil(formulaSnapshot, "The formula geometry is read after the previous selection is cleared")
+        guard formulaSnapshot != nil else {
+            attachAuditDiagnostics("formula-geometry-unavailable", app: app, observer: observer)
+            return
+        }
         let formulaLine = point(in: formulaSnapshot, key: "wordPoints", text: "E=mc²", source: "text")
         XCTAssertNotNil(formulaLine)
         let formulaText = try XCTUnwrap(formulaLine).text
@@ -454,10 +485,20 @@ extension ReaderRouteUITests {
         let selectedFormula = waitForAudit(observer, timeout: 15) {
             ($0["selectedText"] as? String) == formulaText
         }
-        XCTAssertEqual(selectedFormula?["selectedText"] as? String, formulaText,
+        let selectedFormulaText = selectedFormula?["selectedText"] as? String
+        XCTAssertEqual(selectedFormulaText, formulaText,
                        "A long-press drag from the first to last actual PDF character selects the complete formula")
+        guard selectedFormulaText == formulaText else {
+            attachAuditDiagnostics("formula-selection-failed", app: app, observer: observer)
+            return
+        }
         let mathSource = app.staticTexts["math-card-source"]
-        XCTAssertTrue(mathSource.waitForExistence(timeout: 15), "Selecting the full PDF formula routes it through MathReadingService")
+        let mathCardVisible = mathSource.waitForExistence(timeout: 15)
+        XCTAssertTrue(mathCardVisible, "Selecting the full PDF formula routes it through MathReadingService")
+        guard mathCardVisible else {
+            attachAuditDiagnostics("math-card-not-created-after-formula-selection", app: app, observer: observer)
+            return
+        }
         XCTAssertTrue(mathSource.label.contains(formulaText))
         XCTAssertTrue(app.staticTexts["math-card-status"].label.contains("已解析"))
         let latexCopy = app.buttons["math-card-copy-latex"]
@@ -483,11 +524,11 @@ extension ReaderRouteUITests {
         XCTAssertTrue(mathSource.waitForExistence(timeout: 10))
 
         openReaderSettings(app)
-        setSwitch(app.switches["math-reading-toggle"], to: false)
+        guard setSwitch(app.switches["math-reading-toggle"], to: false, in: app) else { return }
         XCTAssertFalse(app.staticTexts["math-card-source"].exists, "Turning math off clears its card")
         XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty },
                          "Turning math off also clears the live PDF selection")
-        setSwitch(app.switches["math-reading-toggle"], to: true)
+        guard setSwitch(app.switches["math-reading-toggle"], to: true, in: app) else { return }
         closeReaderPanel(in: app, title: "设置")
 
         let formulaAgainSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
@@ -507,17 +548,35 @@ extension ReaderRouteUITests {
         let selectedFormulaAgain = waitForAudit(observer, timeout: 15) {
             ($0["selectedText"] as? String) == formulaAgainText
         }
-        XCTAssertEqual(selectedFormulaAgain?["selectedText"] as? String, formulaAgainText,
+        let selectedFormulaAgainText = selectedFormulaAgain?["selectedText"] as? String
+        XCTAssertEqual(selectedFormulaAgainText, formulaAgainText,
                        "The second selection also spans the formula's first and last actual PDF characters")
-        XCTAssertTrue(mathSource.waitForExistence(timeout: 15))
+        guard selectedFormulaAgainText == formulaAgainText else {
+            attachAuditDiagnostics("second-formula-selection-failed", app: app, observer: observer)
+            return
+        }
+        let secondMathCardVisible = mathSource.waitForExistence(timeout: 15)
+        XCTAssertTrue(secondMathCardVisible)
+        guard secondMathCardVisible else {
+            attachAuditDiagnostics("second-math-card-not-created", app: app, observer: observer)
+            return
+        }
         openReaderSettings(app)
-        setSwitch(app.switches["context-reading-toggle"], to: false)
-        XCTAssertFalse(app.switches["math-reading-toggle"].isEnabled)
+        guard setSwitch(app.switches["context-reading-toggle"], to: false, in: app) else { return }
+        let mathSwitchDisabled = waitForEnabled(mathSwitch, to: false, timeout: 5)
+        if !mathSwitchDisabled {
+            attachSwitchDiagnostic("math-switch-not-disabled-after-master",
+                                   control: mathSwitch,
+                                   expectedEnabled: false,
+                                   in: app)
+        }
+        XCTAssertTrue(mathSwitchDisabled, "The math subfeature is disabled when the master switch is off")
+        guard mathSwitchDisabled else { return }
         XCTAssertFalse(app.staticTexts["math-card-source"].exists, "Turning master off clears its math card")
         XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String ?? "").isEmpty },
                          "Turning master off also clears the live PDF selection")
-        setSwitch(app.switches["context-reading-toggle"], to: true)
-        setSwitch(app.switches["math-reading-toggle"], to: false)
+        guard setSwitch(app.switches["context-reading-toggle"], to: true, in: app) else { return }
+        guard setSwitch(app.switches["math-reading-toggle"], to: false, in: app) else { return }
         closeReaderPanel(in: app, title: "设置")
 
         let currentSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
@@ -635,10 +694,152 @@ extension ReaderRouteUITests {
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 10), .completed)
     }
 
-    private func setSwitch(_ control: XCUIElement, to enabled: Bool) {
-        let value = control.value as? String
-        let isEnabled = value == "1" || value?.lowercased() == "on"
-        if isEnabled != enabled { control.tap() }
+    private func setSwitch(_ control: XCUIElement,
+                           to enabled: Bool,
+                           in app: XCUIApplication) -> Bool {
+        guard control.waitForExistence(timeout: 10) else {
+            attachSwitchDiagnostic("switch-not-found",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("Switch \(control.identifier) did not appear")
+            return false
+        }
+
+        let settingsPanel = app.descendants(matching: .any)
+            .matching(identifier: "reader-panel.设置")
+            .firstMatch
+        guard settingsPanel.waitForExistence(timeout: 5) else {
+            attachSwitchDiagnostic("settings-panel-not-found",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("The reader settings panel is required to change \(control.identifier)")
+            return false
+        }
+
+        let scrollViews = settingsPanel.descendants(matching: .scrollView).allElementsBoundByIndex
+        for _ in 0..<6 where !control.isHittable {
+            guard let scrollView = scrollViews.first(where: { $0.exists && $0.isHittable }) else { break }
+            if control.frame.midY < scrollView.frame.minY {
+                scrollView.swipeDown()
+            } else {
+                scrollView.swipeUp()
+            }
+        }
+        guard control.isHittable else {
+            attachSwitchDiagnostic("switch-not-hittable",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("Switch \(control.identifier) is not hittable in the reader settings panel")
+            return false
+        }
+        guard waitForEnabled(control, to: true, timeout: 5) else {
+            attachSwitchDiagnostic("switch-disabled",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("Switch \(control.identifier) is disabled and cannot be changed")
+            return false
+        }
+
+        guard let currentValue = switchValue(control) else {
+            attachSwitchDiagnostic("switch-value-unreadable",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("Switch \(control.identifier) has no readable accessibility value")
+            return false
+        }
+        if currentValue == enabled { return true }
+
+        // SwiftUI exposes this Toggle across its Form row; tap the visible switch at the trailing edge.
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        guard waitForSwitchValue(control, to: enabled, timeout: 5) else {
+            attachSwitchDiagnostic("switch-value-did-not-change",
+                                   control: control,
+                                   expectedEnabled: enabled,
+                                   in: app)
+            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled)")
+            return false
+        }
+        return true
+    }
+
+    private func switchValue(_ control: XCUIElement) -> Bool? {
+        if let value = control.value as? String {
+            switch value.lowercased() {
+            case "1", "on", "true", "yes":
+                return true
+            case "0", "off", "false", "no":
+                return false
+            default:
+                return nil
+            }
+        }
+        if let value = control.value as? NSNumber { return value.boolValue }
+        return nil
+    }
+
+    private func waitForSwitchValue(_ control: XCUIElement,
+                                    to enabled: Bool,
+                                    timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.switchValue(control) == enabled
+        }, object: control)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitForEnabled(_ control: XCUIElement,
+                                to enabled: Bool,
+                                timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            control.isEnabled == enabled
+        }, object: control)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func attachSwitchDiagnostic(_ name: String,
+                                        control: XCUIElement,
+                                        expectedEnabled: Bool,
+                                        in app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "\(name)-screenshot"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        let details = """
+        switch: \(control.identifier)
+        expected value: \(expectedEnabled)
+        actual AX value: \(String(describing: control.value))
+        enabled: \(control.isEnabled)
+        hittable: \(control.isHittable)
+        frame: \(String(describing: control.frame))
+
+        \(app.debugDescription)
+        """
+        let hierarchy = XCTAttachment(string: details)
+        hierarchy.name = "\(name)-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+    }
+
+    private func attachAuditDiagnostics(_ name: String,
+                                        app: XCUIApplication,
+                                        observer: XCUIElement) {
+        attachAuditScreenshot(name, app: app)
+        let snapshot = auditJSON(observer)
+        let details = """
+        Audit snapshot: \(String(describing: snapshot))
+        Selected text: \(String(describing: snapshot?["selectedText"]))
+
+        \(app.debugDescription)
+        """
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "\(name)-audit-and-accessibility-hierarchy"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func auditJSON(_ observer: XCUIElement) -> [String: Any]? {

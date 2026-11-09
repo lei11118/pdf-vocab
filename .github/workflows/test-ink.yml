@@ -17,6 +17,11 @@ on:
         type: boolean
         required: false
         default: false
+      human_reading_only:
+        description: "Run only the live searchable-PDF math reading workflow"
+        type: boolean
+        required: false
+        default: false
       snapshot_run_id:
         description: "Export UI attachments from an existing test run without repeating tests"
         required: false
@@ -82,6 +87,8 @@ jobs:
           TEST_ARGS=()
           if [ "${{ inputs.unit_only }}" = "true" ]; then
             TEST_ARGS=(-only-testing:PdfVocabTests)
+          elif [ "${{ inputs.human_reading_only }}" = "true" ]; then
+            TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryMathAndVisionOCR)
           elif [ "${{ inputs.gesture_only }}" = "true" ]; then
             xcodebuild -help 2>&1 | sed -n '/only-testing/p'
             TEST_ARGS=(-only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen)
