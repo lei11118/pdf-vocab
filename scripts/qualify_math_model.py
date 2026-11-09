@@ -864,30 +864,38 @@ def run_qualification(manifest: dict[str, Any],
             decoder = ct.models.MLModel(str(decoder_path), compute_units=ct.ComputeUnit.CPU_ONLY)
             encoder_sig = _signature(encoder, "encoder")
             decoder_sig = _signature(decoder, "decoder")
+            report["model_signature"] = {
+                "encoder": encoder_sig["record"],
+                "decoder": decoder_sig["record"],
+            }
+            report["model_load_duration_seconds"] = round(time.monotonic() - load_started, 4)
+            report["model_load_peak_rss_mib"] = load_sampler.peak_mib
+            report["model_load_rss_sampling_errors"] = load_sampler.errors
+            _write_json(output_dir / "report.json", report)
+
             _validate_signature(encoder_sig, manifest["signature"]["encoder"], "encoder")
             _validate_signature(decoder_sig, manifest["signature"]["decoder"], "decoder")
+            output_candidates = manifest["signature"]["decoder"]["output_name_candidates"]
+            expected_output_names = set(output_candidates)
+            if set(decoder_sig["outputs"]) != expected_output_names:
+                raise QualificationError(
+                    f"Decoder outputs differ from the pinned candidates {sorted(expected_output_names)}: "
+                    f"{sorted(decoder_sig['outputs'])}"
+                )
             output_name = next(
-                (name for name in manifest["signature"]["decoder"]["output_name_candidates"] if name in decoder_sig["outputs"]),
+                (name for name in output_candidates if name in decoder_sig["outputs"]),
                 None,
             )
             if output_name is None:
                 raise QualificationError("Decoder has neither the pinned next nor logits output")
-            if set(decoder_sig["outputs"]) != {output_name}:
-                raise QualificationError(f"Decoder outputs differ from the pinned next/logits signature: {sorted(decoder_sig['outputs'])}")
+            report["model_signature"]["decoder_selected_output"] = output_name
+            _write_json(output_dir / "report.json", report)
             output_shape, output_dtype = _feature_shape_and_dtype(decoder_sig["outputs"][output_name])
             if output_name == "next":
                 if output_dtype.kind not in {"i", "u"} or math.prod(output_shape) != 1:
                     raise QualificationError("Decoder next spec must be a single integer token ID")
             elif output_dtype.kind != "f" or math.prod(output_shape) < 2:
                 raise QualificationError("Decoder logits spec must be a floating tensor with multiple values")
-            report["model_signature"] = {
-                "encoder": encoder_sig["record"],
-                "decoder": decoder_sig["record"],
-                "decoder_selected_output": output_name,
-            }
-            report["model_load_duration_seconds"] = round(time.monotonic() - load_started, 4)
-            report["model_load_peak_rss_mib"] = load_sampler.peak_mib
-            report["model_load_rss_sampling_errors"] = load_sampler.errors
 
         infer_started = time.monotonic()
         with RSSSampler() as infer_sampler:
