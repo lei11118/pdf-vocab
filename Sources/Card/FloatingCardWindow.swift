@@ -21,9 +21,10 @@ struct FloatingCardWindow: View {
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
     var translationRequest: SentenceTranslationRequest? = nil
+    var reserveTop: CGFloat = 0
     @StateObject private var sentenceTranslation = SentenceTranslationState()
     var body: some View {
-        ReaderWindowSurface(bounds:bounds,onClose:onClose) {
+        ReaderWindowSurface(bounds:bounds,onClose:onClose,reserveTop:reserveTop) {
             WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab)
                 .environment(\.readerPanelClose, onClose)
                 .environmentObject(sentenceTranslation)
@@ -58,6 +59,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     let onClose: () -> Void
     var windowID = "word"
     var allowsCompact = true
+    var reserveTop: CGFloat = 0
     @ViewBuilder var expanded: () -> Expanded
     @ViewBuilder var compact: () -> Compact
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -80,6 +82,15 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
 
     /// 最小尺寸(可缩成胶囊)
     private var minSize: CGSize { CGSize(width: 180, height: allowsCompact ? 64 : 220) }
+    private var minimumPositionY: CGFloat {
+        let height = max(0, bounds.height)
+        let requestedReserve = reserveTop.isFinite ? max(0, reserveTop) : 0
+        let reserve = min(requestedReserve, max(0, height - minSize.height - 16))
+        return max(8, reserve + 8)
+    }
+    private var maximumHeight: CGFloat {
+        max(minSize.height, bounds.height - minimumPositionY - 8)
+    }
     /// 低于此高度切换为「胶囊迷你」布局
     private let compactThreshold: CGFloat = 140
     private var defaultSize: CGSize {
@@ -146,10 +157,19 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         }
         .onChange(of:moving) { _,active in if !active { moveBase = nil; persist() } }
         .onChange(of: bounds) { _, _ in
-            size = clampedSize(size)
-            if let p = position {
-                position = clampedPosition(p)
-            }
+            reconcileGeometry()
+        }
+        .onChange(of: reserveTop) { _, _ in
+            reconcileGeometry()
+        }
+    }
+
+    private func reconcileGeometry() {
+        let constrainedSize = clampedSize(size)
+        if constrainedSize != size { size = constrainedSize }
+        if let position {
+            let constrainedPosition = clampedPosition(position)
+            if constrainedPosition != position { self.position = constrainedPosition }
         }
     }
 
@@ -216,7 +236,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             guard let base = resizeBase else { return }
             // Keep the top-left fixed while the grip follows the pointer. Moving
             // the window to fit the enlarged size changes the drag's own origin.
-            let origin = position ?? currentPosition
+            let origin = clampedPosition(position ?? currentPosition)
             let candidate = clampedSize(CGSize(width:base.width+translation.width,height:base.height+translation.height))
             var transaction = Transaction(); transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -269,13 +289,13 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
 
     private func clampedPosition(_ point: CGPoint) -> CGPoint {
         let maxX = max(8, bounds.width - size.width - 8)
-        let maxY = max(8, bounds.height - size.height - 8)
-        return CGPoint(x: min(max(point.x, 8), maxX), y: min(max(point.y, 8), maxY))
+        let maxY = max(minimumPositionY, bounds.height - size.height - 8)
+        return CGPoint(x: min(max(point.x, 8), maxX), y: min(max(point.y, minimumPositionY), maxY))
     }
 
     private func clampedSize(_ value: CGSize) -> CGSize {
         let maxW = max(minSize.width, bounds.width - 16)
-        let maxH = max(minSize.height, bounds.height - 16)
+        let maxH = maximumHeight
         return CGSize(
             width:min(max(value.width,ReaderWindowGeometry.minimumWidth(height:value.height,allowsCompact:allowsCompact)),maxW),
             height: min(max(value.height, minSize.height), maxH)

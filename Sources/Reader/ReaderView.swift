@@ -80,6 +80,7 @@ struct ReaderView: View {
     @State private var dockDragActive = false
     @State private var dockSize: CGSize = .zero
     @State private var dockBounds: CGSize = .zero
+    @State private var readerTopOverlayGlobalMaxY: CGFloat?
     /// v0.16.0:Notability 式专注模式 —— 只留纸面与退出按钮,隐藏顶栏与阅读动作条。
     @State private var focusMode = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -443,6 +444,16 @@ struct ReaderView: View {
         rootContent
             .overlay(alignment: .top) {
                 readerTopOverlay
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.frame(in: .global).maxY
+                    } action: { measuredMaxY in
+                        guard measuredMaxY.isFinite else { return }
+                        if let currentMaxY = readerTopOverlayGlobalMaxY,
+                           abs(currentMaxY - measuredMaxY) <= 0.5 {
+                            return
+                        }
+                        readerTopOverlayGlobalMaxY = measuredMaxY
+                    }
             }
             .overlay {
                 dockLayer
@@ -823,6 +834,9 @@ struct ReaderView: View {
 
     private var wordOverlay: some View {
     GeometryReader { geo in
+        let globalMinY = geo.frame(in: .global).minY
+        let measuredReserve = (readerTopOverlayGlobalMaxY ?? globalMinY) - globalMinY
+        let reserveTop = measuredReserve.isFinite ? max(0, measuredReserve) : 0
         if let content = cardContent {
             FloatingCardWindow(
                 content: content,
@@ -832,7 +846,8 @@ struct ReaderView: View {
                     autoSpeak(word)
                 },
                 vocab: cardVocab,
-                translationRequest:translationRequest
+                translationRequest:translationRequest,
+                reserveTop: reserveTop
             )
         }
         // Pencil 悬停释义使用独立气泡，长释义可滚动。
