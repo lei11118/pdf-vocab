@@ -490,6 +490,7 @@ extension ReaderRouteUITests {
                        "A long-press drag from the first to last actual PDF character selects the complete formula")
         guard selectedFormulaText == formulaText else {
             attachAuditDiagnostics("formula-selection-failed", app: app, observer: observer)
+            attachReaderGestureDiagnosticsFromLibrary("formula-selection-failed", app: app)
             return
         }
         let mathSource = app.staticTexts["math-card-source"]
@@ -553,6 +554,7 @@ extension ReaderRouteUITests {
                        "The second selection also spans the formula's first and last actual PDF characters")
         guard selectedFormulaAgainText == formulaAgainText else {
             attachAuditDiagnostics("second-formula-selection-failed", app: app, observer: observer)
+            attachReaderGestureDiagnosticsFromLibrary("second-formula-selection-failed", app: app)
             return
         }
         let secondMathCardVisible = mathSource.waitForExistence(timeout: 15)
@@ -869,6 +871,80 @@ extension ReaderRouteUITests {
         attachment.name = "\(name)-audit-and-accessibility-hierarchy"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func attachReaderGestureDiagnosticsFromLibrary(_ name: String, app: XCUIApplication) {
+        let returnToLibrary = app.buttons["返回文档库"].firstMatch
+        guard returnToLibrary.waitForExistence(timeout: 3), returnToLibrary.isHittable else {
+            attachDiagnosticsUIFallback(name, stage: "return-to-library-unavailable", app: app)
+            return
+        }
+        returnToLibrary.tap()
+
+        let moreSettings = app.buttons["更多设置"].firstMatch
+        guard moreSettings.waitForExistence(timeout: 4), moreSettings.isHittable else {
+            attachDiagnosticsUIFallback(name, stage: "library-more-settings-unavailable", app: app)
+            return
+        }
+        moreSettings.tap()
+
+        let diagnostics = app.buttons["诊断日志"].firstMatch
+        guard diagnostics.waitForExistence(timeout: 4), diagnostics.isHittable else {
+            attachDiagnosticsUIFallback(name, stage: "diagnostics-menu-item-unavailable", app: app)
+            return
+        }
+        diagnostics.tap()
+
+        let diagnosticsTitle = app.navigationBars["诊断日志"].firstMatch
+        guard diagnosticsTitle.waitForExistence(timeout: 4) else {
+            attachDiagnosticsUIFallback(name, stage: "diagnostics-page-unavailable", app: app)
+            return
+        }
+
+        let logPredicate = NSPredicate(
+            format: "label CONTAINS[c] %@ OR label MATCHES %@",
+            "press.began",
+            "(?s).*[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}.*"
+        )
+        let logLabels = app.staticTexts.matching(logPredicate).allElementsBoundByIndex
+            .map(\.label)
+            .filter { !$0.isEmpty }
+        guard !logLabels.isEmpty else {
+            attachDiagnosticsUIFallback(name, stage: "timestamped-log-static-text-unavailable", app: app)
+            return
+        }
+
+        let gestureLines = logLabels.joined(separator: "\n")
+            .split(whereSeparator: \.isNewline)
+            .filter {
+                $0.localizedCaseInsensitiveContains("press.began") ||
+                $0.localizedCaseInsensitiveContains("press.end") ||
+                $0.localizedCaseInsensitiveContains("handle.drag")
+            }
+        guard !gestureLines.isEmpty else {
+            attachDiagnosticsUIFallback(name, stage: "gesture-events-not-found-in-diagnostics", app: app)
+            return
+        }
+
+        let tail = gestureLines.suffix(24).map { String($0.suffix(512)) }.joined(separator: "\n")
+        let attachment = XCTAttachment(
+            string: "Matched log text elements: \(logLabels.count)\nGesture event tail:\n\(tail)"
+        )
+        attachment.name = "\(name)-reader-gesture-log-tail"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachDiagnosticsUIFallback(_ name: String, stage: String, app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "\(name)-diagnostics-ui-fallback-screenshot"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        let hierarchy = XCTAttachment(string: "stage: \(stage)\n\n\(app.debugDescription)")
+        hierarchy.name = "\(name)-diagnostics-ui-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 
     private func auditJSON(_ observer: XCUIElement) -> [String: Any]? {
