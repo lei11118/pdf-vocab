@@ -1535,6 +1535,18 @@ final class ReaderCoordinator: NSObject {
              "source": source]
         }
 
+        func handleEntry(_ handle: SelectionHandleView?) -> [String: Any]? {
+            guard let handle, !handle.isHidden, handle.alpha > 0.01,
+                  let window = pdfView.window, handle.window === window else { return nil }
+            let radius = HandleMetrics.dotDiameter / 2
+            let dotCenter = CGPoint(
+                x: handle.bounds.midX,
+                y: handle.isStart ? handle.bounds.minY + radius : handle.bounds.maxY - radius
+            )
+            let point = handle.convert(dotCenter, to: window)
+            return pointEntry(text: handle.isStart ? "start" : "end", point: point, source: "handle-dot")
+        }
+
         func characterScreenPoint(at utf16Index: Int) -> CGPoint? {
             guard utf16Index >= 0, utf16Index < sourceNSString.length else { return nil }
             let characterRange = sourceNSString.rangeOfComposedCharacterSequence(at: utf16Index)
@@ -1602,7 +1614,8 @@ final class ReaderCoordinator: NSObject {
             "selectedText": selectionText,
             "wordPoints": wordPoints,
             "linePoints": linePoints,
-            "linkPoints": linkPoints
+            "linkPoints": linkPoints,
+            "handlePoints": [handleEntry(startHandle), handleEntry(endHandle)].compactMap { $0 }
         ]
         guard JSONSerialization.isValidJSONObject(snapshot),
               let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),

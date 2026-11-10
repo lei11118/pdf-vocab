@@ -477,10 +477,10 @@ extension ReaderRouteUITests {
         XCTAssertNotNil(formulaStart)
         XCTAssertNotNil(formulaEnd)
         coordinate(for: try XCTUnwrap(formulaStart), in: app).press(
-            forDuration: 0.8,
+            forDuration: 1.5,
             thenDragTo: coordinate(for: try XCTUnwrap(formulaEnd), in: app),
             withVelocity: .slow,
-            thenHoldForDuration: 0.1
+            thenHoldForDuration: 0.3
         )
         let selectedFormula = waitForAudit(observer, timeout: 15) {
             ($0["selectedText"] as? String) == formulaText
@@ -488,10 +488,38 @@ extension ReaderRouteUITests {
         let selectedFormulaText = selectedFormula?["selectedText"] as? String
         XCTAssertEqual(selectedFormulaText, formulaText,
                        "A long-press drag from the first to last actual PDF character selects the complete formula")
-        guard selectedFormulaText == formulaText else {
-            attachAuditDiagnostics("formula-selection-failed", app: app, observer: observer)
-            attachReaderGestureDiagnosticsFromLibrary("formula-selection-failed", app: app)
-            return
+        if selectedFormulaText != formulaText {
+            attachAuditDiagnostics("formula-continuous-selection-failed", app: app, observer: observer)
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
+            let clearedForHandleSelection = waitForAudit(observer, timeout: 10) {
+                ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+            }
+            XCTAssertNotNil(clearedForHandleSelection,
+                            "Clear the failed continuous selection before independently testing the visible selection handle")
+            guard clearedForHandleSelection != nil else {
+                attachAuditDiagnostics("formula-continuous-selection-not-cleared", app: app, observer: observer)
+                return
+            }
+            guard let retryFormulaStart = point(in: clearedForHandleSelection,
+                                                key: "wordPoints",
+                                                text: formulaText,
+                                                source: "text",
+                                                edge: .start),
+                  let retryFormulaEnd = point(in: clearedForHandleSelection,
+                                              key: "wordPoints",
+                                              text: formulaText,
+                                              source: "text",
+                                              edge: .end) else {
+                XCTFail("The cleared audit snapshot provides fresh start and end coordinates for the formula")
+                attachAuditDiagnostics("formula-fallback-geometry-unavailable", app: app, observer: observer)
+                return
+            }
+            guard selectSuperscriptAndExpandFormula(formulaText,
+                                                     formulaStart: retryFormulaStart,
+                                                     formulaEnd: retryFormulaEnd,
+                                                     app: app,
+                                                     observer: observer,
+                                                     diagnosticName: "formula-fallback") else { return }
         }
         let mathSource = app.staticTexts["math-card-source"]
         let mathCardVisible = mathSource.waitForExistence(timeout: 15)
@@ -532,7 +560,10 @@ extension ReaderRouteUITests {
         guard setSwitch(app.switches["math-reading-toggle"], to: true, in: app) else { return }
         closeReaderPanel(in: app, title: "设置")
 
-        let formulaAgainSnapshot = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let formulaAgainSnapshot = waitForAudit(observer, timeout: 10) {
+            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+        }
+        XCTAssertNotNil(formulaAgainSnapshot, "The second formula selection starts with no previous live selection")
         let formulaAgain = point(in: formulaAgainSnapshot, key: "wordPoints", text: "E=mc²", source: "text")
         XCTAssertNotNil(formulaAgain)
         let formulaAgainText = try XCTUnwrap(formulaAgain).text
@@ -540,23 +571,12 @@ extension ReaderRouteUITests {
         let formulaAgainEnd = point(in: formulaAgainSnapshot, key: "wordPoints", text: formulaAgainText, source: "text", edge: .end)
         XCTAssertNotNil(formulaAgainStart)
         XCTAssertNotNil(formulaAgainEnd)
-        coordinate(for: try XCTUnwrap(formulaAgainStart), in: app).press(
-            forDuration: 0.8,
-            thenDragTo: coordinate(for: try XCTUnwrap(formulaAgainEnd), in: app),
-            withVelocity: .slow,
-            thenHoldForDuration: 0.1
-        )
-        let selectedFormulaAgain = waitForAudit(observer, timeout: 15) {
-            ($0["selectedText"] as? String) == formulaAgainText
-        }
-        let selectedFormulaAgainText = selectedFormulaAgain?["selectedText"] as? String
-        XCTAssertEqual(selectedFormulaAgainText, formulaAgainText,
-                       "The second selection also spans the formula's first and last actual PDF characters")
-        guard selectedFormulaAgainText == formulaAgainText else {
-            attachAuditDiagnostics("second-formula-selection-failed", app: app, observer: observer)
-            attachReaderGestureDiagnosticsFromLibrary("second-formula-selection-failed", app: app)
-            return
-        }
+        guard selectSuperscriptAndExpandFormula(formulaAgainText,
+                                                 formulaStart: try XCTUnwrap(formulaAgainStart),
+                                                 formulaEnd: try XCTUnwrap(formulaAgainEnd),
+                                                 app: app,
+                                                 observer: observer,
+                                                 diagnosticName: "second-formula") else { return }
         let secondMathCardVisible = mathSource.waitForExistence(timeout: 15)
         XCTAssertTrue(secondMathCardVisible)
         guard secondMathCardVisible else {
@@ -873,6 +893,56 @@ extension ReaderRouteUITests {
         add(attachment)
     }
 
+    private func selectSuperscriptAndExpandFormula(_ formulaText: String,
+                                                  formulaStart: HumanAuditPoint,
+                                                  formulaEnd: HumanAuditPoint,
+                                                  app: XCUIApplication,
+                                                  observer: XCUIElement,
+                                                  diagnosticName: String) -> Bool {
+        coordinate(for: formulaEnd, in: app).press(forDuration: 1.0)
+        let anchorSelection = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == "²"
+        }
+        let anchorText = anchorSelection?["selectedText"] as? String
+        XCTAssertEqual(anchorText, "²", "A standalone long press at the visible superscript selects exactly ²")
+        guard anchorText == "²" else {
+            attachAuditDiagnostics("\(diagnosticName)-superscript-anchor-failed", app: app, observer: observer)
+            attachReaderGestureDiagnosticsFromLibrary("\(diagnosticName)-superscript-anchor-failed", app: app)
+            return false
+        }
+
+        let handlesSnapshot = waitForAudit(observer, timeout: 10) {
+            ($0["selectedText"] as? String) == "²" &&
+            self.handlePoint(in: $0, role: "start") != nil &&
+            self.handlePoint(in: $0, role: "end") != nil
+        }
+        guard let startHandle = handlePoint(in: handlesSnapshot, role: "start"),
+              handlePoint(in: handlesSnapshot, role: "end") != nil else {
+            XCTAssertNotNil(handlesSnapshot, "The superscript selection exposes visible start and end handle dot centers")
+            attachAuditDiagnostics("\(diagnosticName)-selection-handles-unavailable", app: app, observer: observer)
+            return false
+        }
+
+        coordinate(for: startHandle, in: app).press(
+            forDuration: 0.12,
+            thenDragTo: coordinate(for: formulaStart, in: app),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        let expandedSelection = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == formulaText
+        }
+        let expandedText = expandedSelection?["selectedText"] as? String
+        XCTAssertEqual(expandedText, formulaText,
+                       "Dragging the visible start handle from ² to E selects the complete formula")
+        guard expandedText == formulaText else {
+            attachAuditDiagnostics("\(diagnosticName)-handle-expansion-failed", app: app, observer: observer)
+            attachReaderGestureDiagnosticsFromLibrary("\(diagnosticName)-handle-expansion-failed", app: app)
+            return false
+        }
+        return true
+    }
+
     private func attachReaderGestureDiagnosticsFromLibrary(_ name: String, app: XCUIApplication) {
         let returnToLibrary = app.buttons["返回文档库"].firstMatch
         guard returnToLibrary.waitForExistence(timeout: 3), returnToLibrary.isHittable else {
@@ -978,6 +1048,10 @@ extension ReaderRouteUITests {
               let x = match[coordinateKeys.x] as? NSNumber,
               let y = match[coordinateKeys.y] as? NSNumber else { return nil }
         return HumanAuditPoint(text: text, source: source, x: CGFloat(truncating: x), y: CGFloat(truncating: y))
+    }
+
+    private func handlePoint(in snapshot: [String: Any]?, role: String) -> HumanAuditPoint? {
+        point(in: snapshot, key: "handlePoints", text: role, source: "handle-dot")
     }
 
     private func coordinate(for point: HumanAuditPoint, in app: XCUIApplication) -> XCUICoordinate {
