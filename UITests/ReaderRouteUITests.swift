@@ -486,9 +486,15 @@ extension ReaderRouteUITests {
             ($0["selectedText"] as? String) == formulaText
         }
         let selectedFormulaText = selectedFormula?["selectedText"] as? String
+        let continuousFormulaSelectionFailed = selectedFormulaText != formulaText
+        defer {
+            if continuousFormulaSelectionFailed && !app.navigationBars["诊断日志"].exists {
+                attachReaderGestureDiagnosticsFromLibrary("formula-continuous-selection-failed", app: app)
+            }
+        }
         XCTAssertEqual(selectedFormulaText, formulaText,
                        "A long-press drag from the first to last actual PDF character selects the complete formula")
-        if selectedFormulaText != formulaText {
+        if continuousFormulaSelectionFailed {
             attachAuditDiagnostics("formula-continuous-selection-failed", app: app, observer: observer)
             canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
             let clearedForHandleSelection = waitForAudit(observer, timeout: 10) {
@@ -545,11 +551,41 @@ extension ReaderRouteUITests {
                         thenDragTo: gripStart.withOffset(CGVector(dx: 0, dy: -360)),
                         withVelocity: .slow,
                         thenHoldForDuration: 0.1)
-        let compactMath = app.descendants(matching: .any).matching(identifier: "compact-math-card").firstMatch
-        XCTAssertTrue(compactMath.waitForExistence(timeout: 10), "The capsule exposes a compact math source and parse status")
-        XCTAssertTrue(app.staticTexts["compact-math-source"].label.contains("E=mc²"))
+        let compactLabels = app.staticTexts.matching(identifier: "compact-math-card")
+        let compactSource = compactLabels.matching(NSPredicate(format: "label == %@", formulaText)).firstMatch
+        let compactStatus = compactLabels.matching(NSPredicate(format: "label == %@", "数学文字已解析")).firstMatch
+        let compactSourceVisible = compactSource.waitForExistence(timeout: 10)
+        XCTAssertTrue(compactSourceVisible, "The compact math capsule exposes the exact formula text")
+        guard compactSourceVisible else {
+            attachAuditDiagnostics("compact-math-source-unavailable", app: app, observer: observer)
+            return
+        }
+        XCTAssertEqual(compactSource.label, formulaText)
+        let compactStatusVisible = compactStatus.waitForExistence(timeout: 10)
+        XCTAssertTrue(compactStatusVisible, "The compact math capsule exposes the parsed status")
+        guard compactStatusVisible else {
+            attachAuditDiagnostics("compact-math-status-unavailable", app: app, observer: observer)
+            return
+        }
+        XCTAssertEqual(compactStatus.label, "数学文字已解析")
+        let compactFrame = compactSource.frame
+        let compactTargetPoint = CGPoint(x: compactFrame.midX, y: compactFrame.midY)
+        let appFrame = app.frame
+        let compactFrameIsValid = compactFrame.width > 0 && compactFrame.height > 0 && appFrame.contains(compactTargetPoint)
+        XCTAssertTrue(compactFrameIsValid,
+                      "The compact math text has a positive frame and its center is inside the app window")
+        guard compactFrameIsValid else {
+            attachAuditDiagnostics("compact-math-frame-invalid", app: app, observer: observer)
+            return
+        }
+        let compactTarget = XCTAttachment(string: "identifier=compact-math-card\nlabel=\(compactSource.label)\nstatus=\(compactStatus.label)\nframe=\(compactFrame)\napp frame=\(appFrame)\ndouble-tap point=\(compactTargetPoint)")
+        compactTarget.name = "synthetic-searchable-pdf-compact-math-hit-target"
+        compactTarget.lifetime = .keepAlways
+        add(compactTarget)
         attachAuditScreenshot("synthetic-searchable-pdf-compact-math-summary", app: app)
-        app.staticTexts["compact-math-source"].firstMatch.tap(withNumberOfTaps: 2, numberOfTouches: 1)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: compactFrame.midX, dy: compactFrame.midY))
+            .doubleTap()
         XCTAssertTrue(mathSource.waitForExistence(timeout: 10))
 
         openReaderSettings(app)
@@ -987,6 +1023,8 @@ extension ReaderRouteUITests {
         let gestureLines = logLabels.joined(separator: "\n")
             .split(whereSeparator: \.isNewline)
             .filter {
+                $0.localizedCaseInsensitiveContains("human-reading-audit.press.raw") ||
+                $0.localizedCaseInsensitiveContains("human-reading-audit.press.recognized") ||
                 $0.localizedCaseInsensitiveContains("press.began") ||
                 $0.localizedCaseInsensitiveContains("press.end") ||
                 $0.localizedCaseInsensitiveContains("handle.drag")
@@ -996,7 +1034,7 @@ extension ReaderRouteUITests {
             return
         }
 
-        let tail = gestureLines.suffix(24).map { String($0.suffix(512)) }.joined(separator: "\n")
+        let tail = gestureLines.suffix(48).map { String($0.suffix(512)) }.joined(separator: "\n")
         let attachment = XCTAttachment(
             string: "Matched log text elements: \(logLabels.count)\nGesture event tail:\n\(tail)"
         )

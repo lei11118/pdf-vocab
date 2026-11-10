@@ -790,6 +790,24 @@ final class ReaderCoordinator: NSObject {
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
         guard let pdfView else { return }
         let kind = Self.kind(of: gesture)
+
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit") {
+            let phase: String?
+            switch gesture.state {
+            case .began: phase = "began"
+            case .changed: phase = "changed"
+            case .ended: phase = "ended"
+            default: phase = nil
+            }
+            if let phase {
+                let point = gesture.location(in: pdfView)
+                DiagLog.log(String(format: "human-reading-audit.press.recognized kind=%@ phase=%@ pdfView=(%.2f,%.2f) uptime=%.6f",
+                                    kind, phase, point.x, point.y, ProcessInfo.processInfo.systemUptime))
+            }
+        }
+        #endif
+
         guard !(markMode && kind == "pencil") else { return }
         let viewPoint = gesture.location(in: pdfView)
 
@@ -3365,9 +3383,19 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
         if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
         if gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
-           let pdfView,
-           let hit = pageHit(touch.location(in: pdfView)) {
-            requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+           let pdfView {
+            let touchPoint = touch.location(in: pdfView)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--human-reading-audit") {
+                let kind = gestureRecognizer === fingerPressRef ? "finger" : "pencil"
+                DiagLog.log(String(format: "human-reading-audit.press.raw kind=%@ pdfView=(%.2f,%.2f) touchTimestamp=%.6f uptime=%.6f",
+                                    kind, touchPoint.x, touchPoint.y, touch.timestamp,
+                                    ProcessInfo.processInfo.systemUptime))
+            }
+            #endif
+            if let hit = pageHit(touchPoint) {
+                requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+            }
         }
         return true
     }
