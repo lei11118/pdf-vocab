@@ -55,7 +55,9 @@ struct WordPreview {
         request = Task { @MainActor [weak self] in
             if hover { try? await Task.sleep(nanoseconds:ToolArcConfig.hoverDelay) }
             guard !Task.isCancelled else { return }
-            let detail = await Task.detached(priority:.utility) { WordInteraction.detail(query) }.value
+            let detail = await Task.detached(priority:.utility) {
+                WordInteraction.detail(query, contextualSelection: contextualSelection)
+            }.value
             guard !Task.isCancelled,let self,self.generation == token else { return }
             self.preview = WordPreview(term:term,
                                        detail:detail ?? "词库未收录",
@@ -76,6 +78,61 @@ enum WordInteraction {
         guard case .found(let entry) = DictionaryService.lookup(term) else { return nil }
         return hoverDetail(entry)
     }
+
+    static func detail(_ term: String, contextualSelection: ContextualSelection?) -> String? {
+        guard let contextualSelection,
+              let phraseSpan = contextualSelection.verifiedPhraseGroupSpan else {
+            return detail(term)
+        }
+        let memberWords = verifiedPhraseMembers(in: contextualSelection, span: phraseSpan)
+        let exactPhrase = memberWords.isEmpty ? term : memberWords.joined(separator: " ")
+        return verifiedPhraseDetail(exactPhrase,
+                                    memberWords: memberWords,
+                                    exactEntry: { DictionaryStore.shared.entry(for: $0) },
+                                    memberEntry: { word in
+                                        guard case .found(let entry) = DictionaryService.lookup(word) else { return nil }
+                                        return entry
+                                    })
+    }
+
+    /// Mirrors the exact-key normalization used by the enabled phrase check:
+    /// collapse whitespace and lowercase, without lemmatizing.
+    static func normalizedExactPhraseKey(_ phrase: String) -> String {
+        phrase.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
+    }
+
+    /// Resolves an exact phrase entry first. If it has no Chinese senses, the
+    /// fallback labels bounded member meanings so they cannot be mistaken for
+    /// a translation of the phrase as a whole.
+    static func verifiedPhraseDetail(_ phrase: String,
+                                     memberWords: [String],
+                                     exactEntry: (String) -> DictEntry?,
+                                     memberEntry: (String) -> DictEntry?) -> String? {
+        let key = normalizedExactPhraseKey(phrase)
+        guard !key.isEmpty, key.count <= VerifiedPhraseGroupResolver.maximumCharacters else { return nil }
+        if let entry = exactEntry(key), let detail = hoverDetail(entry) {
+            return detail
+        }
+
+        guard !memberWords.isEmpty,
+              memberWords.count <= VerifiedPhraseGroupResolver.maximumWords else { return nil }
+        var lines = ["构成词释义"]
+        for word in memberWords {
+            guard let entry = memberEntry(word),
+                  let detail = hoverDetail(entry) else { continue }
+            lines.append("\(word)：\(detail.replacingOccurrences(of: "\n", with: "；"))")
+        }
+        return lines.count > 1 ? lines.joined(separator: "\n") : nil
+    }
+
+    private static func verifiedPhraseMembers(in selection: ContextualSelection,
+                                              span: UTF16Span) -> [String] {
+        guard selection.sourceSpans == [span], span.length > 0 else { return [] }
+        let members = selection.tokens.sorted { $0.span.location < $1.span.location }
+        guard (2...VerifiedPhraseGroupResolver.maximumWords).contains(members.count) else { return [] }
+        return members.map(\.sourceSurface)
+    }
+
     static func hoverDetail(_ entry: DictEntry) -> String? {
         guard let translation = entry.translation else { return nil }
         let lines = translation.components(separatedBy:.newlines).compactMap { raw -> String? in

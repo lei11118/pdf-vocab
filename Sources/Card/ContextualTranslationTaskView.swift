@@ -96,23 +96,32 @@ final class ContextualTranslationDriver: ObservableObject {
 
         guard isCurrent(identity, generation: localGeneration), !Task.isCancelled,
               identity.isEnabled else { return }
-        guard let sentenceContext = identity.selection.sentenceContext else {
-            state = .unavailable("当前选区没有可验证的语境，无法生成语境译义；下方仍显示词典释义。")
-            DiagLog.log("context.translation.prepare=missing-context")
-            return
-        }
-
+        let translationScope = identity.selection.verifiedPhraseTranslationScope
         let request: ContextualTranslationRequest
-        do {
-            request = try ContextualTranslationRequest.make(
-                from: sentenceContext,
-                verifiedPhraseGroupSpan: identity.selection.verifiedPhraseGroupSpan
-            )
-        } catch {
-            state = .unavailable(error.localizedDescription)
-            let reason = (error as? ContextualTranslationError)?.diagnosticCode ?? "unexpected"
-            DiagLog.log("context.translation.prepare=invalid-request reason=\(reason)")
-            return
+        if let translationScope,
+           let phraseRequest = try? ContextualTranslationRequest.make(from: translationScope.context,
+                                                                       verifiedPhraseGroupSpan: translationScope.span) {
+            request = phraseRequest
+        } else {
+            if translationScope != nil {
+                DiagLog.log("context.translation.prepare=phrase-scope-invalid fallback=selection")
+            }
+            guard let sentenceContext = identity.selection.sentenceContext else {
+                state = .unavailable("当前选区没有可验证的语境，无法生成语境译义；下方仍显示词典释义。")
+                DiagLog.log("context.translation.prepare=missing-context")
+                return
+            }
+            do {
+                request = try ContextualTranslationRequest.make(
+                    from: sentenceContext,
+                    verifiedPhraseGroupSpan: identity.selection.verifiedPhraseGroupSpan
+                )
+            } catch {
+                state = .unavailable(error.localizedDescription)
+                let reason = (error as? ContextualTranslationError)?.diagnosticCode ?? "unexpected"
+                DiagLog.log("context.translation.prepare=invalid-request reason=\(reason)")
+                return
+            }
         }
 
         let availability: Availability
@@ -271,11 +280,14 @@ struct ContextualTranslationTaskView: View {
     }
 
     var body: some View {
-        Group {
-            if presentation == .card {
-                cardContent
-            } else {
-                hoverContent
+        ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            Group {
+                if presentation == .card {
+                    cardContent
+                } else {
+                    hoverContent
+                }
             }
         }
         .task(id: identity) { await driver.prepare(identity) }

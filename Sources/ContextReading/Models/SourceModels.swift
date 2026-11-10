@@ -160,6 +160,13 @@ struct CanonicalContent: Equatable, Sendable {
     let tokens: [SourceToken]
 }
 
+/// Translation context borrowed from an exact dictionary-verified phrase,
+/// kept separate from the user's current single-word selection.
+struct VerifiedPhraseTranslationScope: Equatable, Sendable {
+    let context: SentenceContext
+    let span: UTF16Span
+}
+
 /// Selection passed to the contextual card. Source spans and display text are
 /// deliberately independent: PDFKit's lookup surface can repair spacing.
 struct ContextualSelection: Equatable, Sendable {
@@ -176,6 +183,46 @@ struct ContextualSelection: Equatable, Sendable {
     let displaySurface: String
     let generation: Int
     var sentenceContext: SentenceContext? = nil
+    /// Optional phrase context for translating a word within an exact,
+    /// dictionary-verified phrase. The selection's own text/tokens stay intact.
+    var verifiedPhraseTranslationScope: VerifiedPhraseTranslationScope? = nil
 
     var primaryToken: SourceToken? { tokens.first }
+
+    /// Borrow a translation scope only when this is exactly one word token
+    /// contained in the same verified phrase occurrence. Comparing stable token
+    /// identity (which includes OCR block identity) prevents cross-line matches
+    /// when OCR spans happen to reuse the same line-local offsets.
+    func borrowingVerifiedPhraseTranslationScope(from phrase: ContextualSelection)
+        -> ContextualSelection? {
+        guard verifiedPhraseTranslationScope == nil,
+              documentSHA256 == phrase.documentSHA256,
+              pageIndex == phrase.pageIndex,
+              generation == phrase.generation,
+              sourceSpans.count == 1,
+              tokens.count == 1,
+              let selectedToken = tokens.first,
+              selectedToken.kind == .word,
+              sourceSpans == [selectedToken.span],
+              phrase.tokens.count >= 2,
+              phrase.tokens.allSatisfy({ $0.kind == .word }),
+              let phraseSpan = phrase.verifiedPhraseGroupSpan,
+              phrase.sourceSpans == [phraseSpan],
+              selectedToken.span.location >= phraseSpan.location,
+              let selectedEnd = selectedToken.span.endExclusive,
+              selectedEnd <= (phraseSpan.endExclusive ?? -1),
+              let context = phrase.sentenceContext,
+              context.documentSHA256 == documentSHA256,
+              context.pageIndex == pageIndex,
+              context.selectedSourceSpans == [phraseSpan],
+              phrase.tokens.filter({ $0.id == selectedToken.id
+                  && $0.sourceSurface == selectedToken.sourceSurface }).count == 1 else {
+            return nil
+        }
+
+        var scoped = self
+        scoped.verifiedPhraseTranslationScope = VerifiedPhraseTranslationScope(context: context,
+                                                                              span: phraseSpan)
+        return scoped
+    }
 }

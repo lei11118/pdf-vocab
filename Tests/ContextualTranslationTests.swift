@@ -200,10 +200,31 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
         XCTAssertEqual(candidate.translatedPhrase, "读书")
     }
 
+    func testVerifiedPhraseGroupFallsBackToCompleteMemberTokenAlignmentsWhenGroupMarkerIsMissing() throws {
+        let request = try phraseGroupRequest(text: "They read books daily.", selected: "read books")
+        let target = "甲读书乙"
+        let memberSpans = Dictionary(uniqueKeysWithValues: request.tokens.compactMap { token -> (String, [UTF16Span])? in
+            switch token.sourceSurface {
+            case "read": return (token.id, [UTF16Span(location: 1, length: 1)])
+            case "books": return (token.id, [UTF16Span(location: 2, length: 1)])
+            default: return nil
+            }
+        })
+        let payload = try phrasePayload(request: request,
+                                        target: target,
+                                        targetTokenRanges: memberSpans)
+
+        let candidate = try ContextualTranslationAlignment.decode(request: request, payload: payload)
+        XCTAssertEqual(candidate.sourcePhrase, "read books")
+        XCTAssertEqual(candidate.translatedPhrase, "读书")
+    }
+
     func testVerifiedPhraseGroupRejectsMissingUnknownMovedDisjointAndWholeTargetMarkers() throws {
         let request = try phraseGroupRequest(text: "They read books daily.", selected: "read books")
         let expectedTargetSpan = UTF16Span(location: 1, length: 2)
         let target = "甲读书乙"
+        let readID = try XCTUnwrap(request.tokens.first(where: { $0.sourceSurface == "read" })?.id)
+        let booksID = try XCTUnwrap(request.tokens.first(where: { $0.sourceSurface == "books" })?.id)
 
         let missingTarget = try phrasePayload(request: request, target: target)
         XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: missingTarget)) {
@@ -231,9 +252,27 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
         let disjointTarget = try phrasePayload(request: request,
                                                target: target,
                                                targetGroupSpans: [UTF16Span(location: 1, length: 1),
-                                                                  UTF16Span(location: 3, length: 1)])
+                                                                  UTF16Span(location: 3, length: 1)],
+                                               targetTokenRanges: [
+                                                   readID: [UTF16Span(location: 1, length: 1)],
+                                                   booksID: [UTF16Span(location: 2, length: 1)]
+                                               ])
         XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: disjointTarget)) {
             XCTAssertEqual($0 as? ContextualTranslationError, .discontiguousTokenAlignment)
+        }
+
+        let incompleteMembers = try phrasePayload(request: request,
+                                                  target: target,
+                                                  targetTokenRanges: [readID: [UTF16Span(location: 1, length: 1)]])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: incompleteMembers)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .selectedPhraseGroupNotAligned)
+        }
+
+        let unknownToken = try phrasePayload(request: request,
+                                             target: target,
+                                             targetTokenRanges: ["unknown-token": [UTF16Span(location: 1, length: 1)]])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: unknownToken)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .unknownTokenID)
         }
 
         let wholeTarget = "读书"
@@ -242,6 +281,17 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                                                   targetGroupSpans: [UTF16Span(location: 0,
                                                                                length: (wholeTarget as NSString).length)])
         XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: wholeTargetMarker)) {
+            XCTAssertEqual($0 as? ContextualTranslationError, .translationCoversSentence)
+        }
+
+        let phraseOnlyTarget = "读书"
+        let fullPhraseMembers = try phrasePayload(request: request,
+                                                  target: phraseOnlyTarget,
+                                                  targetTokenRanges: [
+                                                      readID: [UTF16Span(location: 0, length: 1)],
+                                                      booksID: [UTF16Span(location: 1, length: 1)]
+                                                  ])
+        XCTAssertThrowsError(try ContextualTranslationAlignment.decode(request: request, payload: fullPhraseMembers)) {
             XCTAssertEqual($0 as? ContextualTranslationError, .translationCoversSentence)
         }
     }
@@ -498,7 +548,8 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                                target: String,
                                sourceGroupSpans: [UTF16Span]? = nil,
                                targetGroupSpans: [UTF16Span] = [],
-                               targetGroupID: String? = nil) throws -> ContextualTranslationPayload {
+                               targetGroupID: String? = nil,
+                               targetTokenRanges: [String: [UTF16Span]] = [:]) throws -> ContextualTranslationPayload {
         let group = try XCTUnwrap(request.selectedPhraseGroup)
         let sourceTokenRanges = Dictionary(uniqueKeysWithValues: request.tokens.map { ($0.id, [$0.sourceSpan]) })
         let sourceGroupRanges = [group.id: sourceGroupSpans ?? [group.sourceSpan]]
@@ -507,7 +558,7 @@ final class ContextualTranslationAlignmentTests: XCTestCase {
                                     phraseGroupRanges: sourceGroupRanges)
         let targetGroupRanges = [targetGroupID ?? group.id: targetGroupSpans]
         let attributedTarget = try attributed(target,
-                                              ranges: [:],
+                                              ranges: targetTokenRanges,
                                               phraseGroupRanges: targetGroupRanges)
         return ContextualTranslationPayload(sourceText: request.sentenceText,
                                             attributedSourceText: source,

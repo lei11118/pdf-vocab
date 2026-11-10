@@ -371,12 +371,27 @@ enum ContextualTranslationAlignment {
 
         var selectedRanges: [UTF16Span] = []
         if let group = request.selectedPhraseGroup {
-            guard let spans = targetGroupRanges[group.id], !spans.isEmpty else {
-                throw ContextualTranslationError.selectedPhraseGroupNotAligned
+            if let spans = targetGroupRanges[group.id], !spans.isEmpty {
+                let merged = try mergeContiguous(spans)
+                guard merged.count == 1 else { throw ContextualTranslationError.discontiguousTokenAlignment }
+                selectedRanges = merged
+            } else {
+                // Some Translation implementations preserve source token IDs
+                // but omit the additional phrase-group ID in their target.
+                // Recover only when every validated source token inside the
+                // verified phrase has one usable target range.
+                let members = try phraseMembers(of: group, request: request)
+                for member in members {
+                    guard let spans = targetRanges[member.id], !spans.isEmpty else {
+                        throw ContextualTranslationError.selectedPhraseGroupNotAligned
+                    }
+                    let merged = try mergeContiguous(spans)
+                    guard merged.count == 1 else {
+                        throw ContextualTranslationError.discontiguousTokenAlignment
+                    }
+                    selectedRanges.append(merged[0])
+                }
             }
-            let merged = try mergeContiguous(spans)
-            guard merged.count == 1 else { throw ContextualTranslationError.discontiguousTokenAlignment }
-            selectedRanges = merged
         } else {
             for id in request.selectedTokenIDs {
                 guard let spans = targetRanges[id], !spans.isEmpty else {
@@ -423,6 +438,29 @@ enum ContextualTranslationAlignment {
 
         return ContextualTranslationCandidate(sourcePhrase: request.selectedSourcePhrase,
                                               translatedPhrase: translatedPhrase)
+    }
+
+    /// Returns every complete source token contained in the verified phrase
+    /// span. `selectedTokenIDs` contains the group ID for phrase requests, so
+    /// it cannot be used to recover member token alignments.
+    private static func phraseMembers(of group: ContextualTranslationPhraseGroup,
+                                      request: ContextualTranslationRequest) throws -> [ContextualTranslationToken] {
+        guard let groupEnd = group.sourceSpan.endExclusive else {
+            throw ContextualTranslationError.selectedPhraseGroupNotAligned
+        }
+
+        let intersecting = request.tokens.filter { $0.sourceSpan.intersects(group.sourceSpan) }
+        let members = intersecting.filter {
+            $0.sourceSpan.location >= group.sourceSpan.location
+                && ($0.sourceSpan.endExclusive ?? -1) <= groupEnd
+        }.sorted { $0.sourceSpan.location < $1.sourceSpan.location }
+        guard members.count == intersecting.count,
+              members.count >= 2,
+              members.first?.sourceSpan.location == group.sourceSpan.location,
+              members.last?.sourceSpan.endExclusive == groupEnd else {
+            throw ContextualTranslationError.selectedPhraseGroupNotAligned
+        }
+        return members
     }
 
     private static func validateSourceAttributes(_ attributed: AttributedString,

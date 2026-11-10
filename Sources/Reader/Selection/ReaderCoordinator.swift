@@ -1740,7 +1740,7 @@ final class ReaderCoordinator: NSObject {
         }
         guard range.lowerBound >= 0, range.upperBound < words.count else { return }
         let sub = Array(words[range])
-        let contextual: ContextualSelection?
+        var contextual: ContextualSelection?
         let text: String
         if contextReadingEnabled, let snapshot,
            snapshot.generation == contextReadingGeneration,
@@ -1753,6 +1753,15 @@ final class ReaderCoordinator: NSObject {
         } else {
             contextual = nil
             text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
+        }
+        if let base = contextual,
+           src != "doubleTap",
+           base.verifiedPhraseGroupSpan == nil,
+           base.tokens.count == 1,
+           range.lowerBound == range.upperBound,
+           let expansion = verifiedOCRPhraseExpansion(page: page, index: range.lowerBound) {
+            contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual)
+                ?? base
         }
         guard !text.isEmpty else { return }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
@@ -2069,7 +2078,7 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        let contextual: ContextualSelection? = {
+        var contextual: ContextualSelection? = {
             guard contextRoute, contextReadingEnabled, pageIndex >= 0,
                   let page = selection.pages.first else { return nil }
             return ContextSelectionRouter.route(selection: selection,
@@ -2081,6 +2090,18 @@ final class ReaderCoordinator: NSObject {
                                                 generation: contextReadingGeneration,
                                                 verifiedPhraseGroupSpan: verifiedPhraseGroupSpan)
         }()
+        if let base = contextual,
+           src != "doubleTap",
+           base.verifiedPhraseGroupSpan == nil,
+           base.tokens.count == 1,
+           let page = selection.pages.first,
+           let expansion = verifiedNativePhraseExpansion(seed: selection,
+                                                         page: page,
+                                                         geometryQuality: geometryQuality,
+                                                         baseContextual: base) {
+            contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual)
+                ?? base
+        }
         onSelectionInfo(SelectionInfo(
             text: display,
             wordCount: wordCount,

@@ -101,6 +101,48 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertFalse((WordInteraction.hoverDetail(entry) ?? "").contains("English definition"))
     }
 
+    func testVerifiedPhraseDictionaryUsesNormalizedExactKeyAndChineseSenses() {
+        let exact = DictEntry(word:"new york",phonetic:nil,translation:"【地名】\nn. 纽约",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+        var memberLookupCalled = false
+        let detail = WordInteraction.verifiedPhraseDetail("  New\t York  ",
+                                                          memberWords:["New","York"],
+                                                          exactEntry:{ key in
+                                                              XCTAssertEqual(key,"new york")
+                                                              return exact
+                                                          },
+                                                          memberEntry:{ _ in
+                                                              memberLookupCalled = true
+                                                              return nil
+                                                          })
+
+        XCTAssertEqual(detail,"n. 纽约")
+        XCTAssertFalse(memberLookupCalled)
+    }
+
+    func testVerifiedPhraseWithoutChineseEntryShowsAllLabeledMemberMeanings() {
+        let englishOnly = DictEntry(word:"read books",phonetic:nil,translation:nil,definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+        let detail = WordInteraction.verifiedPhraseDetail("read   books",
+                                                          memberWords:["read","books"],
+                                                          exactEntry:{ key in
+                                                              XCTAssertEqual(key,"read books")
+                                                              return englishOnly
+                                                          },
+                                                          memberEntry:{ word in
+                                                              switch word {
+                                                              case "read":
+                                                                  return DictEntry(word:"read",phonetic:nil,translation:"n. 读\nv. 阅读\nadj. 阅读的\nn. 第四义",definition:nil,pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+                                                              case "books":
+                                                                  return DictEntry(word:"books",phonetic:nil,translation:"n. 书；书籍",definition:nil,pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)
+                                                              default:
+                                                                  return nil
+                                                              }
+                                                          }) ?? ""
+
+        XCTAssertEqual(detail,"构成词释义\nread：n. 读；v. 阅读；adj. 阅读的；n. 第四义\nbooks：n. 书；n. 书籍")
+        XCTAssertFalse(detail.contains("English definition"))
+        XCTAssertFalse(detail.contains("read books"))
+    }
+
     func testHoverIncludesEveryChineseSenseButNoEnglishDefinitionOrPhonetic() {
         let senses = (0..<120).map { "n. 中文释义\($0)" }.joined(separator:"\n")
         let entry = DictEntry(word:"term",phonetic:"test",translation:"【通用】\n\(senses)\n【医学】\n医学含义",definition:"English definition",pos:nil,collins:0,oxford:false,tags:[],bnc:0,frq:0)

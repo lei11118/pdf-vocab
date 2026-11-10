@@ -17,6 +17,7 @@ struct ReaderView: View {
     @State private var resolvedURL: URL?
     @State private var optimizing = false
     @State private var translationRequest: SentenceTranslationRequest?
+    @State private var currentSelectionInfo: SelectionInfo?
     @State private var showPageJump = false
     @State private var cardContent: ReaderCardContent?
     @State private var readerHandle = ReaderHandle()
@@ -1166,14 +1167,19 @@ struct ReaderView: View {
                     onSelectionInfo: { info in
                         // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
                         guard let info, !info.text.isEmpty else {
+                            currentSelectionInfo = nil
                             cardContent = nil
                             translationRequest = nil
                             return
                         }
                         if let contextual = info.contextual {
                             guard contextReadingEnabled,
-                                  contextual.generation == contextReadingGeneration else { return }
+                                  contextual.generation == contextReadingGeneration else {
+                                currentSelectionInfo = nil
+                                return
+                            }
                         }
+                        currentSelectionInfo = info
                         let mathSourceText = info.contextual?.displaySurface ?? info.text
                         if let math = MathCardRouting.resolve(
                             sourceText: mathSourceText,
@@ -1216,6 +1222,16 @@ struct ReaderView: View {
                             mathEnabled: mathReadingEnabled) {
                             translationRequest = nil
                             cardContent = .math(math)
+                            return
+                        }
+                        if let info = currentSelectionInfo,
+                           info.text == text,
+                           let contextual = info.contextual,
+                           contextReadingEnabled,
+                           contextual.generation == contextReadingGeneration,
+                           (contextual.tokens.count == 1 || contextual.verifiedPhraseGroupSpan != nil) {
+                            translationRequest = nil
+                            cardContent = .contextual(contextual)
                             return
                         }
                         let count = WordPicker.countWords(in:text)
