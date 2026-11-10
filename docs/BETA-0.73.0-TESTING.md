@@ -1,23 +1,27 @@
 # ★标记★ v0.73.0 / build 124 测试版候选
 
-> 当前可用测试包来自 [build-ipa run 42819256727](https://github.com/lei11118/pdf-vocab/actions/runs/42819256727)，提交 `45cd4b2a17b4df40f0c49ffa5f9ea51b357e25d6`。unsigned IPA 为 52,762,710 bytes，SHA-256 `b8a2fd60e6cc170a96fe79a9e329aa6e5699f9db0d9467f367713595a87f43aa`；独立审计确认 CRC 63、arm64、0.73.0/build 124、minimum iOS 26.0，包内无模型。
+> 当前可用测试包来自 [build-ipa run 42835838852](https://github.com/lei11118/pdf-vocab/actions/runs/42835838852)，提交 `5b53f90c375cab7c48cfe1c042c613f1ac99b50c`。unsigned IPA 为 52,793,598 bytes，SHA-256 `dc65812aef2ddafd824418d86cca49e9a6d8945ddd0fb822fbd76d018f536402`；独立审计确认 CRC 63、arm64、0.73.0/build 124、minimum iOS 26.0，包内无模型。
 
 ## 当前 CI 与产物
 
-- **IPA 构建**：[build-ipa run 42819256727](https://github.com/lei11118/pdf-vocab/actions/runs/42819256727) 成功，构建提交 `45cd4b2a17b4df40f0c49ffa5f9ea51b357e25d6`。实际 IPA 的 Info.plist 为 `com.lei11118.pdfvocab`、v0.73.0、build 124、minimum iOS 26.0；文件大小 52,762,710 bytes，SHA-256 `b8a2fd60e6cc170a96fe79a9e329aa6e5699f9db0d9467f367713595a87f43aa`。独立包审计确认 CRC 63、arm64 且包内无模型。
+- **IPA 构建**：[build-ipa run 42835838852](https://github.com/lei11118/pdf-vocab/actions/runs/42835838852) 成功，构建提交 `5b53f90c375cab7c48cfe1c042c613f1ac99b50c`。实际 IPA 的 Info.plist 为 `com.lei11118.pdfvocab`、v0.73.0、build 124、minimum iOS 26.0；文件大小 52,793,598 bytes，SHA-256 `dc65812aef2ddafd824418d86cca49e9a6d8945ddd0fb822fbd76d018f536402`。独立包审计确认 CRC 63、arm64 且包内无模型。
 - **安装方式**：这是 unsigned IPA。在 iPadOS 26.0 或更高版本上，使用 AltStore 或 SideStore 导入并自签侧载。
-- **Focused UI**：[test-ink run 42819124823](https://github.com/lei11118/pdf-vocab/actions/runs/42819124823) 在与 IPA 相同的 SHA `45cd4b2a17b4df40f0c49ffa5f9ea51b357e25d6` 上 2/2 通过；连续拖选完整公式严格断言及完整公式交互通过。另一用例中系统英语→简体中文仍为 unsupported，实际译文未验证；Vision OCR 路径通过。结果来自模拟器，不代表真实 iPad/Pencil 验收。
-- **全量测试**：同 SHA 的 [test-ink run 42819134564](https://github.com/lei11118/pdf-vocab/actions/runs/42819134564) 已成功；301 项单元/集成和 9 项 UI 测试全部通过（0 failures，`TEST SUCCEEDED`）。
+- **本次词组翻译增量**：普通词与词组悬浮气泡尚无语境译文时启动语境任务；词组词库无中文时保留有标签的构成词中文释义与词性。成员选择沿用可验证的词组语境且维持单词选区，编辑栏翻译保留当前语境卡；缺组标记时安全回退至成员对齐。
+- **单元与集成测试**：初次 [run 42835753866](https://github.com/lei11118/pdf-vocab/actions/runs/42835753866) 的 308 项中 1 项因测试 fixture 预期文本多含一个 `n` 而失败。修正后的 run [42838868645](https://github.com/lei11118/pdf-vocab/actions/runs/42838868645)，head `9d8ffce`，308/308 通过（0 failures，`TEST SUCCEEDED`）。修正只涉及测试 fixture，app 的 `Sources/`、`Resources/` 与 `project.yml` 相对 app SHA `5b53f90` 未变。
+- **全量测试**：同 app SHA `5b53f90c375cab7c48cfe1c042c613f1ac99b50c` 的 [run 42835781136](https://github.com/lei11118/pdf-vocab/actions/runs/42835781136) 已完成但 workflow 失败：308 项单元/集成有 1 项 fixture 预期值失败（多出一个 `n`），9 项 UI 全部通过。
+- **前一候选 focused UI**：[run 42819124823](https://github.com/lei11118/pdf-vocab/actions/runs/42819124823) 在 app SHA `45cd4b2a17b4df40f0c49ffa5f9ea51b357e25d6` 上 2/2 通过；连续公式拖选和完整交互通过。另一用例系统英语→简体中文仍为 unsupported，实际译文未验证；Vision OCR 路径通过。该模拟器结果不是当前 `5b53f90` 候选的验收结果。
+- **前一候选 full run**：[run 42819134564](https://github.com/lei11118/pdf-vocab/actions/runs/42819134564) 在 app SHA `45cd4b2` 上 301/301 单元与集成、9/9 UI 通过；不代表本次 `5b53f90` 候选。
 - **独立模型评估**：[run 42603665321](https://github.com/lei11118/pdf-vocab/actions/runs/42603665321) 的真实 CPU 推理 5/5 样本均生成到 EOS，但空白归一化后的严格匹配为 0/5，资格 run 失败。评估仅为独立资格流程，模型未集成进 app。
 
 ## 历史包与回归记录
 
-- 前一 build 124 unsigned IPA 来自 [build-ipa run 42609989231](https://github.com/lei11118/pdf-vocab/actions/runs/42609989231)，提交 `535d8e3025195026c9ddeeb330d716cb93c0610a`，文件名 `PdfVocab-unsigned.ipa`，52,760,873 bytes，SHA-256 `3e8daac4293fe2b9923102004ac98aa5b033c9d08f5ba9cd022297b6c1d4aa22`；已由当前 run 42819256727 的 IPA 取代。
+- 前一 build 124 IPA 来自 [build-ipa run 42819256727](https://github.com/lei11118/pdf-vocab/actions/runs/42819256727)，提交 `45cd4b2a17b4df40f0c49ffa5f9ea51b357e25d6`，文件名 `PdfVocab-unsigned.ipa`，52,762,710 bytes，SHA-256 `b8a2fd60e6cc170a96fe79a9e329aa6e5699f9db0d9467f367713595a87f43aa`；同 SHA focused run `42819124823` 与 full run `42819134564` 均通过。当前 IPA 来自 run 42835838852。
+- 前序 build 124 unsigned IPA 来自 [build-ipa run 42609989231](https://github.com/lei11118/pdf-vocab/actions/runs/42609989231)，提交 `535d8e3025195026c9ddeeb330d716cb93c0610a`，文件名 `PdfVocab-unsigned.ipa`，52,760,873 bytes，SHA-256 `3e8daac4293fe2b9923102004ac98aa5b033c9d08f5ba9cd022297b6c1d4aa22`；随后由 run 42819256727 取代，后者又已由当前 run 42835838852 取代。
 - 上一候选的 [unit-only run 42610546878](https://github.com/lei11118/pdf-vocab/actions/runs/42610546878) 为 301/301；[full run 42611063500](https://github.com/lei11118/pdf-vocab/actions/runs/42611063500) 为 301/301 单元/集成通过、7/8 UI，完整公式连续拖选失败。test 提交 `d925c0e`、`702417b` 相对旧 IPA `535d8e3` 的 `Sources/`、`Resources/` 与 `project.yml` 无差异。
-- 前序 focused run [42810625318](https://github.com/lei11118/pdf-vocab/actions/runs/42810625318) 曾在 attempt 2 失败于连续公式拖选；attempt 1 启动超时，attempt 2 的原始手势日志和模拟器局限见 [实施现状文档](CONTEXT-READING-IMPLEMENTATION.md) 的历史失败诊断。本次 focused run `42819124823` 已在新 SHA 上通过同一严格断言。
+- 前序 focused run [42810625318](https://github.com/lei11118/pdf-vocab/actions/runs/42810625318) 曾在 attempt 2 失败于连续公式拖选；attempt 1 启动超时，attempt 2 的原始手势日志和模拟器局限见 [实施现状文档](CONTEXT-READING-IMPLEMENTATION.md) 的历史失败诊断。上一候选 focused run `42819124823` 已在前一 SHA 上通过同一严格断言。
 - 较早 Focused UI [run 42610948656](https://github.com/lei11118/pdf-vocab/actions/runs/42610948656) 最终失败；attempt 2 未能选中完整公式，后续翻译和扫描步骤未到达。[run 42616691635](https://github.com/lei11118/pdf-vocab/actions/runs/42616691635) 的 AX 附件记录 `selectedText: ²`，该值仅属于该前序 run。
-- 更早 unsigned IPA 来自 [build-ipa run 42492945297](https://github.com/lei11118/pdf-vocab/actions/runs/42492945297)，构建提交 `444240051f5ce54ce15637e48c0c1423001b6c1e`，文件名 `PdfVocab-unsigned.ipa`，52,760,513 bytes，SHA-256 `d3dc4eedd9b74347392ab16726960aa8e5af01810641bfe5490e57dcf9c700a4`；随后先由 run 42609989231、再由当前 run 42819256727 的 IPA 取代。
-- [test-ink run 42604142252](https://github.com/lei11118/pdf-vocab/actions/runs/42604142252) 测试提交 `c017e0fa03bf75454b2e3d3c1f667aa042947162` 已完成但失败：301 项中 1 项断言把 AST 保留的 Unicode 数学减号 `−3` 错期望为 ASCII `-3`；随后在 run 42610546878 中以正确期望重跑，301 项全部通过。该旧 run 的 8 项 UI 测试有 7 项通过，真人阅读流程一个用例的 4 项断言失败；流程的翻译与扫描步骤未到达。该 UI 结果属于较早 app 提交，不代表当前 build-ipa 提交 `45cd4b2` 的 UI 结果。
+- 更早 unsigned IPA 来自 [build-ipa run 42492945297](https://github.com/lei11118/pdf-vocab/actions/runs/42492945297)，构建提交 `444240051f5ce54ce15637e48c0c1423001b6c1e`，文件名 `PdfVocab-unsigned.ipa`，52,760,513 bytes，SHA-256 `d3dc4eedd9b74347392ab16726960aa8e5af01810641bfe5490e57dcf9c700a4`；随后先由 run 42609989231、再由 run 42819256727、最后由当前 run 42835838852 的 IPA 取代。
+- [test-ink run 42604142252](https://github.com/lei11118/pdf-vocab/actions/runs/42604142252) 测试提交 `c017e0fa03bf75454b2e3d3c1f667aa042947162` 已完成但失败：301 项中 1 项断言把 AST 保留的 Unicode 数学减号 `−3` 错期望为 ASCII `-3`；随后在 run 42610546878 中以正确期望重跑，301 项全部通过。该旧 run 的 8 项 UI 测试有 7 项通过，真人阅读流程一个用例的 4 项断言失败；流程的翻译与扫描步骤未到达。该 UI 结果属于较早 app 提交，不代表当前 app commit `5b53f90` 的 UI 结果。
 - 更早候选 `6522832` 的 [test-ink run 42490333622](https://github.com/lei11118/pdf-vocab/actions/runs/42490333622) 与 [build-ipa run 42490333408](https://github.com/lei11118/pdf-vocab/actions/runs/42490333408) 因私有 enum 使用 Swift 关键字 `subscript` 作为 case 而编译失败；测试未开始且没有 IPA。后续已改为 `subscriptValue`，该候选已被取代。
 
 ## 候选内容与边界
@@ -32,15 +36,15 @@
 | 证据 | 测试来源 | 能说明什么 |
 |---|---|---|
 | Reader 合成交互 | `ReaderRouteUITests` 的 native 与 raster-only PDF 夹具 | Reader 路由和交互链路；不是现实扫描文档的总体精度 |
-| 真实 IELTS 两行 OCR | `RealScanContextTests` 的单张 `IELTS-context-strip` 裁剪图；同 SHA full run 42819134564 记录 CER `0.019` / WER `0.105` | 单样本 Vision OCR 与选词上下文链路；不是整本或一般扫描页精度 |
+| 真实 IELTS 两行 OCR（前一候选样本） | `RealScanContextTests` 的单张 `IELTS-context-strip` 裁剪图；前一 app SHA `45cd4b2` 的 full run 42819134564 记录 CER `0.019` / WER `0.105` | 单样本 Vision OCR 与选词上下文链路；不是当前 `5b53f90` 候选的整本或一般扫描页精度 |
 | OpenStax native PDF | `RealPDFSelectionTests` 的文字层 PDF | 既有 PDFKit 原生文字选择回归；与 IELTS OCR 和合成 raster 用例分开 |
 
 ## 已验证与待重测项目
 
 | 环境 | 已验证 | 待重测或未验证 |
 |---|---|---|
-| 单元/集成目标（iPad Pro 13-inch M5、iOS 26.5 模拟器） | 当前 SHA full run 42819134564 为 301/301 通过；历史 run 42610546878 和 42611063500 仅代表旧候选 | 无当前 SHA 的单元/集成失败；真机验收仍待完成 |
-| Reader UI（iPad Pro 13-inch M5、iOS 26.5 模拟器） | 当前 SHA focused run 42819124823 为 2/2 通过，full run 42819134564 为 9/9 通过；连续拖选公式严格断言及完整公式交互通过。另一用例中系统英语→简体中文 unsupported，实际译文未验证，Vision OCR 路径通过 | 真实 iPad / Apple Pencil 和实际翻译内容仍待验收 |
+| 单元/集成目标（iPad Pro 13-inch M5、iOS 26.5 模拟器） | 当前 app SHA `5b53f90` 初次 run 42835753866 有 1 个 fixture 预期值失败；修正后的 test-only run 42838868645 在 head `9d8ffce` 上 308/308 通过。Full run 42835781136 因旧 fixture 断言 workflow 失败 | 修正 fixture 后尚无新的 full workflow 结果；前一 SHA `45cd4b2` 的 run 42819134564 为 301/301 |
+| Reader UI（iPad Pro 13-inch M5、iOS 26.5 模拟器） | 前一 app SHA `45cd4b2` 的 focused run 42819124823 为 2/2、full run 42819134564 为 9/9；当前 app SHA `5b53f90` 的 full run 42835781136 为 9/9 通过 | 真实 iPad / Apple Pencil 和实际翻译内容待验证 |
 | 真实 iPad / Apple Pencil | 本次 CI 没有真实设备证据 | 在设备上复验下面三条 Reader 路径；模拟器结果不能代替实机确认 |
 
 真实 iPad / Apple Pencil 复验路径：
@@ -51,7 +55,7 @@
 
 ## 尚待验收
 
-- 当前 SHA 的 focused run 42819124823（2/2）与 full run 42819134564（301/301 单元/集成、9/9 UI）均通过；完整公式连续拖选及后续交互通过。真实 iPad / Apple Pencil 行为尚未验证，系统英语→简体中文状态为 unsupported，实际译文未验证。
+- 当前词组翻译候选修正后的 unit run 42838868645 已 308/308 通过；原 full run 42835781136 因旧 fixture 预期值断言失败而 workflow failure，但 9/9 UI 通过。尚无 fixture 修正后的 full workflow 结果。真实 iPad / Apple Pencil 行为尚未验证；系统英语→简体中文状态为 unsupported，实际译文未验证。
 - 上述三条真实 iPad / Apple Pencil Reader 路径尚未完成实机验收。
 - 真实 Apple Translation 译义与 attributed-token 对齐仍需人工核验并建立金标。
 - 整本、多样本 OCR 质量尚未验证；单张裁剪图结果不可外推。
