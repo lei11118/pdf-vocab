@@ -182,7 +182,15 @@ final class ReaderCoordinator: NSObject {
         var contextRoute: Bool
         var didMove = false
     }
+    private struct PendingContextFingerAnchor {
+        let viewPoint: CGPoint
+        let page: PDFPage
+        let pagePoint: CGPoint
+        let scaleFactor: CGFloat
+        let touchTimestamp: TimeInterval
+    }
     private var drag: DragState?
+    private var pendingContextFingerAnchor: PendingContextFingerAnchor?
     private var holdMenuWork: DispatchWorkItem?
 
     // MARK: - 拖动柄 / 放大镜 / 菜单
@@ -788,8 +796,20 @@ final class ReaderCoordinator: NSObject {
     }
 
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
-        guard let pdfView else { return }
         let kind = Self.kind(of: gesture)
+        var pendingContextAnchor: PendingContextFingerAnchor?
+        if kind == "finger" {
+            switch gesture.state {
+            case .began:
+                pendingContextAnchor = pendingContextFingerAnchor
+                pendingContextFingerAnchor = nil
+            case .ended, .cancelled, .failed:
+                pendingContextFingerAnchor = nil
+            default:
+                break
+            }
+        }
+        guard let pdfView else { return }
 
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--human-reading-audit") {
@@ -831,6 +851,14 @@ final class ReaderCoordinator: NSObject {
             }
 
             requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+
+            if let pendingContextAnchor,
+               beginRecoveredContextDrag(from: pendingContextAnchor,
+                                         to: hit,
+                                         viewPoint: viewPoint,
+                                         gesture: gesture) {
+                return
+            }
 
             // ① 长按落在已有选区内 → 选区本体拖动微调(以远端为锚,与原生"按住选区拖动"一致)
             if let (page, lineRects) = orderedSelectionRects(),
@@ -973,6 +1001,51 @@ final class ReaderCoordinator: NSObject {
         default:
             break
         }
+    }
+
+    /// Recover a context drag when UIKit reports its first recognized point
+    /// after the finger has already moved beyond the long-press threshold.
+    private func beginRecoveredContextDrag(from anchor: PendingContextFingerAnchor,
+                                           to hit: (page: PDFPage, point: CGPoint),
+                                           viewPoint: CGPoint,
+                                           gesture: UILongPressGestureRecognizer) -> Bool {
+        guard let pdfView,
+              contextReadingEnabled,
+              !markMode,
+              selectionText.isEmpty,
+              !ocrSelectionActive,
+              drag == nil,
+              ocrDrag == nil,
+              gesture.numberOfTouches == 1,
+              hit.page === anchor.page else { return false }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now >= anchor.touchTimestamp, now - anchor.touchTimestamp <= 10 else { return false }
+
+        let reprojectedAnchor = pdfView.convert(anchor.pagePoint, from: anchor.page)
+        guard abs(pdfView.scaleFactor - anchor.scaleFactor) <= 0.001,
+              SelectionGeometry.distanceSquared(reprojectedAnchor, anchor.viewPoint) <= 4,
+              SelectionGeometry.distanceSquared(anchor.viewPoint, viewPoint) > gesture.allowableMovement * gesture.allowableMovement,
+              let anchorSeed = contextualSeed(on: anchor.page, at: anchor.pagePoint) else { return false }
+
+        let recoveredDrag = DragState(kind: .word,
+                                      page: anchor.page,
+                                      anchorPoint: anchor.pagePoint,
+                                      anchorWord: anchorSeed.selection,
+                                      lastPoint: hit.point,
+                                      contextRoute: true,
+                                      didMove: true)
+        guard let selection = contextualSelectionBetween(recoveredDrag, and: hit.point) else { return false }
+
+        drag = recoveredDrag
+        lastTouchViewPoint = viewPoint
+        freezeScrolling(true)
+        loupe.begin(at: viewPoint, widget: nil, in: pdfView)
+        applySelection(selection, src: "context-drag-recovered",
+                       contextRoute: true, geometryQuality: .approximate)
+        updateAutoscroll(for: viewPoint)
+        DiagLog.log("press.recovered(finger): context drag from initial touch")
+        return true
     }
 
     /// 按住不动 ~0.35s 后菜单先弹出(原生时机);一旦拖动立即取消(文字层与 OCR 路径共用)。
@@ -3368,6 +3441,9 @@ final class ReaderCoordinator: NSObject {
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === fingerPressRef {
+            pendingContextFingerAnchor = nil
+        }
         if menu.containsToolbar(touch.view) { return false }
         // A drawing Pencil (including laser) cannot enter any selection path.
         if markMode && touch.type == .pencil { return false }
@@ -3395,6 +3471,22 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
             #endif
             if let hit = pageHit(touchPoint) {
                 requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+                if gestureRecognizer === fingerPressRef,
+                   touch.type == .direct,
+                   contextReadingEnabled,
+                   !markMode,
+                   selectionText.isEmpty,
+                   !ocrSelectionActive,
+                   drag == nil,
+                   ocrDrag == nil {
+                    pendingContextFingerAnchor = PendingContextFingerAnchor(
+                        viewPoint: touchPoint,
+                        page: hit.page,
+                        pagePoint: hit.point,
+                        scaleFactor: pdfView.scaleFactor,
+                        touchTimestamp: touch.timestamp
+                    )
+                }
             }
         }
         return true
