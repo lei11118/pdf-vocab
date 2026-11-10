@@ -138,7 +138,7 @@ final class InteractionPolishTests:XCTestCase {
                                                               }
                                                           }) ?? ""
 
-        XCTAssertEqual(detail,"构成词释义\nread：n. 读；v. 阅读；adj. 阅读的；n. 第四义\nbooks：n. 书；n. 书籍")
+        XCTAssertEqual(detail,"构成词释义\nread：n. 读；v. 阅读；adj. 阅读的；n. 第四义\nbooks：n. 书；书籍")
         XCTAssertFalse(detail.contains("English definition"))
         XCTAssertFalse(detail.contains("read books"))
     }
