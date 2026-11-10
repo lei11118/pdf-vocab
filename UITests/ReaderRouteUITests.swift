@@ -409,10 +409,26 @@ extension ReaderRouteUITests {
         app.buttons["跳转"].tap()
         XCTAssertEqual(waitForAudit(observer, timeout: 15) { ($0["page"] as? Int) == 0 }?["page"] as? Int, 0)
 
-        let pageZero = waitForAudit(observer, timeout: 10) { ($0["page"] as? Int) == 0 }
+        let readerViewport = canvas.frame
+        let pageZero = waitForAudit(observer, timeout: 10) { snapshot in
+            guard (snapshot["page"] as? Int) == 0,
+                  let classroom = self.point(in: snapshot, key: "wordPoints", text: "classroom", source: "text") else {
+                return false
+            }
+            return readerViewport.contains(CGPoint(x: classroom.x, y: classroom.y))
+        }
+        XCTAssertNotNil(pageZero, "The classroom native text geometry returns inside the PDF viewport after jumping to page 1")
+        guard let pageZero else {
+            attachAuditDiagnostics("classroom-native-geometry-outside-viewport", app: app, observer: observer)
+            return
+        }
         let classroomWord = point(in: pageZero, key: "wordPoints", text: "classroom", source: "text")
         XCTAssertNotNil(classroomWord)
-        coordinate(for: try XCTUnwrap(classroomWord), in: app).press(forDuration: 1.0)
+        guard let classroomWord else {
+            attachAuditDiagnostics("classroom-native-geometry-unavailable", app: app, observer: observer)
+            return
+        }
+        coordinate(for: classroomWord, in: app).press(forDuration: 1.0)
         XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "classroom" },
                          "Long press on linked text selects it instead of following the link")
         attachAuditScreenshot("synthetic-searchable-pdf-long-press-linked-word", app: app)
@@ -462,7 +478,9 @@ extension ReaderRouteUITests {
         }
 
         let formulaSnapshot = waitForAudit(observer, timeout: 10) {
-            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty &&
+            self.point(in: $0, key: "wordPoints", text: "E=mc²", source: "text", edge: .start) != nil &&
+            self.point(in: $0, key: "wordPoints", text: "E=mc²", source: "text", edge: .end) != nil
         }
         XCTAssertNotNil(formulaSnapshot, "The formula geometry is read after the previous selection is cleared")
         guard formulaSnapshot != nil else {
@@ -498,7 +516,9 @@ extension ReaderRouteUITests {
             attachAuditDiagnostics("formula-continuous-selection-failed", app: app, observer: observer)
             canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
             let clearedForHandleSelection = waitForAudit(observer, timeout: 10) {
-                ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+                ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty &&
+                self.point(in: $0, key: "wordPoints", text: formulaText, source: "text", edge: .start) != nil &&
+                self.point(in: $0, key: "wordPoints", text: formulaText, source: "text", edge: .end) != nil
             }
             XCTAssertNotNil(clearedForHandleSelection,
                             "Clear the failed continuous selection before independently testing the visible selection handle")
@@ -597,7 +617,9 @@ extension ReaderRouteUITests {
         closeReaderPanel(in: app, title: "设置")
 
         let formulaAgainSnapshot = waitForAudit(observer, timeout: 10) {
-            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty &&
+            self.point(in: $0, key: "wordPoints", text: "E=mc²", source: "text", edge: .start) != nil &&
+            self.point(in: $0, key: "wordPoints", text: "E=mc²", source: "text", edge: .end) != nil
         }
         XCTAssertNotNil(formulaAgainSnapshot, "The second formula selection starts with no previous live selection")
         let formulaAgain = point(in: formulaAgainSnapshot, key: "wordPoints", text: "E=mc²", source: "text")
@@ -1064,12 +1086,20 @@ extension ReaderRouteUITests {
     private func waitForAudit(_ observer: XCUIElement,
                               timeout: TimeInterval,
                               condition: @escaping ([String: Any]) -> Bool) -> [String: Any]? {
+        let snapshotLock = NSLock()
+        var matchingSnapshot: [String: Any]?
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             guard let snapshot = self.auditJSON(observer) else { return false }
-            return condition(snapshot)
+            guard condition(snapshot) else { return false }
+            snapshotLock.lock()
+            matchingSnapshot = snapshot
+            snapshotLock.unlock()
+            return true
         }, object: observer)
         guard XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed else { return nil }
-        return auditJSON(observer)
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return matchingSnapshot
     }
 
     private func point(in snapshot: [String: Any]?,
