@@ -192,9 +192,11 @@ public enum MathReadingService {
                 nestingDepth = max(0, nestingDepth - 1)
             case "/":
                 divisionCount += 1
-            case "+", "-", "=", "<", ">" where nestingDepth == 0:
-                if divisionCount >= 2 { return true }
-                divisionCount = 0
+            case "+", "-", "=", "<", ">":
+                if nestingDepth == 0 {
+                    if divisionCount >= 2 { return true }
+                    divisionCount = 0
+                }
             default:
                 break
             }

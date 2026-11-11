@@ -95,6 +95,8 @@ final class MathReadingTests: XCTestCase {
         XCTAssertEqual(fractionNode.denominator?.children.compactMap(\.value).joined(), "2")
         XCTAssertNil(fraction.unicode, "A two dimensional fraction is not flattened to a Unicode string")
 
+        _ = try parsed("\\frac{1}{x+1}/2/3")
+
         let scripted = try parsed("x_i^2")
         let xScripts = try XCTUnwrap(findNodes(in: try XCTUnwrap(scripted.ast), kind: .scripts).first)
         XCTAssertEqual(xScripts.base?.value, "x")
