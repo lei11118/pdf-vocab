@@ -51,6 +51,9 @@ public enum MathReadingService {
         }
 
         let containsRawLatex = sourceText.contains("\\")
+        guard containsRawLatex || !hasSuspiciousSourceStructure(sourceText) else {
+            return needsReview(sourceText)
+        }
         guard preflight(sourceText, maximumUTF16Units: maximumUTF16Length),
               let latexInput = latexInput(for: sourceText),
               preflight(latexInput, maximumUTF16Units: maximumLatexUTF16Length) else {
@@ -110,6 +113,93 @@ public enum MathReadingService {
             status: .needsReview,
             ast: ast
         )
+    }
+
+    /// A parser can faithfully round-trip linear text that has already lost visual structure in OCR/PDF text.
+    /// Keep suspicious source strings verbatim for review instead of silently presenting their guessed layout.
+    private static func hasSuspiciousSourceStructure(_ sourceText: String) -> Bool {
+        if startsWithListLabel(sourceText) {
+            return true
+        }
+        if hasEquationRelation(sourceText) && hasUnmarkedScriptLikeAdjacency(sourceText) {
+            return true
+        }
+        return hasRepeatedDivisionWithinTerm(sourceText)
+    }
+
+    private static func startsWithListLabel(_ sourceText: String) -> Bool {
+        let characters = Array(sourceText.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard characters.count >= 3 else { return false }
+
+        if characters[0] == "(",
+           isASCIIListLabelCharacter(characters[1]),
+           characters[2] == ")",
+           characters.count > 3,
+           characters[3].isWhitespace {
+            return true
+        }
+
+        return isASCIIListLabelCharacter(characters[0])
+            && (characters[1] == "." || characters[1] == ")" || characters[1] == ":")
+            && characters[2].isWhitespace
+    }
+
+    private static func isASCIIListLabelCharacter(_ character: Character) -> Bool {
+        guard character.unicodeScalars.count == 1, let scalar = character.unicodeScalars.first else { return false }
+        return (scalar.value >= 48 && scalar.value <= 57)
+            || (scalar.value >= 65 && scalar.value <= 90)
+            || (scalar.value >= 97 && scalar.value <= 122)
+    }
+
+    private static func hasEquationRelation(_ sourceText: String) -> Bool {
+        sourceText.unicodeScalars.contains { scalar in
+            scalar == "=" || scalar == "<" || scalar == ">"
+                || scalar.value == 0x2260 // not equal
+                || scalar.value == 0x2264 // less than or equal
+                || scalar.value == 0x2265 // greater than or equal
+        }
+    }
+
+    /// A closing group followed by a baseline digit in an equation can be OCR's lost superscript,
+    /// for example `f(2)=3(2)2`; leave the original visible until that ambiguity is resolved.
+    private static func hasUnmarkedScriptLikeAdjacency(_ sourceText: String) -> Bool {
+        let characters = Array(sourceText)
+        for index in characters.indices where characters[index] == ")" || characters[index] == "]" || characters[index] == "}" {
+            var nextIndex = index + 1
+            while nextIndex < characters.count && characters[nextIndex].isWhitespace {
+                nextIndex += 1
+            }
+            guard nextIndex < characters.count else { continue }
+            let scalar = characters[nextIndex].unicodeScalars.first
+            if let scalar, scalar.value >= 48 && scalar.value <= 57 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Multiple divisions within one additive term are ambiguous in text extracted from a 2-D fraction.
+    /// A single slash, or separate fractions joined by +/−, remains a normal linear expression.
+    private static func hasRepeatedDivisionWithinTerm(_ sourceText: String) -> Bool {
+        var nestingDepth = 0
+        var divisionCount = 0
+
+        for character in sourceText {
+            switch character {
+            case "(", "[", "{":
+                nestingDepth += 1
+            case ")", "]", "}":
+                nestingDepth = max(0, nestingDepth - 1)
+            case "/":
+                divisionCount += 1
+            case "+", "-", "=", "<", ">" where nestingDepth == 0:
+                if divisionCount >= 2 { return true }
+                divisionCount = 0
+            default:
+                break
+            }
+        }
+        return divisionCount >= 2
     }
 
     private static func prefixWithinUTF16Units(_ text: String, maximumUTF16Units: Int) -> String {

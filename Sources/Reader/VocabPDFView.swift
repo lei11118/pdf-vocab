@@ -2,6 +2,21 @@ import UIKit
 import PDFKit
 import ObjectiveC
 
+enum LinkOutlineRenderingPolicy {
+    static let maximumAnnotationsPerPage = 512
+    static let maximumAnnotationsPerRefresh = 1_024
+    static let maximumOutlines = 160
+
+    static func shouldSkipOutlines(annotationCounts: [Int]) -> Bool {
+        annotationCounts.contains { $0 > maximumAnnotationsPerPage }
+            || annotationCounts.reduce(0, +) > maximumAnnotationsPerRefresh
+    }
+
+    static func canAppendOutline(currentCount: Int) -> Bool {
+        currentCount < maximumOutlines
+    }
+}
+
 /// PDFView 子类:屏蔽编辑菜单中的"全选"。
 /// 原因:文字量大的 PDF 上,全选会选中整篇文档,触发海量高亮注解/内存暴涨,
 /// 造成卡死甚至被系统杀死(社区已知问题)。其余菜单项(复制等)保留。
@@ -22,7 +37,12 @@ final class VocabPDFView: PDFView {
 
     static let readingEdgeInset: CGFloat = 100
 
-    var handwritingMode = false
+    var handwritingMode = false {
+        didSet {
+            guard oldValue != handwritingMode else { return }
+            refreshLinkOutlines()
+        }
+    }
 
     func openLink(_ annotation: PDFAnnotation) {
         DiagLog.log("link: explicitly opened")
@@ -36,27 +56,81 @@ final class VocabPDFView: PDFView {
 
     private let linkOutline = CAShapeLayer()
 
+    private struct VisiblePageFingerprint: Equatable {
+        let identity: ObjectIdentifier
+        let rotation: Int
+        let boundsInView: CGRect
+    }
+
+    private struct LinkOutlineFingerprint: Equatable {
+        let documentIdentity: ObjectIdentifier?
+        let viewBounds: CGRect
+        let scaleFactor: CGFloat
+        let handwritingMode: Bool
+        let visiblePages: [VisiblePageFingerprint]
+    }
+
+    private struct PageAnnotationSnapshot {
+        let page: PDFPage
+        let annotations: [PDFAnnotation]
+    }
+
+    private var lastLinkOutlineFingerprint: LinkOutlineFingerprint?
+
     /// Display-only overlay: never mutates PDF annotations or intercepts touches.
     func refreshLinkOutlines() {
+        let pages = visiblePages
+        let fingerprint = LinkOutlineFingerprint(
+            documentIdentity: document.map { ObjectIdentifier($0) },
+            viewBounds: bounds,
+            scaleFactor: scaleFactor,
+            handwritingMode: handwritingMode,
+            visiblePages: pages.map { page in
+                VisiblePageFingerprint(identity: ObjectIdentifier(page),
+                                       rotation: page.rotation,
+                                       boundsInView: convert(page.bounds(for: displayBox), from: page))
+            }
+        )
+        guard fingerprint != lastLinkOutlineFingerprint else {
+            installLinkOutlineLayerIfNeeded()
+            return
+        }
+        lastLinkOutlineFingerprint = fingerprint
+
         let path = UIBezierPath()
         if !handwritingMode {
-            for page in visiblePages {
-                for annotation in page.annotations where Self.hasTapAction(annotation) || annotation.type == "Widget" {
-                    let rect = convert(annotation.bounds,from:page)
-                    if rect.intersects(bounds), !rect.isEmpty { path.append(UIBezierPath(rect:rect)) }
+            let snapshots = pages.map { PageAnnotationSnapshot(page: $0, annotations: $0.annotations) }
+            let annotationCounts = snapshots.map { $0.annotations.count }
+            if !LinkOutlineRenderingPolicy.shouldSkipOutlines(annotationCounts: annotationCounts) {
+                var outlineCount = 0
+                pageLoop: for snapshot in snapshots {
+                    for annotation in snapshot.annotations {
+                        guard Self.hasTapAction(annotation) || annotation.type == "Widget" else { continue }
+                        let rect = convert(annotation.bounds, from: snapshot.page)
+                        guard rect.intersects(bounds), !rect.isEmpty else { continue }
+                        guard LinkOutlineRenderingPolicy.canAppendOutline(currentCount: outlineCount) else { break pageLoop }
+                        path.append(UIBezierPath(rect: rect))
+                        outlineCount += 1
+                    }
                 }
             }
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         linkOutline.bounds = bounds
-        linkOutline.position = CGPoint(x:bounds.midX,y:bounds.midY)
-        linkOutline.path = path.cgPath
+        linkOutline.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        linkOutline.path = path.isEmpty ? nil : path.cgPath
         linkOutline.fillColor = UIColor.clear.cgColor
         linkOutline.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8).cgColor
         linkOutline.lineWidth = 1
-        if layer.sublayers?.last !== linkOutline { layer.addSublayer(linkOutline) }
+        installLinkOutlineLayerIfNeeded()
         CATransaction.commit()
+    }
+
+    private func installLinkOutlineLayerIfNeeded() {
+        if linkOutline.superlayer !== layer || layer.sublayers?.last !== linkOutline {
+            layer.addSublayer(linkOutline)
+        }
     }
 
     override func layoutSubviews() {

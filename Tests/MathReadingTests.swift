@@ -154,6 +154,28 @@ final class MathReadingTests: XCTestCase {
         XCTAssertNotNil(equation?.ast)
     }
 
+    func testSuspiciousLinearizedOrLabelledSourceNeedsReviewWithoutLatex() throws {
+        let suspiciousInputs = [
+            "x = 1 / (y+1) / 2 - 3/3",
+            "f(2) = 3(2)2 + 1",
+            "b. f(2) = 3(2)2 + 1"
+        ]
+
+        for source in suspiciousInputs {
+            let result = try XCTUnwrap(MathReadingService.resolve(source), "Expected ambiguous math source to route for review: \(source)")
+            XCTAssertEqual(result.status, .needsReview, source)
+            XCTAssertEqual(result.sourceText, source, "Review keeps the extracted text verbatim")
+            XCTAssertNil(result.latex, "Ambiguous source must not be re-typeset as a confirmed formula")
+            XCTAssertNil(result.unicode)
+        }
+    }
+
+    func testUnambiguousLinearAndSeparateSlashExpressionsRemainParsed() throws {
+        _ = try parsed("E=mc²")
+        _ = try parsed("F = ma")
+        _ = try parsed("x = 1/2 + 3/4")
+    }
+
     func testMalformedUnknownAndOverLimitMathIsReturnedForReview() throws {
         let unknownCommand = try XCTUnwrap(MathReadingService.resolve("x\\unknown=1"))
         XCTAssertEqual(unknownCommand.status, .needsReview)
