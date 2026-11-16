@@ -21,15 +21,19 @@ struct FloatingCardWindow: View {
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
     var translationRequest: SentenceTranslationRequest? = nil
+    var contextReadingEnabled = false
     var reserveTop: CGFloat = 0
     @StateObject private var sentenceTranslation = SentenceTranslationState()
     var body: some View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose,reserveTop:reserveTop) {
-            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab)
+            WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,
+                          contextReadingEnabled:contextReadingEnabled)
                 .environment(\.readerPanelClose, onClose)
                 .environmentObject(sentenceTranslation)
         } compact: {
-            CompactCardView(content:content,onClose:onClose,sentenceTranslation:sentenceTranslation.displayText)
+            CompactCardView(content:content,onClose:onClose,
+                            sentenceTranslation:sentenceTranslation.displayText,
+                            contextReadingEnabled:contextReadingEnabled)
         }
         .background {
             if let request = sentenceTranslation.currentRequest {

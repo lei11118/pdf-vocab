@@ -37,6 +37,17 @@ final class ContextTranslationPersistenceTests: XCTestCase {
         let translationCalls = await calls.count
         XCTAssertEqual(translationCalls, 1, "A validated snapshot should be reusable by another service instance")
 
+        let cacheOnlyService = ContextualTranslationService(isEnabled: { true }, payloadStore: store)
+        let diskCacheHit = try await cacheOnlyService.cachedResult(for: request,
+                                                                   sourceLanguageIdentifier: "en",
+                                                                   targetLanguageIdentifier: "zh-Hans",
+                                                                   backendVersion: "fixture-v1")
+        XCTAssertEqual(diskCacheHit, .candidate(ContextualTranslationCandidate(sourcePhrase: "read",
+                                                                                translatedPhrase: "thing")),
+                       "A persisted validated payload should be available before language/session preparation")
+        let callsAfterCacheOnlyLookup = await calls.count
+        XCTAssertEqual(callsAfterCacheOnlyLookup, 1, "Cache-only persistent lookup must not invoke translation")
+
         let otherSelection = try persistedRequest(documentSHA256: documentSHA256, selected: "books")
         let thirdService = ContextualTranslationService(isEnabled: { true }, payloadStore: store)
         let third = try await thirdService.translate(otherSelection,

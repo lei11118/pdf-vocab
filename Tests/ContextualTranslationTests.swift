@@ -740,6 +740,17 @@ final class ContextualTranslationServiceTests: XCTestCase {
         XCTAssertEqual(enabledCallCount, 2)
         XCTAssertEqual(cachedEntryCount, 3)
         XCTAssertEqual(cachedPayloadCount, 2)
+
+        defaults.set(false, forKey: FeatureFlags.contextReadingEnabledKey)
+        do {
+            _ = try await service.cachedResult(for: first,
+                                               sourceLanguageIdentifier: "en",
+                                               targetLanguageIdentifier: "zh-Hans",
+                                               backendVersion: "test-v1")
+            XCTFail("A disabled feature switch must block cache-only lookups")
+        } catch let error as ContextualTranslationError {
+            XCTAssertEqual(error, .disabled)
+        }
     }
 
     func testWholeBlockPayloadCacheExtractsEachSelectedWordOnce() async throws {
@@ -773,6 +784,146 @@ final class ContextualTranslationServiceTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
         XCTAssertEqual(candidateCount, 2)
         XCTAssertEqual(payloadCount, 1)
+    }
+
+    func testCacheOnlyLookupReusesSiblingPayloadAndSeparatesValidatedIdentity() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 8, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let phrase = try makePhraseRequest(text: text, selected: "read books")
+        let otherDocument = ContextualTranslationRequest(
+            documentSHA256: "another-document",
+            sentenceText: read.sentenceText,
+            tokens: read.tokens,
+            selectedTokenIDs: read.selectedTokenIDs,
+            selectedSourceSpans: read.selectedSourceSpans,
+            selectedSourcePhrase: read.selectedSourcePhrase,
+            selectedPhraseGroup: read.selectedPhraseGroup
+        )
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            return try makeWholeBlockPayload(request: request, source: source)
+        }
+        let original = try await service.translate(read,
+                                                   sourceLanguageIdentifier: "en",
+                                                   targetLanguageIdentifier: "zh-Hans",
+                                                   backendVersion: "test-v1",
+                                                   using: translator)
+
+        let exactCached = try await service.cachedResult(for: read,
+                                                         sourceLanguageIdentifier: "en",
+                                                         targetLanguageIdentifier: "zh-Hans",
+                                                         backendVersion: "test-v1")
+        let siblingCached = try await service.cachedResult(for: books,
+                                                           sourceLanguageIdentifier: "en",
+                                                           targetLanguageIdentifier: "zh-Hans",
+                                                           backendVersion: "test-v1")
+        XCTAssertEqual(exactCached, .candidate(original))
+        XCTAssertEqual(siblingCached,
+                       .candidate(ContextualTranslationCandidate(sourcePhrase: "books", translatedPhrase: "书")))
+
+        let backendMismatch = try await service.cachedResult(for: read,
+                                                             sourceLanguageIdentifier: "en",
+                                                             targetLanguageIdentifier: "zh-Hans",
+                                                             backendVersion: "test-v2")
+        let languageMismatch = try await service.cachedResult(for: read,
+                                                              sourceLanguageIdentifier: "fr",
+                                                              targetLanguageIdentifier: "zh-Hans",
+                                                              backendVersion: "test-v1")
+        let documentMismatch = try await service.cachedResult(for: otherDocument,
+                                                              sourceLanguageIdentifier: "en",
+                                                              targetLanguageIdentifier: "zh-Hans",
+                                                              backendVersion: "test-v1")
+        let phraseMismatch = try await service.cachedResult(for: phrase,
+                                                            sourceLanguageIdentifier: "en",
+                                                            targetLanguageIdentifier: "zh-Hans",
+                                                            backendVersion: "test-v1")
+        XCTAssertNil(backendMismatch, "Backend version is part of the validated cache identity")
+        XCTAssertNil(languageMismatch, "Language pair is part of the validated cache identity")
+        XCTAssertNil(documentMismatch, "Document identity is part of the validated cache identity")
+        XCTAssertNil(phraseMismatch, "Verified phrase scope must not borrow an ordinary word cache entry")
+        let translationCalls = await calls.count
+        XCTAssertEqual(translationCalls, 1, "Cache-only lookups must not invoke the translation backend")
+    }
+
+    func testDefinitiveNoAlignmentIsBoundedAndCachedOnlyForThatSelection() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 2, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let read = try makeRequest(text: "They read books daily.", selected: "read")
+        let books = try makeRequest(text: "They read books daily.", selected: "books")
+        let unalignedTranslator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            let target = "他们读书每天"
+            return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                                attributedSourceText: source,
+                                                targetText: target,
+                                                attributedTargetText: AttributedString(target))
+        }
+
+        do {
+            _ = try await service.translate(read,
+                                            sourceLanguageIdentifier: "en",
+                                            targetLanguageIdentifier: "zh-Hans",
+                                            backendVersion: "test-v1",
+                                            using: unalignedTranslator)
+            XCTFail("Expected a definitive no-alignment result")
+        } catch let error as ContextualTranslationError {
+            XCTAssertEqual(error, .selectedTokenNotAligned)
+        }
+
+        let cachedNone = try await service.cachedResult(for: read,
+                                                        sourceLanguageIdentifier: "en",
+                                                        targetLanguageIdentifier: "zh-Hans",
+                                                        backendVersion: "test-v1")
+        let siblingMiss = try await service.cachedResult(for: books,
+                                                         sourceLanguageIdentifier: "en",
+                                                         targetLanguageIdentifier: "zh-Hans",
+                                                         backendVersion: "test-v1")
+        XCTAssertEqual(cachedNone, .noAlignedResult)
+        XCTAssertNil(siblingMiss, "A negative selection result must not apply to another token")
+
+        do {
+            _ = try await service.translate(read,
+                                            sourceLanguageIdentifier: "en",
+                                            targetLanguageIdentifier: "zh-Hans",
+                                            backendVersion: "test-v1",
+                                            using: unalignedTranslator)
+            XCTFail("The cached no-alignment result must not retry the backend")
+        } catch let error as ContextualTranslationError {
+            XCTAssertEqual(error, .selectedTokenNotAligned)
+        }
+        let translationCalls = await calls.count
+        XCTAssertEqual(translationCalls, 1)
+        let cachedEntries = await service.cachedEntryCount
+        XCTAssertEqual(cachedEntries, 1, "Definitive negative results share the bounded candidate LRU")
+
+        await service.clearCache()
+        let afterClear = try await service.cachedResult(for: read,
+                                                       sourceLanguageIdentifier: "en",
+                                                       targetLanguageIdentifier: "zh-Hans",
+                                                       backendVersion: "test-v1")
+        XCTAssertNil(afterClear, "Clearing the bounded cache must clear negative results too")
+        do {
+            _ = try await service.translate(read,
+                                            sourceLanguageIdentifier: "en",
+                                            targetLanguageIdentifier: "zh-Hans",
+                                            backendVersion: "test-v1",
+                                            using: unalignedTranslator)
+            XCTFail("After clearing, the backend should be attempted again")
+        } catch let error as ContextualTranslationError {
+            XCTAssertEqual(error, .selectedTokenNotAligned)
+        }
+        let callsAfterClear = await calls.count
+        XCTAssertEqual(callsAfterClear, 2)
+    }
+
+    func testOnlySelectionAlignmentAbsenceIsClassifiedAsNoResult() {
+        XCTAssertTrue(ContextualTranslationError.selectedTokenNotAligned.isDefinitiveNoAlignment)
+        XCTAssertTrue(ContextualTranslationError.selectedPhraseGroupNotAligned.isDefinitiveNoAlignment)
+        XCTAssertFalse(ContextualTranslationError.invalidConfiguration.isDefinitiveNoAlignment)
+        XCTAssertFalse(ContextualTranslationError.staleRequest.isDefinitiveNoAlignment)
     }
 
     func testPayloadCacheSeparatesGroupSourceLanguageAndBackend() async throws {
@@ -819,6 +970,18 @@ final class ContextualTranslationServiceTests: XCTestCase {
 
         let readResult = try await service.translate(read, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
                                                      backendVersion: "test-v1", using: translator)
+        let missingSibling = try await service.cachedResult(for: books,
+                                                            sourceLanguageIdentifier: "en",
+                                                            targetLanguageIdentifier: "zh-Hans",
+                                                            backendVersion: "test-v1")
+        let originalStillCached = try await service.cachedResult(for: read,
+                                                                 sourceLanguageIdentifier: "en",
+                                                                 targetLanguageIdentifier: "zh-Hans",
+                                                                 backendVersion: "test-v1")
+        XCTAssertNil(missingSibling, "A missing sibling mark is a cache miss, not a definitive no-alignment result")
+        XCTAssertEqual(originalStillCached,
+                       .candidate(ContextualTranslationCandidate(sourcePhrase: "read", translatedPhrase: "读")),
+                       "A sibling miss must preserve a payload useful to its original token")
         let booksResult = try await service.translate(books, sourceLanguageIdentifier: "en", targetLanguageIdentifier: "zh-Hans",
                                                       backendVersion: "test-v1", using: translator)
         let callCount = await calls.count

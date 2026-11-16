@@ -182,6 +182,13 @@ final class ReaderCoordinator: NSObject {
         var contextRoute: Bool
         var didMove = false
     }
+    private struct ActiveNativeMathParent {
+        let page: PDFPage
+        let sourceRange: NSRange
+        let lineIdentity: String
+        var selectedRange: NSRange
+    }
+    private var activeNativeMathParent: ActiveNativeMathParent?
     private struct PendingContextFingerAnchor {
         let viewPoint: CGPoint
         let page: PDFPage
@@ -279,6 +286,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 文档加载完成后调用(压制内置手势 + 挂滚动观察 + 恢复阅读位置)
     func documentDidLoad(_ document: PDFDocument) {
+        activeNativeMathParent = nil
         clearHover()
         // v0.40.2:文档装载后 documentView 才存在 —— 单画布在这里补挂,并补做旧墨迹迁移
         inkSurface?.ensureAttached()
@@ -326,6 +334,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
     func prepareForTeardown() {
+        activeNativeMathParent = nil
         metalHost?.detach()
         onTeardown?()
         overlayProvider?.flushAll()   // v0.9.0:收尾把未落盘的手写存库
@@ -351,6 +360,7 @@ final class ReaderCoordinator: NSObject {
 
     private func documentDidChange() {
         guard let pdfView else { return }
+        activeNativeMathParent = nil
         clearHover()
         if let doc = pdfView.document {
             DiagLog.log("docChanged: \(doc.pageCount) pages")
@@ -378,6 +388,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func pageDidChange() {
+        activeNativeMathParent = nil
         // v0.41.0:翻页要把单画布的窗口挪到新页(墨迹留在文档坐标,只换窗口原点)
         inkSurface?.refreshWindow()
         metalHost?.refresh()
@@ -795,6 +806,17 @@ final class ReaderCoordinator: NSObject {
         freezeScrolling(true)
     }
 
+    private func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
+        guard contextReadingEnabled,
+              FeatureFlags.mathEnabled(),
+              !docScanned,
+              let target = SelectionGeometry.nativeMathPressTarget(on: page, at: point),
+              !page.annotations.contains(where: {
+                  $0.type == "Link" && $0.bounds.intersects(target.lineBounds)
+              }) else { return nil }
+        return target
+    }
+
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
         let kind = Self.kind(of: gesture)
         var pendingContextAnchor: PendingContextFingerAnchor?
@@ -843,20 +865,60 @@ final class ReaderCoordinator: NSObject {
                 return
             }
 
-            // v0.8.1:触点落在拖柄热区内(≥44×44,以"圆点+竖线"整体为中心)→ 让位给拖柄拖动;
-            // 避免与"按住选区本体拖动"互相打架(两种拖动各管各的)。
+            let nativeMathTarget = nativeMathPressTarget(on: hit.page, at: hit.point)
+            // A sibling glyph inside the active formula may fall within the
+            // 44×44 handle hot zone of a very short selection. Let that exact
+            // glyph press proceed; repeated presses on the current glyph still
+            // yield to the normal handle drag.
             if handleHitTest(viewPoint) {
-                DiagLog.log("press.began(\(kind)): on handle → yield")
-                return
+                let isMathSibling = activeNativeMathParent.map { active in
+                    active.page === hit.page
+                        && nativeMathTarget.map {
+                            NSEqualRanges(active.sourceRange, $0.lineRange)
+                                && active.lineIdentity == $0.lineIdentity
+                                && !NSEqualRanges(active.selectedRange, $0.glyphRange)
+                        } == true
+                } ?? false
+                guard isMathSibling else {
+                    DiagLog.log("press.began(\(kind)): on handle → yield")
+                    return
+                }
             }
 
-            requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+            if nativeMathTarget == nil {
+                requestOCRCharacterRefinement(page: hit.page, at: hit.point)
+            }
 
             if let pendingContextAnchor,
                beginRecoveredContextDrag(from: pendingContextAnchor,
                                          to: hit,
                                          viewPoint: viewPoint,
                                          gesture: gesture) {
+                activeNativeMathParent = nil
+                return
+            }
+
+            if let active = activeNativeMathParent,
+               active.page === hit.page,
+               let target = nativeMathTarget,
+               NSEqualRanges(active.sourceRange, target.lineRange),
+               active.lineIdentity == target.lineIdentity {
+                holdMenuWork?.cancel()
+                holdMenuWork = nil
+                menu.dismiss()
+                activeNativeMathParent?.selectedRange = target.glyphRange
+                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point,
+                          anchorWord: target.glyphSelection,
+                          touchPoint: hit.point, viewPoint: viewPoint,
+                          contextRoute: false)
+                applySelection(target.glyphSelection,
+                               src: "math-glyph",
+                               contextRoute: false,
+                               geometryQuality: .approximate,
+                               preservesNativeMathParent: true)
+                if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
+                scheduleHoldMenu()
+                DiagLog.log("press.began(\(kind)): native math glyph \(target.glyphRange.location):\(target.glyphRange.length)")
                 return
             }
 
@@ -865,6 +927,7 @@ final class ReaderCoordinator: NSObject {
                page === hit.page,
                let firstLine = lineRects.first, let lastLine = lineRects.last,
                lineRects.contains(where: { $0.contains(hit.point) }) {
+                activeNativeMathParent = nil
                 if contextReadingEnabled,
                    ocrSelectionActive,
                    let snapshot = pinnedSnapshot(for: page) {
@@ -896,6 +959,30 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log("press.began(\(kind)): body-drag")
                 return
             }
+
+            if let target = nativeMathTarget {
+                holdMenuWork?.cancel()
+                holdMenuWork = nil
+                menu.dismiss()
+                activeNativeMathParent = ActiveNativeMathParent(page: hit.page,
+                                                               sourceRange: target.lineRange,
+                                                               lineIdentity: target.lineIdentity,
+                                                               selectedRange: target.lineRange)
+                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point,
+                          anchorWord: target.lineSelection,
+                          touchPoint: hit.point, viewPoint: viewPoint,
+                          contextRoute: false)
+                applySelection(target.lineSelection,
+                               src: "math-line",
+                               contextRoute: false,
+                               geometryQuality: .approximate,
+                               preservesNativeMathParent: true)
+                if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
+                scheduleHoldMenu()
+                DiagLog.log("press.began(\(kind)): native math line \(target.lineRange.location):\(target.lineRange.length)")
+                return
+            }
+            activeNativeMathParent = nil
 
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
             let t0 = CFAbsoluteTimeGetCurrent()
@@ -1726,6 +1813,7 @@ final class ReaderCoordinator: NSObject {
                                    range: ClosedRange<Int>,
                                    src: String,
                                    verifiedPhraseGroupSpan: UTF16Span? = nil) {
+        activeNativeMathParent = nil
         guard let pdfView else { return }
         let snapshot: PinnedOCRSelectionSnapshot?
         let words: [OCRWord]
@@ -1756,6 +1844,7 @@ final class ReaderCoordinator: NSObject {
         }
         if let base = contextual,
            src != "doubleTap",
+           src != "math-glyph",
            base.verifiedPhraseGroupSpan == nil,
            base.tokens.count == 1,
            range.lowerBound == range.upperBound,
@@ -1964,6 +2053,7 @@ final class ReaderCoordinator: NSObject {
     /// 双击选词(并弹菜单)。
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard let pdfView, gesture.state == .ended else { return }
+        activeNativeMathParent = nil
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
         _ = selectText(at: viewPoint, source: "doubleTap")
@@ -2030,6 +2120,7 @@ final class ReaderCoordinator: NSObject {
     /// 三击选行(对应原生"三击选段落";PDF 场景取整行)。
     @objc private func handleTripleTap(_ gesture: UITapGestureRecognizer) {
         guard let pdfView, gesture.state == .ended else { return }
+        activeNativeMathParent = nil
         hasUserInteracted = true
         let viewPoint = gesture.location(in: pdfView)
         guard let hit = pageHit(viewPoint),
@@ -2048,9 +2139,11 @@ final class ReaderCoordinator: NSObject {
                                 src: String,
                                 contextRoute: Bool = false,
                                 geometryQuality: SourceGeometryQuality = .approximate,
-                                verifiedPhraseGroupSpan: UTF16Span? = nil) {
+                                verifiedPhraseGroupSpan: UTF16Span? = nil,
+                                preservesNativeMathParent: Bool = false) {
         let text = SelectionGeometry.lookupText(for:selection)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if !preservesNativeMathParent { activeNativeMathParent = nil }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         if !contextReadingEnabled {
             ocrSelectionActive = false
@@ -2106,9 +2199,10 @@ final class ReaderCoordinator: NSObject {
             text: display,
             wordCount: wordCount,
             primaryTerm: primaryTerm,
-            contextual: contextual
+            contextual: contextual,
+            mathDetail: src == "math-glyph"
         ))
-        if wordCount <= 1, !primaryTerm.isEmpty {
+        if src != "math-line", src != "math-glyph", wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
         }
         resuppressSoon()
@@ -2171,6 +2265,7 @@ final class ReaderCoordinator: NSObject {
 
     private func clearSelection(notifySelection: Bool = true) {
         DiagLog.log("clearSelection")
+        activeNativeMathParent = nil
         holdMenuWork?.cancel()
         holdMenuWork = nil
         stopAutoscroll()
@@ -2215,6 +2310,7 @@ final class ReaderCoordinator: NSObject {
 
     /// 只清"临时选区"相关状态(高亮/拖柄/菜单);不回调 onSelectionInfo(nil)、不动词卡。
     private func clearTempOnly() {
+        activeNativeMathParent = nil
         holdMenuWork?.cancel()
         holdMenuWork = nil
         stopAutoscroll()
@@ -2430,6 +2526,7 @@ final class ReaderCoordinator: NSObject {
         metalHost?.isDrawingEnabled = on
         let changed = markMode != on
         markMode = on
+        if changed { activeNativeMathParent = nil }
         (pdfView as? VocabPDFView)?.handwritingMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
         // 手势层级,一次性设置会被顶掉;SwiftUI 每次 updateUIView 都走这里,天然成为重臂时机。

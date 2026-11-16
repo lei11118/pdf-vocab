@@ -4,6 +4,7 @@ import UIKit
 enum HoverBubbleLayout {
     static func size(term:String, detail:String, maximumWidth:CGFloat, maximumHeight:CGFloat,
                      contextualCandidate: String? = nil,
+                     contextualStatus: String? = nil,
                      hasContextualSection: Bool = false) -> CGSize {
         let titleFont = UIFont.preferredFont(forTextStyle:.subheadline)
         let detailFont = UIFont.preferredFont(forTextStyle:.caption1)
@@ -15,11 +16,14 @@ enum HoverBubbleLayout {
         let candidateWidth = contextualCandidate.map {
             ($0 as NSString).size(withAttributes:[.font:detailFont]).width
         } ?? 0
+        let statusWidth = contextualStatus.map {
+            ($0 as NSString).size(withAttributes:[.font:detailFont]).width
+        } ?? 0
         let candidateLabelWidth = contextualCandidate.map { _ in
             ("语境译义" as NSString).size(withAttributes:[.font:contextLabelFont]).width
         } ?? 0
         let naturalWidth = max((term as NSString).size(withAttributes:[.font:titleFont]).width,
-                               max(detailWidth, max(candidateWidth, candidateLabelWidth)))
+                               max(detailWidth, max(statusWidth, max(candidateWidth, candidateLabelWidth))))
         let width = min(limit,max(150,ceil(naturalWidth)+24))
         func height(_ text:String,_ font:UIFont) -> CGFloat {
             ceil((text as NSString).boundingRect(with:CGSize(width:max(1,width-24),height:.greatestFiniteMagnitude),
@@ -28,10 +32,11 @@ enum HoverBubbleLayout {
         let candidateHeight = contextualCandidate.map {
             height("语境译义", contextLabelFont) + 4 + height($0, detailFont)
         } ?? 0
-        let contextualSectionVisible = hasContextualSection || contextualCandidate != nil
+        let statusHeight = contextualStatus.map { height($0, detailFont) } ?? 0
+        let contextualSectionVisible = hasContextualSection || contextualCandidate != nil || contextualStatus != nil
         let spacingHeight = CGFloat(contextualSectionVisible ? 2 : 1) * 8
         return CGSize(width:width,height:min(maximumHeight,
-            24+spacingHeight+height(term,titleFont)+height(detail,detailFont)+candidateHeight))
+            24+spacingHeight+height(term,titleFont)+height(detail,detailFont)+candidateHeight+statusHeight))
     }
 }
 
@@ -46,8 +51,22 @@ struct HoverTipView: View {
     @StateObject private var contextualDriver = ContextualTranslationDriver()
 
     private var contextualCandidate: String? {
+        guard contextualTranslationEnabled, contextualSelection != nil else { return nil }
         guard case .candidate(let candidate) = contextualDriver.state else { return nil }
         return candidate.translatedPhrase
+    }
+
+    private var contextualStatus: String? {
+        guard contextualTranslationEnabled else { return nil }
+        guard contextualSelection != nil else { return "语境：无" }
+        switch contextualDriver.state {
+        case .unsupported, .unavailable, .noAlignedResult:
+            return "语境：无"
+        case .failed(let message):
+            return "语境译义出错\n\(message)"
+        default:
+            return nil
+        }
     }
 
     private var size: CGSize {
@@ -56,7 +75,8 @@ struct HoverTipView: View {
                                maximumWidth: bounds.width - 16,
                                maximumHeight: min(420, max(0, anchor.y - 12)),
                                contextualCandidate: contextualCandidate,
-                               hasContextualSection: contextualSelection != nil)
+                               contextualStatus: contextualStatus,
+                               hasContextualSection: contextualSelection != nil || contextualTranslationEnabled)
     }
     var body: some View {
         if size.height >= 36 {
@@ -91,6 +111,8 @@ struct WordBubbleContent: View {
                                                   driver: contextualDriver)
                 } else if let contextualCandidate {
                     ContextualTranslationHoverText(phrase: contextualCandidate)
+                } else if contextualTranslationEnabled {
+                    ContextualTranslationNoResultText()
                 }
                 DefinitionScrollText(text:detail,isScrollable:false)
                     .frame(maxWidth:.infinity)

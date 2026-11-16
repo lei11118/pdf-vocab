@@ -25,6 +25,16 @@ struct ContextualTranslationHoverText: View {
     }
 }
 
+struct ContextualTranslationNoResultText: View {
+    var body: some View {
+        Text("语境：无")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(DS.foreground2)
+            .accessibilityIdentifier("contextual-hover-no-result")
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Owns the local identity barrier for one contextual request. A disappearing
 /// card or hover cancels only this driver; it never invalidates shared requests.
 @MainActor
@@ -37,6 +47,7 @@ final class ContextualTranslationDriver: ObservableObject {
     }
 
     typealias AvailabilityProvider = () async -> Availability
+    typealias CacheLookup = (ContextualTranslationRequest) async throws -> ContextualTranslationCacheHit?
     typealias Translator = (ContextualTranslationRequest) async throws -> ContextualTranslationCandidate
 
     enum State: Equatable {
@@ -47,8 +58,8 @@ final class ContextualTranslationDriver: ObservableObject {
         case unavailable(String)
         case translating
         case candidate(ContextualTranslationCandidate)
+        case noAlignedResult
         case failed(String)
-        case silent
     }
 
     struct Identity: Equatable {
@@ -61,6 +72,7 @@ final class ContextualTranslationDriver: ObservableObject {
     @Published private(set) var state: State = .checking
     @Published private(set) var configuration: TranslationSession.Configuration?
     private let injectedAvailabilityProvider: AvailabilityProvider?
+    private let injectedCacheLookup: CacheLookup?
     private let injectedTranslator: Translator?
     private var generation: UInt64 = 0
     private var activeIdentity: Identity?
@@ -68,8 +80,10 @@ final class ContextualTranslationDriver: ObservableObject {
     private var activeRequestID: UUID?
 
     init(availabilityProvider: AvailabilityProvider? = nil,
+         cacheLookup: CacheLookup? = nil,
          translator: Translator? = nil) {
         injectedAvailabilityProvider = availabilityProvider
+        injectedCacheLookup = cacheLookup
         injectedTranslator = translator
     }
 
@@ -124,6 +138,36 @@ final class ContextualTranslationDriver: ObservableObject {
             }
         }
 
+        do {
+            let cachedResult = try await lookupCachedResult(for: request)
+            guard isCurrent(identity, generation: localGeneration), !Task.isCancelled else { return }
+            if let cachedResult {
+                switch cachedResult {
+                case .candidate(let candidate):
+                    state = .candidate(candidate)
+                    DiagLog.log("context.translation.cache=hit")
+                case .noAlignedResult:
+                    state = .noAlignedResult
+                    DiagLog.log("context.translation.cache=no-alignment-hit")
+                }
+                activeRequest = nil
+                activeRequestID = nil
+                configuration = nil
+                return
+            }
+        } catch let error as ContextualTranslationError where error == .disabled {
+            guard isCurrent(identity, generation: localGeneration), !Task.isCancelled else { return }
+            state = .disabled
+            DiagLog.log("context.translation.cache=disabled")
+            return
+        } catch {
+            guard isCurrent(identity, generation: localGeneration), !Task.isCancelled else { return }
+            state = .failed(error.localizedDescription)
+            DiagLog.log("context.translation.cache=failed reason=\((error as? ContextualTranslationError)?.diagnosticCode ?? "unexpected")")
+            return
+        }
+        guard isCurrent(identity, generation: localGeneration), !Task.isCancelled else { return }
+
         let availability: Availability
         if let injectedAvailabilityProvider {
             availability = await injectedAvailabilityProvider()
@@ -159,7 +203,9 @@ final class ContextualTranslationDriver: ObservableObject {
             configuration = next
             DiagLog.log("context.translation.availability=installed group=\(request.selectedPhraseGroup == nil ? 0 : 1)")
         case .supported:
-            state = identity.presentation == .card ? .needsPreparation : .silent
+            state = identity.presentation == .card
+                ? .needsPreparation
+                : .unavailable("需要先由你准备英语到简体中文的离线翻译语言。")
             DiagLog.log("context.translation.availability=supported")
         case .unsupported:
             state = .unsupported
@@ -186,6 +232,23 @@ final class ContextualTranslationDriver: ObservableObject {
                 using: translator
             )
         }
+    }
+
+    private func lookupCachedResult(for request: ContextualTranslationRequest) async throws
+        -> ContextualTranslationCacheHit? {
+        if let injectedCacheLookup {
+            return try await injectedCacheLookup(request)
+        }
+        // Driver lifecycle tests inject availability/translators independently;
+        // keep those tests isolated from the production shared service/flag.
+        if injectedAvailabilityProvider != nil || injectedTranslator != nil { return nil }
+        guard #available(iOS 26.4, *) else { return nil }
+        return try await ContextualTranslationService.shared.cachedResult(
+            for: request,
+            sourceLanguageIdentifier: StandaloneSentenceTranslationCache.sourceLanguageIdentifier,
+            targetLanguageIdentifier: StandaloneSentenceTranslationCache.targetLanguageIdentifier,
+            backendVersion: AppleContextualTranslationAdapter.backendVersion
+        )
     }
 
     /// Internal injection seam for lifecycle tests; production views use the
@@ -228,7 +291,12 @@ final class ContextualTranslationDriver: ObservableObject {
                 }
                 return
             }
-            state = .failed(error.localizedDescription)
+            if let translationError = error as? ContextualTranslationError,
+               translationError.isDefinitiveNoAlignment {
+                state = .noAlignedResult
+            } else {
+                state = .failed(error.localizedDescription)
+            }
             activeRequestID = nil
             configuration = nil
             let reason = (error as? ContextualTranslationError)?.diagnosticCode ?? "unexpected"
@@ -317,14 +385,25 @@ struct ContextualTranslationTaskView: View {
                 OfflineTranslationPreparationView(model: preparationModel)
                 retryButton
             case .unsupported:
-                Text("此设备当前不支持英语到简体中文的端侧语境翻译；下方仍显示词典释义。")
-                    .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
-                    .accessibilityIdentifier("contextual-translation-status-unsupported")
-            case .unavailable(let message), .failed(let message):
+                noResultContent("此设备当前不支持英语到简体中文的端侧语境翻译；下方仍显示词典释义。",
+                                identifier: "contextual-translation-status-unsupported")
+            case .unavailable(let message):
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text("语境：无")
+                        .font(DS.Fonts.caption.weight(.semibold))
+                        .foregroundStyle(DS.foreground2)
+                        .accessibilityIdentifier("contextual-translation-status-none")
+                    Text(message)
+                        .font(DS.Fonts.caption)
+                        .foregroundStyle(DS.foreground2)
+                        .accessibilityIdentifier("contextual-translation-status-unavailable")
+                    retryButton
+                }
+            case .failed(let message):
                 Text(message)
                     .font(DS.Fonts.caption)
                     .foregroundStyle(DS.foreground2)
-                    .accessibilityIdentifier("contextual-translation-status-unavailable")
+                    .accessibilityIdentifier("contextual-translation-status-error")
                 retryButton
             case .translating:
                 ProgressView("正在生成选中 Token 的系统对齐候选…").font(DS.Fonts.caption)
@@ -337,8 +416,11 @@ struct ContextualTranslationTaskView: View {
                     Text(candidate.translatedPhrase).font(DS.Fonts.wordBody).foregroundStyle(DS.foreground1)
                         .textSelection(.enabled).accessibilityIdentifier("contextual-translation-candidate")
                 }
-            case .silent:
-                EmptyView()
+            case .noAlignedResult:
+                Text("语境：无")
+                    .font(DS.Fonts.caption.weight(.semibold))
+                    .foregroundStyle(DS.foreground2)
+                    .accessibilityIdentifier("contextual-translation-status-none")
             }
         }
         .padding(DS.Space.m)
@@ -350,8 +432,39 @@ struct ContextualTranslationTaskView: View {
 
     @ViewBuilder
     private var hoverContent: some View {
-        if case .candidate(let candidate) = driver.state {
+        switch driver.state {
+        case .candidate(let candidate):
             ContextualTranslationHoverText(phrase: candidate.translatedPhrase)
+        case .unsupported, .noAlignedResult:
+            ContextualTranslationNoResultText()
+        case .unavailable:
+            ContextualTranslationNoResultText()
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("语境译义出错")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(DS.foreground2)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(DS.foreground2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("contextual-hover-error")
+            }
+        case .disabled, .checking, .needsPreparation, .translating:
+            EmptyView()
+        }
+    }
+
+    private func noResultContent(_ message: String, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Text("语境：无")
+                .font(DS.Fonts.caption.weight(.semibold))
+                .foregroundStyle(DS.foreground2)
+                .accessibilityIdentifier("contextual-translation-status-none")
+            Text(message)
+                .font(DS.Fonts.caption)
+                .foregroundStyle(DS.foreground2)
+                .accessibilityIdentifier(identifier)
         }
     }
 

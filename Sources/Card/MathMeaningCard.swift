@@ -6,12 +6,70 @@ enum MathCardRouting {
     static func resolve(sourceText: String,
                         contextReadingEnabled: Bool,
                         mathEnabled: Bool,
-                        contextualSelectionIsCurrent: Bool = true) -> MathReadingResult? {
+                        contextualSelectionIsCurrent: Bool = true,
+                        isMathDetail: Bool = false) -> MathReadingResult? {
         guard contextReadingEnabled, mathEnabled, contextualSelectionIsCurrent else { return nil }
         // ReaderCoordinator caps display text at 400 characters and appends an ellipsis.
         // A truncated display value is not safe input for a parsed math result.
         guard !(sourceText.count > 400 && sourceText.hasSuffix("…")) else { return nil }
+        if isMathDetail { return singleGlyphDetail(sourceText) }
         return MathReadingService.resolve(sourceText)
+    }
+
+    private static func singleGlyphDetail(_ sourceText: String) -> MathReadingResult {
+        let glyph = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if glyph == sourceText, glyph.unicodeScalars.count == 1, let scalar = glyph.unicodeScalars.first,
+           (48...57).contains(scalar.value) {
+            return MathReadingResult(sourceText: glyph,
+                                     latex: glyph,
+                                     unicode: glyph,
+                                     explanation: "数字 \(glyph)。它在公式中的位置决定它表示常数、系数还是索引。",
+                                     status: .parsedText,
+                                     ast: .number(glyph))
+        }
+        if glyph == sourceText, glyph.unicodeScalars.count == 1, let scalar = glyph.unicodeScalars.first,
+           (65...90).contains(scalar.value) || (97...122).contains(scalar.value) {
+            let caseName = scalar.value <= 90 ? "大写" : "小写"
+            let explanation = MathSymbolLexicon.chineseName(for: glyph)
+                ?? "拉丁\(caseName)字母 \(glyph)（变量；具体含义需结合公式上下文）"
+            return MathReadingResult(sourceText: glyph,
+                                     latex: glyph,
+                                     unicode: glyph,
+                                     explanation: explanation,
+                                     status: .parsedText,
+                                     ast: .symbol(glyph))
+        }
+        if glyph == "²" || glyph == "³" || glyph == "¹" || glyph == "⁰" {
+            let value = ["²": "2", "³": "3", "¹": "1", "⁰": "0"][glyph]!
+            return MathReadingResult(sourceText: glyph,
+                                     latex: "{}^{\(value)}",
+                                     unicode: glyph,
+                                     explanation: "上标 \(value)；基底需由公式上下文确定。",
+                                     status: .parsedText,
+                                     ast: .symbol(glyph))
+        }
+        if glyph == "√" {
+            return MathReadingResult(sourceText: glyph,
+                                     latex: nil,
+                                     unicode: glyph,
+                                     explanation: "保留原字符供核对；平方根符号单独出现时缺少被开方数。",
+                                     status: .needsReview,
+                                     ast: .unknown(glyph))
+        }
+        if let entry = MathSymbolLexicon.entry(for: glyph) {
+            return MathReadingResult(sourceText: glyph,
+                                     latex: entry.latex,
+                                     unicode: glyph,
+                                     explanation: entry.chineseName,
+                                     status: .parsedText,
+                                     ast: .symbol(glyph))
+        }
+        return MathReadingResult(sourceText: sourceText,
+                                 latex: nil,
+                                 unicode: sourceText,
+                                 explanation: "保留原字符供核对；目前无法安全地单独排版。",
+                                 status: .needsReview,
+                                 ast: .unknown(sourceText))
     }
 }
 

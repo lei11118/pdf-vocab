@@ -161,6 +161,15 @@ final class PencilAwarePanGestureRecognizer: UIPanGestureRecognizer {
 // MARK: - 几何与合法性(全部集中于此,避免散落)
 
 enum SelectionGeometry {
+    struct NativeMathPressTarget {
+        let lineSelection: PDFSelection
+        let lineRange: NSRange
+        let lineIdentity: String
+        let glyphSelection: PDFSelection
+        let glyphRange: NSRange
+        let lineBounds: CGRect
+    }
+
     private final class GlyphMap {
         weak var page: PDFPage?
         let text: String
@@ -335,14 +344,21 @@ enum SelectionGeometry {
         return word
     }
 
-    static func initialCharacter(on page: PDFPage, at point: CGPoint, tolerance: CGFloat = 2) -> PDFSelection? {
+    static func initialCharacter(on page: PDFPage,
+                                 at point: CGPoint,
+                                 tolerance: CGFloat = 2,
+                                 within sourceRange: NSRange? = nil) -> PDFSelection? {
         guard let text = page.string else { return nil }
         let ns = text as NSString
         let cached = glyphMaps.first { $0.page === page && $0.text == text && $0.rotation == page.rotation }
+        let searchStart = sourceRange?.location ?? 0
+        let searchEnd = sourceRange.map { NSMaxRange($0) } ?? ns.length
+        guard searchStart >= 0, searchEnd <= ns.length, searchEnd > searchStart else { return nil }
         var best: (range: NSRange, distance: CGFloat)?
-        var index = 0
-        while index < ns.length {
+        var index = searchStart
+        while index < searchEnd {
             let range = ns.rangeOfComposedCharacterSequence(at:index)
+            guard range.location >= searchStart, NSMaxRange(range) <= searchEnd else { return nil }
             index = NSMaxRange(range)
             guard !ns.substring(with:range).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
             let rect = (range.length == 1 ? (cached?.placed[range.location] ?? cached?.glyphs[range.location]) : nil)
@@ -356,6 +372,122 @@ enum SelectionGeometry {
             if best == nil || distance < best!.distance { best = (range,distance) }
         }
         return best.flatMap { page.selection(for:$0.range) }
+    }
+
+    /// A deliberately narrow native-PDF math target. It accepts one short,
+    /// parser-verified visual line whose extracted glyph positions stay on that
+    /// line, then returns the exact native glyph under the touch.
+    static func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> NativeMathPressTarget? {
+        guard let source = page.string else { return nil }
+        let sourceNSString = source as NSString
+        guard let line = page.selectionForLine(at: point),
+              line.pages.count == 1,
+              line.pages.first === page,
+              line.selectionsByLine().count == 1,
+              isSane(line, maxPages: 1, maxChars: 160),
+              let lineRange = onlySourceRange(of: line, on: page),
+              lineRange.length > 1,
+              NSMaxRange(lineRange) <= sourceNSString.length,
+              let lineText = UTF16Span(range: lineRange, in: source)?.substring(in: source),
+              isStrongNativeMathLine(lineText),
+              let lineBounds = validLineBounds(line, on: page),
+              hasVerifiedSingleVisualLineGeometry(lineRange, on: page, within: lineBounds),
+              let glyph = initialCharacter(on: page, at: point, tolerance: 0, within: lineRange),
+              glyph.pages.count == 1,
+              glyph.pages.first === page,
+              let glyphRange = onlySourceRange(of: glyph, on: page),
+              glyphRange.length > 0,
+              glyphRange.length <= 2,
+              glyphRange.location >= lineRange.location,
+              NSMaxRange(glyphRange) <= NSMaxRange(lineRange),
+              let glyphRect = placedBounds(of: glyph, on: page),
+              isValid(glyphRect),
+              glyphRect.contains(point) else { return nil }
+
+        return NativeMathPressTarget(lineSelection: line,
+                                     lineRange: lineRange,
+                                     lineIdentity: identity(for: line),
+                                     glyphSelection: glyph,
+                                     glyphRange: glyphRange,
+                                     lineBounds: lineBounds)
+    }
+
+    private static func onlySourceRange(of selection: PDFSelection, on page: PDFPage) -> NSRange? {
+        guard selection.numberOfTextRanges(on: page) == 1,
+              let source = page.string,
+              let ranges = validatedSourceRanges([selection.range(at: 0, on: page)], in: source),
+              ranges.count == 1 else { return nil }
+        return ranges[0]
+    }
+
+    private static func validLineBounds(_ selection: PDFSelection, on page: PDFPage) -> CGRect? {
+        let bounds = selection.bounds(for: page)
+        return isValid(bounds) ? bounds : nil
+    }
+
+    private static func isStrongNativeMathLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.utf16.count <= 160,
+              !hasSentencePunctuation(trimmed),
+              let result = MathReadingService.resolve(trimmed),
+              result.status == .parsedText,
+              result.ast?.isComplete == true else { return false }
+
+        // Long ASCII words are ordinary prose even if they contain a relation.
+        // The first pass handles compact variables and symbols only.
+        var asciiWordLength = 0
+        for scalar in trimmed.unicodeScalars {
+            let isASCIIWord = scalar.value < 128
+                && ((65...90).contains(scalar.value) || (97...122).contains(scalar.value))
+            if isASCIIWord {
+                asciiWordLength += 1
+                if asciiWordLength > 3 { return false }
+            } else {
+                asciiWordLength = 0
+            }
+        }
+        return true
+    }
+
+    private static func hasSentencePunctuation(_ text: String) -> Bool {
+        let characters = Array(text)
+        for index in characters.indices where ",;:!?".contains(characters[index]) {
+            return true
+        }
+        for index in characters.indices where characters[index] == "." {
+            let hasDigitBefore = index > 0 && characters[index - 1].wholeNumberValue != nil
+            let hasDigitAfter = index + 1 < characters.count && characters[index + 1].wholeNumberValue != nil
+            if !hasDigitBefore || !hasDigitAfter { return true }
+        }
+        return false
+    }
+
+    private static func hasVerifiedSingleVisualLineGeometry(_ range: NSRange,
+                                                             on page: PDFPage,
+                                                             within lineBounds: CGRect) -> Bool {
+        guard let source = page.string else { return false }
+        let text = source as NSString
+        guard range.length > 0, NSMaxRange(range) <= text.length else { return false }
+        guard page.numberOfCharacters == text.length else { return false }
+        var glyphRects: [CGRect] = []
+        var index = range.location
+        while index < NSMaxRange(range) {
+            let characterRange = text.rangeOfComposedCharacterSequence(at: index)
+            guard characterRange.length > 0, NSMaxRange(characterRange) <= NSMaxRange(range) else { return false }
+            index = NSMaxRange(characterRange)
+            if text.substring(with: characterRange).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            let rect = page.characterBounds(at: characterRange.location)
+            guard isValid(rect), lineBounds.insetBy(dx: -3, dy: -3).contains(rect) else { return false }
+            glyphRects.append(rect)
+        }
+        guard glyphRects.count >= 2 else { return false }
+        let heights = glyphRects.map(\.height).sorted()
+        let medianHeight = heights[heights.count / 2]
+        guard medianHeight > 0,
+              let minMidY = glyphRects.map(\.midY).min(),
+              let maxMidY = glyphRects.map(\.midY).max() else { return false }
+        return maxMidY - minMidY <= max(medianHeight * 0.9, 3)
     }
 
     static func placedBounds(of selection: PDFSelection, on page: PDFPage) -> CGRect {

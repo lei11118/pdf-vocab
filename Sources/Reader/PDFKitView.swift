@@ -8,6 +8,8 @@ struct SelectionInfo: Equatable {
     var primaryTerm: String
     /// Present only when the local context-reading mode routed native PDF text.
     var contextual: ContextualSelection? = nil
+    /// An exact glyph selected inside an active native math expression.
+    var mathDetail = false
 }
 
 /// 阅读会话句柄:让 SwiftUI 侧在任意时刻取到协调器(保存阅读位置等)。

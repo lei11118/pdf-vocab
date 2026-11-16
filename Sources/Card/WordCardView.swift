@@ -25,13 +25,15 @@ struct WordCardPanel: View {
     let onClose: () -> Void
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
+    var contextReadingEnabled = false
     @State private var selectedSentenceWord: String?
 
     var body: some View {
         Group {
             switch content {
             case .word(let term):
-                WordCardView(term: term, onClose: onClose, vocab: vocab)
+                WordCardView(term: term, onClose: onClose, vocab: vocab,
+                             contextualTranslationEnabled: contextReadingEnabled)
             case .sentence(let text, let count):
                 ZStack(alignment:.topLeading) {
                     SentenceCardView(text:text,wordCount:count,onClose:onClose) { word in
@@ -49,7 +51,8 @@ struct WordCardPanel: View {
                                 }.buttonStyle(.plain)
                                 Spacer()
                             }.padding(.horizontal,16).padding(.top,16).padding(.trailing,44)
-                            WordCardView(term:word,onClose:onClose,vocab:vocab).id(word)
+                            WordCardView(term:word,onClose:onClose,vocab:vocab,
+                                         contextualTranslationEnabled:contextReadingEnabled).id(word)
                         }
                     }
                 }
@@ -124,6 +127,8 @@ struct WordCardView: View {
                 ContextualTranslationTaskView(selection: contextualSelection,
                                               isEnabled: contextualTranslationEnabled,
                                               driver: contextualTranslationDriver)
+            } else if contextualTranslationEnabled {
+                ContextualTranslationNoResultText()
             }
 
             switch state {
@@ -479,6 +484,7 @@ struct CompactCardView: View {
     let content: ReaderCardContent
     let onClose: () -> Void
     var sentenceTranslation: String? = nil
+    var contextReadingEnabled = false
 
     @State private var translation: String?
 
@@ -505,6 +511,9 @@ struct CompactCardView: View {
         } else {
             HStack(alignment:.center,spacing:10) {
                 Text(displayText).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if contextReadingEnabled, case .word = content {
+                    ContextualTranslationNoResultText()
+                }
                 if let value = sentenceTranslation ?? translation, !value.isEmpty {
                     Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }

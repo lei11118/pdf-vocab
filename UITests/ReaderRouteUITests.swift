@@ -547,6 +547,68 @@ extension ReaderRouteUITests {
                                                      observer: observer,
                                                      diagnosticName: "formula-fallback") else { return }
         }
+
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
+        let clearedForMathPress = waitForAudit(observer, timeout: 10) { snapshot in
+            (snapshot["page"] as? Int) == 0 && ((snapshot["selectedText"] as? String) ?? "").isEmpty &&
+            self.point(in: snapshot, key: "wordPoints", text: formulaText, source: "text", edge: .start) != nil &&
+            self.point(in: snapshot, key: "wordPoints", text: formulaText, source: "text", edge: .end) != nil
+        }
+        XCTAssertNotNil(clearedForMathPress,
+                        "The two-level press starts from an empty selection and fresh native glyph coordinates")
+        guard let clearedForMathPress,
+              let detailStart = point(in: clearedForMathPress,
+                                      key: "wordPoints",
+                                      text: formulaText,
+                                      source: "text",
+                                      edge: .start),
+              let detailSibling = point(in: clearedForMathPress,
+                                        key: "wordPoints",
+                                        text: formulaText,
+                                        source: "text",
+                                        edge: .end) else {
+            attachAuditDiagnostics("math-detail-geometry-unavailable", app: app, observer: observer)
+            return
+        }
+        coordinate(for: detailStart, in: app).press(forDuration: 1.0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == formulaText },
+                         "The first long press selects the complete native math line")
+        attachAuditScreenshot("synthetic-searchable-pdf-math-whole-line-selection", app: app)
+
+        coordinate(for: detailStart, in: app).press(forDuration: 1.0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "E" },
+                         "The next long press narrows the formula selection to the touched variable")
+        let variableDetailCard = app.staticTexts["math-card-source"].firstMatch
+        XCTAssertTrue(variableDetailCard.waitForExistence(timeout: 10),
+                      "A selected mathematical variable stays on the math card route")
+        XCTAssertEqual(variableDetailCard.label, "E")
+        attachAuditScreenshot("synthetic-searchable-pdf-math-variable-detail", app: app)
+
+        coordinate(for: detailSibling, in: app).press(forDuration: 1.0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "²" },
+                         "A later press can resolve a sibling superscript under the same parent formula")
+        let superscriptDetailCard = app.staticTexts["math-card-source"].firstMatch
+        XCTAssertTrue(superscriptDetailCard.waitForExistence(timeout: 10))
+        XCTAssertEqual(superscriptDetailCard.label, "²", "The card preserves the exact selected glyph")
+        attachAuditScreenshot("synthetic-searchable-pdf-math-superscript-detail", app: app)
+
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68)).tap()
+        let clearedAfterMathDetail = waitForAudit(observer, timeout: 10) {
+            ($0["page"] as? Int) == 0 && (($0["selectedText"] as? String) ?? "").isEmpty
+        }
+        XCTAssertNotNil(clearedAfterMathDetail)
+        guard let clearedAfterMathDetail,
+              let formulaWholePoint = point(in: clearedAfterMathDetail,
+                                            key: "wordPoints",
+                                            text: formulaText,
+                                            source: "text",
+                                            edge: .start) else {
+            attachAuditDiagnostics("math-card-formula-geometry-unavailable", app: app, observer: observer)
+            return
+        }
+        coordinate(for: formulaWholePoint, in: app).press(forDuration: 1.0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == formulaText },
+                         "A fresh formula press routes the whole formula after the glyph detail interaction")
         let mathSource = app.staticTexts["math-card-source"]
         let mathCardVisible = mathSource.waitForExistence(timeout: 15)
         XCTAssertTrue(mathCardVisible, "Selecting the full PDF formula routes it through MathReadingService")
@@ -697,6 +759,7 @@ extension ReaderRouteUITests {
         XCTAssertTrue(dictionaryEntry.waitForExistence(timeout: 15), "The dictionary fallback remains available")
 
         let candidate = app.staticTexts["contextual-translation-candidate"].firstMatch
+        let noAlignment = app.staticTexts["contextual-translation-status-none"].firstMatch
         let preparation = app.staticTexts["contextual-translation-status-preparation"].firstMatch
         let unavailable = app.staticTexts["contextual-translation-status-unavailable"].firstMatch
         let unsupported = app.staticTexts["contextual-translation-status-unsupported"].firstMatch
@@ -704,13 +767,13 @@ extension ReaderRouteUITests {
         let olderThanTranslationAlignmentOS = osVersion.majorVersion < 26
             || (osVersion.majorVersion == 26 && osVersion.minorVersion < 4)
         let translationSettled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            candidate.exists || preparation.exists || unsupported.exists
+            candidate.exists || noAlignment.exists || preparation.exists || unsupported.exists
                 || (unavailable.exists && olderThanTranslationAlignmentOS
                     && unavailable.label.contains("iPadOS 26.4"))
         }, object: app)
         XCTAssertEqual(XCTWaiter.wait(for: [translationSettled], timeout: 60), .completed,
                        "Record a live candidate or its actual language/system preparation state")
-        let translationState = [candidate, preparation, unavailable, unsupported]
+        let translationState = [candidate, noAlignment, preparation, unavailable, unsupported]
             .filter(\.exists)
             .map { "\($0.identifier)=\($0.label)" }
             .joined(separator: "\n")
@@ -718,10 +781,10 @@ extension ReaderRouteUITests {
         let translationAttachment = XCTAttachment(string: "Production TranslationSession state (a candidate is a real system result; other states are not translation success):\n\(translationState)")
         translationAttachment.lifetime = .keepAlways
         add(translationAttachment)
-        XCTAssertTrue(candidate.exists || preparation.exists || unsupported.exists
+        XCTAssertTrue(candidate.exists || noAlignment.exists || preparation.exists || unsupported.exists
                       || (unavailable.exists && olderThanTranslationAlignmentOS
                           && unavailable.label.contains("iPadOS 26.4")),
-                      "An unavailable translation state must identify the actual pre-26.4 OS requirement; state: \(translationState)")
+                      "The Reader must report a candidate, preparation, unsupported, unavailable, or definite no-alignment state; state: \(translationState)")
         attachAuditScreenshot("synthetic-searchable-pdf-live-context-translation-state", app: app)
 
         closeReaderWindow(in: app)

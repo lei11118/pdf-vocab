@@ -609,6 +609,18 @@ enum ContextualTranslationError: Error, Equatable, LocalizedError, Sendable {
     case outputTooLong(maximumUTF16Units: Int)
     case staleRequest
 
+    /// These errors mean the backend completed, but the selected semantic unit
+    /// has no trustworthy aligned range in that response. Other failures remain
+    /// visible as errors so a transient backend/configuration issue is distinct.
+    var isDefinitiveNoAlignment: Bool {
+        switch self {
+        case .selectedTokenNotAligned, .selectedPhraseGroupNotAligned:
+            true
+        default:
+            false
+        }
+    }
+
     /// Stable, content-free category for diagnostics. Never log localized
     /// descriptions here because translation framework errors may include text.
     var diagnosticCode: String {

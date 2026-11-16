@@ -848,6 +848,7 @@ struct ReaderView: View {
                 },
                 vocab: cardVocab,
                 translationRequest:translationRequest,
+                contextReadingEnabled:contextReadingEnabled,
                 reserveTop: reserveTop
             )
         }
@@ -1186,7 +1187,8 @@ struct ReaderView: View {
                             contextReadingEnabled: contextReadingEnabled,
                             mathEnabled: mathReadingEnabled,
                             contextualSelectionIsCurrent: info.contextual == nil
-                                || info.contextual?.generation == contextReadingGeneration) {
+                                || info.contextual?.generation == contextReadingGeneration,
+                            isMathDetail: info.mathDetail) {
                             translationRequest = nil
                             cardContent = .math(math)
                             return

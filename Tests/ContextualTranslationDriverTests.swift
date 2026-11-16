@@ -6,6 +6,80 @@ import UIKit
 
 @MainActor
 final class ContextualTranslationDriverTests: XCTestCase {
+    func testCachedCandidateSkipsAvailabilityAndTranslationSessionPath() async throws {
+        let calls = DriverLifecycleCallCounter()
+        let expected = ContextualTranslationCandidate(sourcePhrase: "read", translatedPhrase: "已缓存")
+        let driver = ContextualTranslationDriver(availabilityProvider: {
+            await calls.recordAvailability()
+            return .installed
+        }, cacheLookup: { request in
+            await calls.recordCacheLookup()
+            XCTAssertEqual(request.selectedSourcePhrase, "read")
+            return .candidate(expected)
+        }, translator: { request in
+            await calls.recordTranslation()
+            return ContextualTranslationCandidate(sourcePhrase: request.selectedSourcePhrase,
+                                                  translatedPhrase: "不应请求")
+        })
+
+        await driver.prepare(try makeIdentity(selected: "read"))
+        await driver.translateWithInjectedTranslator()
+
+        XCTAssertEqual(driver.state, .candidate(expected))
+        XCTAssertNil(driver.configuration)
+        let snapshot = await calls.snapshot()
+        XCTAssertEqual(snapshot.cacheLookups, 1)
+        XCTAssertEqual(snapshot.availabilityChecks, 0)
+        XCTAssertEqual(snapshot.translations, 0)
+    }
+
+    func testColdCacheKeepsCardPreparationStateAndOnlyBackendNoAlignmentIsFinal() async throws {
+        let calls = DriverLifecycleCallCounter()
+        let cachedNoAlignmentDriver = ContextualTranslationDriver(availabilityProvider: {
+            await calls.recordAvailability()
+            return .installed
+        }, cacheLookup: { _ in .noAlignedResult }, translator: { request in
+            await calls.recordTranslation()
+            return ContextualTranslationCandidate(sourcePhrase: request.selectedSourcePhrase,
+                                                  translatedPhrase: "不应请求")
+        })
+        await cachedNoAlignmentDriver.prepare(try makeIdentity(selected: "read"))
+        await cachedNoAlignmentDriver.translateWithInjectedTranslator()
+        XCTAssertEqual(cachedNoAlignmentDriver.state, .noAlignedResult)
+        let negativeHitSnapshot = await calls.snapshot()
+        XCTAssertEqual(negativeHitSnapshot.availabilityChecks, 0)
+        XCTAssertEqual(negativeHitSnapshot.translations, 0,
+                       "A bounded negative hit must skip the availability/session path too")
+
+        let cacheMissDriver = ContextualTranslationDriver(availabilityProvider: { .supported },
+                                                         cacheLookup: { _ in nil })
+        await cacheMissDriver.prepare(try makeIdentity(selected: "read"))
+        XCTAssertEqual(cacheMissDriver.state, .needsPreparation,
+                       "A cache miss must continue through availability without claiming no alignment")
+
+        let noAlignmentDriver = ContextualTranslationDriver(availabilityProvider: { .installed },
+                                                            cacheLookup: { _ in nil },
+                                                            translator: { _ in
+                                                                throw ContextualTranslationError.selectedTokenNotAligned
+                                                            })
+        await noAlignmentDriver.prepare(try makeIdentity(selected: "read"))
+        await noAlignmentDriver.translateWithInjectedTranslator()
+        XCTAssertEqual(noAlignmentDriver.state, .noAlignedResult)
+
+        let errorDriver = ContextualTranslationDriver(availabilityProvider: { .installed },
+                                                      cacheLookup: { _ in nil },
+                                                      translator: { _ in
+                                                          throw ContextualTranslationError.invalidConfiguration
+                                                      })
+        await errorDriver.prepare(try makeIdentity(selected: "read"))
+        await errorDriver.translateWithInjectedTranslator()
+        if case .failed = errorDriver.state {
+            // A real configuration error stays distinct from a no-alignment result.
+        } else {
+            XCTFail("Backend/configuration errors must remain visible as errors")
+        }
+    }
+
     func testInjectedPrepareAndTranslationCompleteForCurrentIdentity() async throws {
         let driver = ContextualTranslationDriver(availabilityProvider: { .installed },
                                                  translator: { request in
@@ -125,6 +199,52 @@ final class ContextualTranslationDriverTests: XCTestCase {
 
         await fulfillment(of: [availabilityChecked], timeout: 5)
         XCTAssertEqual(driver.state, .unsupported)
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        XCTAssertTrue(descendantViews(of: host.view).contains {
+            $0.accessibilityIdentifier == "contextual-hover-no-result"
+        }, "Unavailable hover context should render the explicit no-result state")
+    }
+
+    func testMountedCachedNoAlignmentShowsHoverNoneWithoutAvailabilityCheck() async throws {
+        let cacheChecked = expectation(description: "The mounted hover checks the exact cached selection")
+        let driver = ContextualTranslationDriver(availabilityProvider: {
+            XCTFail("A definitive cached no-alignment result must skip language availability")
+            return .unsupported
+        }, cacheLookup: { _ in
+            cacheChecked.fulfill()
+            return .noAlignedResult
+        })
+        let identity = try makeIdentity(selected: "read")
+        let host = UIHostingController(rootView: ContextualTranslationTaskView(
+            selection: identity.selection,
+            isEnabled: true,
+            presentation: .hover,
+            driver: driver
+        ))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        host.view.frame = window.bounds
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+
+        await fulfillment(of: [cacheChecked], timeout: 5)
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(driver.state, .noAlignedResult)
+        XCTAssertTrue(descendantViews(of: host.view).contains {
+            $0.accessibilityIdentifier == "contextual-hover-no-result"
+        })
     }
 
     func testVerifiedPhraseScopeRejectsSameOffsetsFromDifferentOCRLine() throws {
@@ -262,6 +382,23 @@ final class ContextualTranslationDriverTests: XCTestCase {
                                selectedSourceSpans: selectedSourceSpans,
                                selectedDisplaySpans: selectedSourceSpans,
                                kind: kind)
+    }
+
+    private func descendantViews(of root: UIView) -> [UIView] {
+        [root] + root.subviews.flatMap { descendantViews(of: $0) }
+    }
+}
+
+private actor DriverLifecycleCallCounter {
+    private(set) var cacheLookups = 0
+    private(set) var availabilityChecks = 0
+    private(set) var translations = 0
+
+    func recordCacheLookup() { cacheLookups += 1 }
+    func recordAvailability() { availabilityChecks += 1 }
+    func recordTranslation() { translations += 1 }
+    func snapshot() -> (cacheLookups: Int, availabilityChecks: Int, translations: Int) {
+        (cacheLookups, availabilityChecks, translations)
     }
 }
 
