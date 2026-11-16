@@ -399,10 +399,9 @@ enum SelectionGeometry {
               glyphRange.length > 0,
               glyphRange.length <= 2,
               glyphRange.location >= lineRange.location,
-              NSMaxRange(glyphRange) <= NSMaxRange(lineRange),
-              let glyphRect = placedBounds(of: glyph, on: page),
-              isValid(glyphRect),
-              glyphRect.contains(point) else { return nil }
+              NSMaxRange(glyphRange) <= NSMaxRange(lineRange) else { return nil }
+        let glyphRect = placedBounds(of: glyph, on: page)
+        guard isValid(glyphRect), glyphRect.contains(point) else { return nil }
 
         return NativeMathPressTarget(lineSelection: line,
                                      lineRange: lineRange,
