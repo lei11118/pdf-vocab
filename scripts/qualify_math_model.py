@@ -72,9 +72,11 @@ LFS_SHA_PATHS = frozenset(
 )
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
-MAX_OUTPUT_TOKENS = 256
+MAX_OUTPUT_TOKENS = 1024
 DEFAULT_SAMPLE_TIMEOUT_SECONDS = 90
 TOKEN_SPECIAL_COUNT = 23
+REPEAT_TOKEN_RUN_COUNT = 8
+REPEAT_TOKEN_RUN_MAX_LENGTH = 64
 
 SAMPLES: tuple[tuple[str, str], ...] = (
     ("formula_01.png", r"F=ma"),
@@ -571,6 +573,22 @@ def _validate_assets(model_dir: Path, manifest: dict[str, Any]) -> None:
         raise QualificationError("Pinned decoder start/end token IDs differ from the approved configuration")
     if config.get("decoder", {}).get("cache") != 1024:
         raise QualificationError("Pinned decoder cache length differs from the approved configuration")
+    if config.get("decoder", {}).get("repeats") != {
+        "times": REPEAT_TOKEN_RUN_COUNT,
+        "longest": REPEAT_TOKEN_RUN_MAX_LENGTH,
+    }:
+        raise QualificationError("Pinned decoder repeat-stop settings differ from the approved configuration")
+    picture = config.get("picture", {})
+    if (
+        picture.get("darkBorder") != 128
+        or picture.get("cropGray") != 200
+        or picture.get("size") != 768
+        or picture.get("padding") != 0
+        or picture.get("channels") != "RGB"
+        or picture.get("mean") != [0.7931, 0.7931, 0.7931]
+        or picture.get("std") != [0.1738, 0.1738, 0.1738]
+    ):
+        raise QualificationError("Pinned formula picture preprocessing differs from the approved configuration")
     if (model_dir / "layout.mlpackage").exists():
         raise QualificationError("layout.mlpackage is not in the approved model allowlist")
     if len(coreml_files) != 9:
@@ -666,6 +684,34 @@ def _normalized_whitespace(value: str) -> str:
     return "".join(value.split())
 
 
+def _light_formula_image(image: Any, dark_border_threshold: int) -> tuple[Any, float, bool]:
+    """Return RGB pixels with dark-background screenshots inverted for the model."""
+    import numpy as np
+    from PIL import Image, ImageOps
+
+    rgb = image.convert("RGB")
+    gray = np.asarray(rgb.convert("L"), dtype=np.uint8)
+    border = np.concatenate((gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]))
+    border_mean = float(border.mean())
+    inverted = border_mean < dark_border_threshold
+    if inverted:
+        rgb = ImageOps.invert(rgb)
+    return rgb, border_mean, inverted
+
+
+def _has_repeated_token_run(token_ids: list[int]) -> bool:
+    """Detect the pinned pathological repetition stop before using the whole cache."""
+    for run_length in range(1, REPEAT_TOKEN_RUN_MAX_LENGTH + 1):
+        repeated_span = run_length * REPEAT_TOKEN_RUN_COUNT
+        if len(token_ids) < repeated_span:
+            continue
+        suffix = token_ids[-repeated_span:]
+        pattern = suffix[:run_length]
+        if all(token_id == pattern[index % run_length] for index, token_id in enumerate(suffix)):
+            return True
+    return False
+
+
 def _predict_next_token(output: dict[str, Any], output_name: str, output_feature: Any) -> int:
     import numpy as np
 
@@ -713,7 +759,6 @@ def _run_one_sample(sample: dict[str, Any],
                     config: dict[str, Any],
                     timeout_seconds: int) -> dict[str, Any]:
     import numpy as np
-    import torch
     from PIL import Image
 
     started = time.monotonic()
@@ -721,6 +766,9 @@ def _run_one_sample(sample: dict[str, Any],
     sample["predicted_token_ids"] = []
     sample["decoded_token_ids"] = []
     sample["predicted_latex"] = ""
+    sample["input_inverted"] = False
+    sample["input_dark_border_mean"] = None
+    sample["stopped_on_repeat"] = False
     try:
         with sample_deadline(timeout_seconds) as deadline:
             def ensure_before_deadline() -> None:
@@ -728,13 +776,22 @@ def _run_one_sample(sample: dict[str, Any],
                     raise SampleTimeout(f"sample exceeded {timeout_seconds}s")
 
             with Image.open(image_path) as image:
-                prepared = processor.preprocess(image.convert("RGB"), return_tensors="pt")
+                model_image, border_mean, inverted = _light_formula_image(
+                    image, int(config["picture"]["darkBorder"])
+                )
+                prepared = processor(images=model_image, return_tensors="np")
             ensure_before_deadline()
-            tensor = prepared["pixel_values"]
-            if not isinstance(tensor, torch.Tensor):
-                raise QualificationError("Official image processor did not return a PyTorch tensor")
-            pixel_values = _numpy_array_for_feature(tensor.detach().cpu().numpy(),
-                                                    encoder_sig["inputs"]["pixel_values"])
+            tensor = np.asarray(prepared["pixel_values"], dtype=np.float32)
+            pixel_values = _numpy_array_for_feature(tensor, encoder_sig["inputs"]["pixel_values"])
+            sample["input_inverted"] = inverted
+            sample["input_dark_border_mean"] = round(border_mean, 3)
+            sample["processor_pixel_values"] = {
+                "shape": list(pixel_values.shape),
+                "dtype": str(pixel_values.dtype),
+                "min": float(np.min(pixel_values)),
+                "max": float(np.max(pixel_values)),
+                "mean": round(float(np.mean(pixel_values)), 6),
+            }
             encoded = encoder.predict({"pixel_values": pixel_values})
             ensure_before_deadline()
             keys_name = config["encoder"]["keys"]
@@ -780,6 +837,11 @@ def _run_one_sample(sample: dict[str, Any],
                 decoded_ids.append(token_id)
                 sample["decoded_token_ids"] = list(decoded_ids)
                 sample["predicted_latex"] = _decode_token_ids(decoded_ids, token_vocabulary, byte_level_decoder)
+                if _has_repeated_token_run(decoded_ids):
+                    sample["stopped_on_repeat"] = True
+                    raise QualificationError(
+                        "Decoder output repeated a token run eight times before EOS"
+                    )
             sample["eos_seen"] = ended
             sample["decoded_token_ids"] = decoded_ids
             if not ended:
