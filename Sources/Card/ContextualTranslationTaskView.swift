@@ -323,10 +323,16 @@ final class ContextualTranslationDriver: ObservableObject {
 /// hover bubble. Only the card offers language preparation UI.
 @MainActor
 struct ContextualTranslationTaskView: View {
+    private struct TaskIdentity: Equatable {
+        let identity: ContextualTranslationDriver.Identity
+        let isSurfaceActive: Bool
+    }
+
     let selection: ContextualSelection
     let isEnabled: Bool
     var presentation: ContextualTranslationPresentation = .card
     @ObservedObject var driver: ContextualTranslationDriver
+    @Environment(\.readerWindowSurfaceActive) private var readerWindowSurfaceActive
     @StateObject private var preparationModel = OfflineTranslationPreparationModel()
     @State private var retryGeneration = 0
 
@@ -347,6 +353,10 @@ struct ContextualTranslationTaskView: View {
                                              retryGeneration: retryGeneration)
     }
 
+    private var taskIdentity: TaskIdentity {
+        TaskIdentity(identity: identity, isSurfaceActive: readerWindowSurfaceActive)
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
@@ -358,9 +368,21 @@ struct ContextualTranslationTaskView: View {
                 }
             }
         }
-        .task(id: identity) { await driver.prepare(identity) }
-        .translationTask(driver.configuration) { session in await driver.translate(using: session) }
-        .onChange(of: identity) { _, newIdentity in _ = driver.activate(newIdentity) }
+        .task(id: taskIdentity) {
+            guard readerWindowSurfaceActive, !Task.isCancelled else { return }
+            await driver.prepare(identity)
+        }
+        .translationTask(readerWindowSurfaceActive ? driver.configuration : nil) { session in
+            guard readerWindowSurfaceActive, !Task.isCancelled else { return }
+            await driver.translate(using: session)
+        }
+        .onChange(of: taskIdentity) { _, newTaskIdentity in
+            if newTaskIdentity.isSurfaceActive {
+                _ = driver.activate(newTaskIdentity.identity)
+            } else {
+                driver.deactivate()
+            }
+        }
         .onDisappear { driver.deactivate() }
         .onChange(of: preparationModel.state) { _, newState in
             if case .installed = newState, case .needsPreparation = driver.state {

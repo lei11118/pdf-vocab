@@ -2,6 +2,17 @@ import SwiftUI
 import Foundation
 import UIKit
 
+private struct ReaderWindowSurfaceActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var readerWindowSurfaceActive: Bool {
+        get { self[ReaderWindowSurfaceActiveKey.self] }
+        set { self[ReaderWindowSurfaceActiveKey.self] = newValue }
+    }
+}
+
 enum ReaderWindowGeometry {
     static func minimumWidth(height:CGFloat,allowsCompact:Bool) -> CGFloat {
         guard allowsCompact else { return 260 }
@@ -69,6 +80,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var position: CGPoint?
     @State private var size = CGSize(width: 320, height: 430)
+    @State private var windowStateRestored = false
     @State private var moveBase: CGPoint?
     @State private var resizeBase: CGSize?
     @State private var sizeBeforeCompact: CGSize?
@@ -112,8 +124,16 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
 
     var body: some View {
         ZStack {
-            fullBody.opacity(isCompact ? 0 : 1).allowsHitTesting(!isCompact).accessibilityHidden(isCompact)
-            compactBody.opacity(isCompact ? 1 : 0).allowsHitTesting(isCompact).accessibilityHidden(!isCompact)
+            fullBody
+                .environment(\.readerWindowSurfaceActive, windowStateRestored && !isCompact)
+                .opacity(isCompact ? 0 : 1)
+                .allowsHitTesting(!isCompact)
+                .accessibilityHidden(isCompact)
+            compactBody
+                .environment(\.readerWindowSurfaceActive, windowStateRestored && isCompact)
+                .opacity(isCompact ? 1 : 0)
+                .allowsHitTesting(isCompact)
+                .accessibilityHidden(!isCompact)
         }
         .frame(width: size.width, height: size.height)
         .background(DS.background3)   // v0.14.1:纸感卡面(替换毛玻璃材质)
@@ -158,6 +178,7 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             if position == nil {
                 position = currentPosition
             }
+            windowStateRestored = true
         }
         .onChange(of:moving) { _,active in if !active { moveBase = nil; persist() } }
         .onChange(of: bounds) { _, _ in
