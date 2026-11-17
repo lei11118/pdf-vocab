@@ -433,18 +433,18 @@ enum SelectionGeometry {
                 let searchLabel = indexedSearchRange.map(NSStringFromRange) ?? "nil"
                 let glyphLabel = glyphCandidate.map { preview($0.string ?? "") } ?? "nil"
                 let rangeLabel = range.map(NSStringFromRange) ?? "nil"
-                let boundsLabel = bounds.map(NSStringFromCGRect) ?? "nil"
-                diagnose("exact glyph guard rejected: line=\(lineLabel) search=\(searchLabel) glyph=\(glyphLabel) range=\(rangeLabel) bounds=\(boundsLabel) point=\(NSStringFromCGPoint(point))")
+                let boundsLabel = bounds.map { String(describing: $0) } ?? "nil"
+                diagnose("exact glyph guard rejected: line=\(lineLabel) search=\(searchLabel) glyph=\(glyphLabel) range=\(rangeLabel) bounds=\(boundsLabel) point=\(String(describing: point))")
             }
             return nil
         }
         let glyphRect = verifiedCharacterBounds(of: glyphRange, on: page, source: source)
             ?? placedBounds(of: glyph, on: page)
         guard isValid(glyphRect), glyphRect.contains(point) else {
-            diagnose("exact glyph bounds rejected: glyph=\(NSStringFromRange(glyphRange)) bounds=\(NSStringFromCGRect(glyphRect)) point=\(NSStringFromCGPoint(point))")
+            diagnose("exact glyph bounds rejected: glyph=\(NSStringFromRange(glyphRange)) bounds=\(String(describing: glyphRect)) point=\(String(describing: point))")
             return nil
         }
-        diagnose("exact glyph accepted: glyph=\(NSStringFromRange(glyphRange)) bounds=\(NSStringFromCGRect(glyphRect)) point=\(NSStringFromCGPoint(point))")
+        diagnose("exact glyph accepted: glyph=\(NSStringFromRange(glyphRange)) bounds=\(String(describing: glyphRect)) point=\(String(describing: point))")
 
         // Keep the established PDFKit path as the fast route when it proves
         // one complete, parser-valid line. Neighbor geometry below detects a
