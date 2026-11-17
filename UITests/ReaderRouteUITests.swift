@@ -890,10 +890,16 @@ extension ReaderRouteUITests {
             return false
         }
 
-        let scrollViews = settingsPanel.descendants(matching: .scrollView).allElementsBoundByIndex
+        let panelFrame = settingsPanel.frame
+        let panelContainers = settingsPanel.descendants(matching: .collectionView).allElementsBoundByIndex
+            + settingsPanel.descendants(matching: .scrollView).allElementsBoundByIndex
+        let panelScrollView = panelContainers.first {
+            $0.exists && $0.frame.intersection(panelFrame).width >= panelFrame.width * 0.9
+        }
         for _ in 0..<6 where !control.isHittable {
-            guard let scrollView = scrollViews.first(where: { $0.exists && $0.isHittable }) else { break }
-            if control.frame.midY < scrollView.frame.minY {
+            guard let scrollView = panelScrollView else { break }
+            let panelViewport = panelFrame.intersection(scrollView.frame)
+            if control.frame.midY < panelViewport.midY {
                 scrollView.swipeDown()
             } else {
                 scrollView.swipeUp()
@@ -926,50 +932,43 @@ extension ReaderRouteUITests {
         }
         if currentValue == enabled { return true }
 
-        // Tap the accessible UISwitch directly before trying any row-level hit point.
-        control.tap()
-        if waitForSwitchValue(control, to: enabled, timeout: 5) { return true }
-
-        // A row fallback is safe only when AX still reports the original value.
-        guard switchValue(control) == currentValue else {
-            attachSwitchDiagnostic("switch-value-changed-unexpectedly-after-native-tap", control: control, expectedEnabled: enabled, in: app)
-            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native tap; the observed value no longer matches its original value \(currentValue), so the row fallback was skipped")
-            return false
-        }
-
-        let row = settingsPanel.cells.containing(.switch, identifier: control.identifier).firstMatch
-        guard row.exists, row.isHittable else {
-            attachSwitchDiagnostic("switch-form-row-not-found", control: control, expectedEnabled: enabled, in: app)
-            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, but its Form row was not visible as a hittable cell")
-            return false
-        }
-        let rowFrame = row.frame
-        guard rowFrame.width > 0, rowFrame.height > 0,
-              let visibleScrollView = scrollViews.first(where: { $0.exists && $0.isHittable && $0.frame.intersects(rowFrame) }) else {
-            attachSwitchDiagnostic("switch-visible-form-row-unavailable", control: control, expectedEnabled: enabled, in: app)
-            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, and no visible Form row was available for the single fallback")
-            return false
-        }
-
-        let visibleRowFrame = rowFrame.intersection(settingsPanel.frame).intersection(visibleScrollView.frame)
         let controlFrame = control.frame
-        let fallbackPoint = controlFrame.width > 0 && controlFrame.width < rowFrame.width * 0.6 && controlFrame.midX > rowFrame.midX
-            ? CGPoint(x: controlFrame.midX, y: controlFrame.midY)
-            : CGPoint(x: visibleRowFrame.maxX - 40, y: visibleRowFrame.midY)
-        let fallbackOffset = CGVector(dx: (fallbackPoint.x - rowFrame.minX) / rowFrame.width,
-                                      dy: (fallbackPoint.y - rowFrame.minY) / rowFrame.height)
-        guard !visibleRowFrame.isNull, !visibleRowFrame.isEmpty, visibleRowFrame.contains(fallbackPoint),
-              fallbackOffset.dx.isFinite, fallbackOffset.dy.isFinite, fallbackOffset.dx >= 0.5,
-              fallbackOffset.dx < 1, fallbackOffset.dy >= 0, fallbackOffset.dy <= 1 else {
-            attachSwitchDiagnostic("switch-row-fallback-coordinate-invalid", control: control, expectedEnabled: enabled, in: app)
-            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, but no valid trailing point was available inside visible row \(visibleRowFrame); candidate \(fallbackPoint)")
+        let visibleControlFrame = controlFrame.intersection(panelFrame)
+            .intersection(panelScrollView?.frame ?? panelFrame)
+        let nativeSwitch = control.descendants(matching: .switch).allElementsBoundByIndex.first {
+            $0.exists && $0.isEnabled && $0.frame.width > 0 &&
+            $0.frame.width < controlFrame.width * 0.6 && $0.frame.intersects(controlFrame)
+        }
+
+        // SwiftUI exposes a full-row wrapper; prefer its narrow native trailing switch child.
+        if let nativeSwitch,
+           visibleControlFrame.contains(CGPoint(x: nativeSwitch.frame.midX, y: nativeSwitch.frame.midY)) {
+            nativeSwitch.tap()
+            if waitForSwitchValue(control, to: enabled, timeout: 5) { return true }
+            guard switchValue(control) == currentValue else {
+                attachSwitchDiagnostic("switch-value-changed-unexpectedly-after-native-child-tap", control: control, expectedEnabled: enabled, in: app)
+                XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native child tap; the row fallback was skipped because its AX value changed")
+                return false
+            }
+        }
+
+        // The measured child sits 18 pt inside the row edge and is 63 pt wide; its center is 49.5 pt from the edge.
+        let fallbackPoint = CGPoint(x: controlFrame.maxX - 49.5, y: visibleControlFrame.midY)
+        let fallbackOffset = CGVector(dx: (fallbackPoint.x - controlFrame.minX) / controlFrame.width,
+                                      dy: (fallbackPoint.y - controlFrame.minY) / controlFrame.height)
+        guard !visibleControlFrame.isNull, !visibleControlFrame.isEmpty,
+              visibleControlFrame.contains(fallbackPoint), fallbackOffset.dx.isFinite,
+              fallbackOffset.dy.isFinite, fallbackOffset.dx >= 0.5, fallbackOffset.dx < 1,
+              fallbackOffset.dy >= 0, fallbackOffset.dy <= 1 else {
+            attachSwitchDiagnostic("switch-trailing-hit-coordinate-invalid", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) had no valid trailing hit point inside the visible panel/scroll area \(visibleControlFrame); candidate \(fallbackPoint)")
             return false
         }
 
-        row.coordinate(withNormalizedOffset: fallbackOffset).tap()
+        control.coordinate(withNormalizedOffset: fallbackOffset).tap()
         guard waitForSwitchValue(control, to: enabled, timeout: 5) else {
-            attachSwitchDiagnostic("switch-value-did-not-change-after-visible-row-fallback", control: control, expectedEnabled: enabled, in: app)
-            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native tap and one visible-row fallback")
+            attachSwitchDiagnostic("switch-value-did-not-change-after-trailing-hit", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after tapping its native child and measured trailing hit point")
             return false
         }
         return true
