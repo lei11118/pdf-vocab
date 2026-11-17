@@ -2,14 +2,19 @@
 
 ## 当前状态（暂定，2026-11-17；验收未完成）
 
-- **代码**：已核对 `b964a40`：PDF 原生文字层的单行数学选区可用现有 Coordinator 提取受限相邻 glyph，并在重复选择时回到精确 glyph；原生数学单元测试与虚拟 AX 测试是分开的覆盖项。仅适用于文字层，不覆盖扫描图像公式。`031b96d` 只调整 UI 测试的设置开关驱动，不含运行时功能改动。
-- **当前 unsigned IPA 已核验**：build-ipa run [44005756726](https://github.com/lei11118/pdf-vocab/actions/runs/44005756726) 对应提交 `b964a40d047d3476e04b65879efec3abdc6d1757`，IPA 为 52,824,482 bytes，SHA-256 `FF4AD11E937977462025BBE9F8A9C275184ABF490EDB1708F427227C3EC5A4D1`。本地包审计确认 ZIP 无损坏条目、63 项 CRC 检查通过、ARM64 Mach-O、无 CodeSignature、无模型资源，版本 v0.73.0 / build 124、minimum iOS 26.0。
-- **Unit 结果**：run [44005764496](https://github.com/lei11118/pdf-vocab/actions/runs/44005764496) 对应 `b964a40`，实际执行 327 项，7 项断言失败。原生数学选区中 `E=mc²` 全选后重复选 `m`、再选 `²` 通过；空格版 `F=ma` 右边缘与链接保护通过。堆叠公式被错误接纳，含小数的公式行未识别；另有 5 项 hosted SwiftUI 视觉/AX 断言失败。
-- **UI run 观测**：run [44006138523](https://github.com/lei11118/pdf-vocab/actions/runs/44006138523) 对应 `031b96d`，结果 0/2；两项测试中语境设置都保持关闭。主脑复核 UIReview 截图与 AX tree，看到整行带 `Switch` 标签，其内可见的原生 Switch 未命名。此处记录模拟器 UI/AX 观测，不据此断言功能本身失败；修正仍在进行，尚无验收结论。
-- **上一份 IPA**：build-ipa run [43862235830](https://github.com/lei11118/pdf-vocab/actions/runs/43862235830)，提交 `744711e`，unsigned IPA 52,821,015 bytes，SHA-256 `0BE548D0BE3AB48D6488104F483E8078A719387808D4D2BD2B6AC9FE8055EEF5`；它不是当前 `b964a40` 构建包。
-- **前序测试基线**：unit run [43862129259](https://github.com/lei11118/pdf-vocab/actions/runs/43862129259) 实际执行 326 项，有 8 项断言失败；UI run [43862129200](https://github.com/lei11118/pdf-vocab/actions/runs/43862129200) 为 1/2 通过，设置中的数学开关未变为 true，模拟器报告英语到简体中文翻译 unsupported，界面显示 `语境：无` 并回退到词典。
-- **PDF 来源页容量**：本地只读元数据中，article PDF 共 15 页，第 15 页最多 22 个 links；OpenStax PDF 第 871 页 205 个、第 872 页 216 个。计数均按 PDF 页，不是视口；此前 outline 上限不能证明视口计数，真机滚动改善也未验证。个人源文件路径未记录。
-- **独立原 PDF 公式裁剪观察**：对 3 个固定对照公式重复运行 4 次，输入保持不变，仅根式尺寸作调整。官方 PP-FormulaNet_plus-S 的分数与偏导结果数学上对齐；分段函数保留两个条件但多出花括号和句点，非精确匹配。根式基线结果含无效 token 且漏掉等号；放大 1.5 倍后数学内容正确但多出尾随句点，其他根式处理仍错误。该模型未打包进 IPA；这些样本不支持通用准确率或设备速度结论。原 PDF 和裁剪内容/绝对路径未纳入仓库跟踪文档。
+- **当前代码**：source head `180fb23a71848549c3e16d2cf6eb4d4b9d357842` 对 PDF 文字层堆叠公式选区的两侧分别比较邻接 glyph；代码不含模型。多级分数与真实设备行为尚未验证。
+- **当前 beta IPA 已核验**：build-ipa run [44009880216](https://github.com/lei11118/pdf-vocab/actions/runs/44009880216) 成功，提交 `180fb23a71848549c3e16d2cf6eb4d4b9d357842`；52,827,480 bytes，SHA-256 `CDC957E9B01BF29D5D56676E3D63954A529FAB55258609ACCD5166B7EA26A04C`。包审计确认 CRC 63、ARM64、unsigned、无模型权重，minimum iOS 26.0、v0.73.0 / build 124。
+- **精确 head CI 待定**：unit run [44009881774](https://github.com/lei11118/pdf-vocab/actions/runs/44009881774) 与 UI run [44009880370](https://github.com/lei11118/pdf-vocab/actions/runs/44009880370) 均对应当前 head，仍待结果；当前不作验收结论。
+
+## 历史候选与独立观察（不代表当前 head 验收）
+
+- `b964a40` 的原生文字层单行数学选区用现有 Coordinator 提取受限相邻 glyph，并在重复选择时回到精确 glyph；原生数学单元测试与虚拟 AX 测试是分开的覆盖项。UI 测试驱动提交 `031b96d` 只调整设置开关驱动，不含运行时功能改动。
+- 上一 beta IPA：build-ipa run [44005756726](https://github.com/lei11118/pdf-vocab/actions/runs/44005756726)，提交 `b964a40d047d3476e04b65879efec3abdc6d1757`，52,824,482 bytes，SHA-256 `FF4AD11E937977462025BBE9F8A9C275184ABF490EDB1708F427227C3EC5A4D1`；审计为 CRC 63、ARM64、unsigned、无模型资源。
+- Unit run [44005764496](https://github.com/lei11118/pdf-vocab/actions/runs/44005764496) 对应 `b964a40`，327 项中 7 项断言失败：`E=mc²` 全选后重复选 `m`、再选 `²` 通过；空格版 `F=ma` 右边缘与链接保护通过；堆叠公式被错误接纳、含小数公式行未识别，另有 5 项 hosted SwiftUI 视觉/AX 断言失败。
+- UI run [44006138523](https://github.com/lei11118/pdf-vocab/actions/runs/44006138523) 对应 `031b96d`，0/2；两项测试中语境设置都保持关闭。截图与 AX tree 显示整行带 `Switch` 标签，其内可见原生 Switch 未命名。这是模拟器 UI/AX 观测，不据此断言功能本身失败。
+- 更早 IPA：run [43862235830](https://github.com/lei11118/pdf-vocab/actions/runs/43862235830)，提交 `744711e`，52,821,015 bytes，SHA-256 `0BE548D0BE3AB48D6488104F483E8078A719387808D4D2BD2B6AC9FE8055EEF5`。前序 unit run [43862129259](https://github.com/lei11118/pdf-vocab/actions/runs/43862129259) 为 326 项中 8 项断言失败；UI run [43862129200](https://github.com/lei11118/pdf-vocab/actions/runs/43862129200) 为 1/2，数学开关未变为 true，模拟器英语到简体中文翻译 unsupported，界面显示 `语境：无` 并回退词典。
+- PDF 页容量只读计数：article 共 15 页，第 15 页最多 22 个 links；OpenStax 第 871 页 205 个、第 872 页 216 个。均为每 PDF 页计数，不是视口；此前 outline 上限不能证明视口计数，真机滚动改善未验证，个人源文件路径未记录。
+- 原 PDF 公式裁剪：3 个固定对照公式重复运行 4 次，输入保持不变，仅根式尺寸调整。PP-FormulaNet_plus-S 的分数与偏导结果数学上对齐；分段函数有两条件但多花括号和句点；根式基线含无效 token 且漏等号，放大 1.5 倍后数学内容正确但多尾随句点，其他根式处理仍错误。样本不支持通用准确率或设备速度结论；模型未打包进 IPA，原 PDF 和裁剪内容/绝对路径未纳入仓库跟踪文档。
 
 > 以下为 2026-11-10 的历史快照，不代表当前可用包或当前验收状态。
 > 历史测试包：v0.73.0 / build 124，来自 [build-ipa run 42835838852](https://github.com/lei11118/pdf-vocab/actions/runs/42835838852)，构建提交 `5b53f90c375cab7c48cfe1c042c613f1ac99b50c`；IPA 为 52,793,598 bytes，SHA-256 `dc65812aef2ddafd824418d86cca49e9a6d8945ddd0fb822fbd76d018f536402`。独立包审计确认 CRC 63、arm64、0.73.0/build 124、minimum iOS 26.0，且不含模型。
