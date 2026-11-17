@@ -571,16 +571,34 @@ extension ReaderRouteUITests {
             return
         }
         coordinate(for: detailStart, in: app).press(forDuration: 1.0)
-        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == formulaText },
+        let wholeLineSelection = waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == formulaText }
+        XCTAssertNotNil(wholeLineSelection,
                          "The first long press selects the complete native math line")
+        guard wholeLineSelection != nil else {
+            attachAuditDiagnostics("math-whole-line-selection-failed", app: app, observer: observer)
+            if !continuousFormulaSelectionFailed {
+                attachReaderGestureDiagnosticsFromLibrary("math-whole-line-selection-failed", app: app)
+            }
+            return
+        }
         attachAuditScreenshot("synthetic-searchable-pdf-math-whole-line-selection", app: app)
 
         coordinate(for: detailStart, in: app).press(forDuration: 1.0)
-        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "E" },
+        let variableSelection = waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "E" }
+        XCTAssertNotNil(variableSelection,
                          "The next long press narrows the formula selection to the touched variable")
+        guard variableSelection != nil else {
+            attachAuditDiagnostics("math-variable-selection-failed", app: app, observer: observer)
+            return
+        }
         let variableDetailCard = app.staticTexts["math-card-source"].firstMatch
-        XCTAssertTrue(variableDetailCard.waitForExistence(timeout: 10),
+        let variableDetailCardAppeared = variableDetailCard.waitForExistence(timeout: 10)
+        XCTAssertTrue(variableDetailCardAppeared,
                       "A selected mathematical variable stays on the math card route")
+        guard variableDetailCardAppeared else {
+            attachAuditDiagnostics("math-variable-detail-card-missing", app: app, observer: observer)
+            return
+        }
         XCTAssertEqual(variableDetailCard.label, "E")
         attachAuditScreenshot("synthetic-searchable-pdf-math-variable-detail", app: app)
 

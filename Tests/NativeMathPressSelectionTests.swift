@@ -106,6 +106,118 @@ final class NativeMathPressSelectionTests: XCTestCase {
         coordinator.dismissSelection()
     }
 
+#if DEBUG
+    func testHumanReadingAuditFormulaHitAtFirstGlyphAfterWordSelection() throws {
+        let data = HumanReadingAuditFixture.nativePDF()
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let source = try XCTUnwrap(page.string) as NSString
+        let formulaRange = try XCTUnwrap(source.range(of: "E=mc²").location == NSNotFound
+            ? nil : source.range(of: "E=mc²"))
+        let classroomRange = try XCTUnwrap(source.range(of: "classroom").location == NSNotFound
+            ? nil : source.range(of: "classroom"))
+        let eRange = NSRange(location: formulaRange.location, length: 1)
+        let mRange = try XCTUnwrap(source.range(of: "m", options: [], range: formulaRange).location == NSNotFound
+            ? nil : source.range(of: "m", options: [], range: formulaRange))
+        let superscriptRange = try XCTUnwrap(source.range(of: "²", options: [], range: formulaRange).location == NSNotFound
+            ? nil : source.range(of: "²", options: [], range: formulaRange))
+
+        let eGlyph = try XCTUnwrap(page.selection(for: eRange))
+        let eBounds = eGlyph.bounds(for: page)
+        XCTAssertTrue(SelectionGeometry.isValid(eBounds))
+        let ePagePoint = CGPoint(x: eBounds.midX, y: eBounds.midY)
+        func pagePoint(for range: NSRange) throws -> CGPoint {
+            let selection = try XCTUnwrap(page.selection(for: range))
+            let rect = selection.bounds(for: page)
+            XCTAssertTrue(SelectionGeometry.isValid(rect))
+            return CGPoint(x: rect.midX, y: rect.midY)
+        }
+        let coldTarget = try XCTUnwrap(
+            SelectionGeometry.nativeMathPressTarget(on: page, at: ePagePoint),
+            "The first-glyph center must resolve while this DEBUG fixture page has no cached word geometry")
+        XCTAssertEqual(coldTarget.lineRange, formulaRange,
+                       "A cold E-center hit must map to the exact complete formula source range")
+        XCTAssertEqual(coldTarget.glyphRange, eRange,
+                       "A cold hit at the leading glyph center must retain the E source range")
+
+        let classroomPagePoint = try pagePoint(for: classroomRange)
+        let classroomSelection = try XCTUnwrap(
+            SelectionGeometry.initialWord(on: page, at: classroomPagePoint),
+            "The DEBUG fixture's linked classroom word must build the same warm glyph map as prior reader selection")
+        XCTAssertEqual(SelectionGeometry.lookupText(for: classroomSelection), "classroom")
+        let warmTarget = try XCTUnwrap(
+            SelectionGeometry.nativeMathPressTarget(on: page, at: ePagePoint),
+            "The same raw E-center hit must still resolve after initialWord has warmed placed glyph geometry")
+        XCTAssertEqual(warmTarget.lineRange, formulaRange,
+                       "A warm E-center hit must map to the exact complete formula source range")
+        XCTAssertEqual(warmTarget.glyphRange, eRange,
+                       "A warm hit at the leading glyph center must retain the E source range")
+
+        let defaults = UserDefaults.standard
+        let oldContextFlag = defaults.object(forKey: FeatureFlags.contextReadingEnabledKey)
+        let oldMathFlag = defaults.object(forKey: FeatureFlags.mathEnabledKey)
+        defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
+        defaults.set(true, forKey: FeatureFlags.mathEnabledKey)
+        defer {
+            if let oldContextFlag { defaults.set(oldContextFlag, forKey: FeatureFlags.contextReadingEnabledKey) }
+            else { defaults.removeObject(forKey: FeatureFlags.contextReadingEnabledKey) }
+            if let oldMathFlag { defaults.set(oldMathFlag, forKey: FeatureFlags.mathEnabledKey) }
+            else { defaults.removeObject(forKey: FeatureFlags.mathEnabledKey) }
+        }
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let view = VocabPDFView(frame: CGRect(x: 0, y: 0, width: 900, height: 700))
+        let controller = UIViewController()
+        controller.view = view
+        window.frame = view.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKey() }
+        view.displayMode = .singlePage
+        view.document = document
+        view.scaleFactor = 1.5
+        view.layoutDocumentView()
+        view.go(to: page)
+
+        func point(for range: NSRange) throws -> CGPoint {
+            view.convert(try pagePoint(for: range), from: page)
+        }
+
+        var selected: [String] = []
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: {
+            if let info = $0 { selected.append(info.text) }
+        })
+        coordinator.pdfView = view
+        coordinator.setContextReadingMode(true, generation: 1)
+        coordinator.hapticsEnabled = false
+        let coordinatorTarget = try XCTUnwrap(
+            coordinator.nativeMathPressTarget(on: page, at: ePagePoint),
+            "ReaderCoordinator must accept the warm helper target before the E-center long press")
+        XCTAssertEqual(coordinatorTarget.lineRange, formulaRange,
+                       "Coordinator routing must preserve the exact DEBUG fixture formula range")
+        defer { coordinator.dismissSelection() }
+
+        func longPress(at range: NSRange) throws {
+            let press = MutableNativeMathPress(point: try point(for: range))
+            coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
+            press.testState = .ended
+            coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
+        }
+
+        try longPress(at: eRange)
+        XCTAssertEqual(selected.last, "E=mc²",
+                       "The first long press at the DEBUG audit's leading E center must select the whole formula")
+        try longPress(at: eRange)
+        XCTAssertEqual(selected.last, "E", "The next press at E resolves its exact touched glyph")
+        try longPress(at: mRange)
+        XCTAssertEqual(selected.last, "m", "A subsequent press at m resolves that exact glyph")
+        try longPress(at: superscriptRange)
+        XCTAssertEqual(selected.last, "²", "A following press at ² resolves that exact glyph")
+    }
+#endif
+
     func testLinkedFormulaDoesNotEnterTwoLevelMathSelection() throws {
         let bounds = CGRect(x: 0, y: 0, width: 400, height: 300)
         let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in

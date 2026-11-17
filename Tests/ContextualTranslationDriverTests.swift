@@ -452,7 +452,7 @@ func assertContextualNoResultRecognized(in image: UIImage,
         return
     }
 
-    let phraseWasRecognized = recognizedLines.contains(containsContextualNoResultMarker)
+    let phraseWasRecognized = recognizedLines.contains(where: containsContextualNoResultMarker)
     let evidenceIsValid = drawingSucceeded && phraseWasRecognized
     if !evidenceIsValid {
         attachContextualNoResultFailure(image, to: testCase)

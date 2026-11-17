@@ -30,7 +30,7 @@ enum HumanReadingAuditFixture {
         _ = try store.importFile(from: scanURL)
     }
 
-    private static func nativePDF() -> Data {
+    static func nativePDF() -> Data {
         let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
         let text = renderer.pdfData { context in
             let font = UIFont.systemFont(ofSize: 34, weight: .regular)
