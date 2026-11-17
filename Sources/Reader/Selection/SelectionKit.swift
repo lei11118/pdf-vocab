@@ -441,13 +441,22 @@ enum SelectionGeometry {
                                          lineBounds: lineBounds)
         }()
 
+        let nativeLineHasStackedNeighbor = nativeLineTarget.map {
+            hasNearbyStackedGlyph(outside: $0.lineRange,
+                                  lineBounds: $0.lineBounds,
+                                  on: page,
+                                  source: source)
+        } ?? false
+        if nativeLineHasStackedNeighbor { return nil }
+
         guard let visualLine = verifiedVisualLine(containing: glyphRange, on: page, source: source) else {
             return nativeLineTarget
         }
         // An unverified stop (for example, a same-row gap or a character whose
         // source geometry did not map back exactly) could hide more of the line.
-        // Do not accept a partial PDFKit range in that case.
-        guard visualLine.complete else { return nil }
+        // A complete PDFKit selection remains usable after the local 2D check
+        // above, which protects stacked layouts before that native range passes.
+        if !visualLine.complete { return nativeLineTarget }
         if let nativeLineTarget, NSEqualRanges(nativeLineTarget.lineRange, visualLine.range) {
             return nativeLineTarget
         }
@@ -466,7 +475,11 @@ enum SelectionGeometry {
               line.pages.first === page,
               let selectedRange = onlySourceRange(of: line, on: page, source: source),
               NSEqualRanges(selectedRange, visualLine.range),
-              isSane(line, maxPages: 1, maxChars: 160) else { return nil }
+              isSane(line, maxPages: 1, maxChars: 160),
+              !hasNearbyStackedGlyph(outside: visualLine.range,
+                                     lineBounds: visualLine.bounds,
+                                     on: page,
+                                     source: source) else { return nil }
         return NativeMathPressTarget(lineSelection: line,
                                      lineRange: visualLine.range,
                                      lineIdentity: identity(for: line),
@@ -576,6 +589,164 @@ enum SelectionGeometry {
                                   bounds: bounds,
                                   glyphCount: rects.count,
                                   complete: complete)
+    }
+
+    private static func hasNearbyStackedGlyph(outside lineRange: NSRange,
+                                              lineBounds: CGRect,
+                                              on page: PDFPage,
+                                              source: String) -> Bool {
+        let text = source as NSString
+        guard lineRange.location >= 0,
+              lineRange.length > 0,
+              NSMaxRange(lineRange) <= text.length,
+              isValid(lineBounds),
+              let firstGlyph = verifiedLineBoundary(of: lineRange,
+                                                    fromStart: true,
+                                                    on: page,
+                                                    source: source),
+              let lastGlyph = verifiedLineBoundary(of: lineRange,
+                                                   fromStart: false,
+                                                   on: page,
+                                                   source: source),
+              lineBounds.width > max(firstGlyph.width, lastGlyph.width) * 1.5 else { return false }
+
+        func isSeparator(_ range: NSRange) -> Bool {
+            let value = text.substring(with: range)
+            return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || value.contains("\u{000C}")
+        }
+        func isLineBreak(_ range: NSRange) -> Bool {
+            let value = text.substring(with: range)
+            return value.rangeOfCharacter(from: .newlines) != nil || value.contains("\u{000C}")
+        }
+        func overlapsAsStacked(_ rect: CGRect, with anchor: CGRect) -> Bool {
+            let verticalDistance = abs(rect.midY - anchor.midY)
+            let baselineLimit = max(min(rect.height, anchor.height) * 0.9, 3)
+            let fractionBand = max(rect.height, anchor.height) * 1.6
+            let verticalGap = max(lineBounds.minY - rect.maxY, rect.minY - lineBounds.maxY, 0)
+            let verticalLimit = max(rect.height, anchor.height) * 1.5
+            let horizontalSlack = max(rect.width, anchor.width) * 0.5
+            let overlapsAnchor = rect.minX <= anchor.maxX + horizontalSlack
+                && rect.maxX >= anchor.minX - horizontalSlack
+            return verticalDistance > baselineLimit
+                && verticalDistance <= fractionBand
+                && verticalGap <= verticalLimit
+                && overlapsAnchor
+        }
+        func hasHorizontalASCIIContinuation(from range: NSRange,
+                                             rect: CGRect,
+                                             direction: Int) -> Bool {
+            var cursor = direction < 0 ? range.location : NSMaxRange(range)
+            var scanned = 0
+            while scanned < 8 {
+                let next: NSRange
+                if direction < 0 {
+                    guard cursor > 0 else { return false }
+                    next = text.rangeOfComposedCharacterSequence(at: cursor - 1)
+                    guard NSMaxRange(next) == cursor else { return false }
+                    cursor = next.location
+                } else {
+                    guard cursor < text.length else { return false }
+                    next = text.rangeOfComposedCharacterSequence(at: cursor)
+                    guard next.location == cursor else { return false }
+                    cursor = NSMaxRange(next)
+                }
+                scanned += next.length
+                if isSeparator(next) {
+                    if isLineBreak(next) { return false }
+                    continue
+                }
+                guard let scalar = text.substring(with: next).unicodeScalars.first,
+                      (65...90).contains(scalar.value) || (97...122).contains(scalar.value),
+                      let continuation = verifiedCharacterBounds(of: next, on: page, source: source),
+                      abs(continuation.midY - rect.midY)
+                        <= max(min(continuation.height, rect.height) * 0.35, 3) else { return false }
+                let gap = direction < 0 ? rect.minX - continuation.maxX : continuation.minX - rect.maxX
+                return gap >= -min(rect.height, continuation.height) * 0.4
+                    && gap <= max(min(rect.height, continuation.height) * 0.75, 6)
+            }
+            return false
+        }
+        func scan(_ direction: Int, anchor: CGRect) -> Bool {
+            var cursor = direction < 0 ? lineRange.location : NSMaxRange(lineRange)
+            var scanned = 0
+            while scanned < 8 {
+                let neighbor: NSRange
+                if direction < 0 {
+                    guard cursor > 0 else { return false }
+                    neighbor = text.rangeOfComposedCharacterSequence(at: cursor - 1)
+                    guard NSMaxRange(neighbor) == cursor else { return false }
+                    cursor = neighbor.location
+                } else {
+                    guard cursor < text.length else { return false }
+                    neighbor = text.rangeOfComposedCharacterSequence(at: cursor)
+                    guard neighbor.location == cursor else { return false }
+                    cursor = NSMaxRange(neighbor)
+                }
+                scanned += neighbor.length
+                if isSeparator(neighbor) { continue }
+                guard let rect = verifiedBoundaryBounds(of: neighbor, on: page, source: source),
+                      overlapsAsStacked(rect, with: anchor) else { return false }
+                return !hasHorizontalASCIIContinuation(from: neighbor, rect: rect, direction: direction)
+            }
+            return false
+        }
+        return scan(-1, anchor: firstGlyph) || scan(1, anchor: lastGlyph)
+    }
+
+    private static func verifiedLineBoundary(of range: NSRange,
+                                             fromStart: Bool,
+                                             on page: PDFPage,
+                                             source: String) -> CGRect? {
+        let text = source as NSString
+        var cursor = fromStart ? range.location : NSMaxRange(range)
+        var scanned = 0
+        while scanned < 8 {
+            let character: NSRange
+            if fromStart {
+                guard cursor < NSMaxRange(range) else { return nil }
+                character = text.rangeOfComposedCharacterSequence(at: cursor)
+                guard character.location == cursor else { return nil }
+                cursor = NSMaxRange(character)
+            } else {
+                guard cursor > range.location else { return nil }
+                character = text.rangeOfComposedCharacterSequence(at: cursor - 1)
+                guard NSMaxRange(character) == cursor else { return nil }
+                cursor = character.location
+            }
+            scanned += character.length
+            if text.substring(with: character).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            return verifiedBoundaryBounds(of: character, on: page, source: source)
+        }
+        return nil
+    }
+
+    private static func verifiedBoundaryBounds(of range: NSRange,
+                                               on page: PDFPage,
+                                               source: String) -> CGRect? {
+        guard let selection = page.selection(for: range),
+              selection.pages.count == 1,
+              selection.pages.first === page,
+              let selectedRange = onlySourceRange(of: selection, on: page, source: source) else { return nil }
+        if NSEqualRanges(selectedRange, range) {
+            let bounds = selection.bounds(for: page)
+            return isValid(bounds) ? bounds : nil
+        }
+
+        let text = source as NSString
+        guard selectedRange.location == range.location,
+              selectedRange.length > range.length,
+              selectedRange.length <= range.length + 2,
+              NSMaxRange(selectedRange) <= text.length,
+              let requested = UTF16Span(range: range, in: source)?.substring(in: source),
+              let actual = UTF16Span(range: selectedRange, in: source)?.substring(in: source),
+              actual.hasPrefix(requested),
+              actual.trimmingCharacters(in: .whitespacesAndNewlines) == requested,
+              text.substring(with: NSRange(location: range.location + range.length,
+                                            length: selectedRange.length - range.length))
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let bounds = selection.bounds(for: page)
+        return isValid(bounds) ? bounds : nil
     }
 
     private static func onlySourceRange(of selection: PDFSelection,

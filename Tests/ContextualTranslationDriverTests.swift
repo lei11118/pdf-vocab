@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 import SwiftUI
 import UIKit
+import Vision
 @testable import PdfVocab
 
 @MainActor
@@ -202,9 +203,7 @@ final class ContextualTranslationDriverTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
-        XCTAssertTrue(contextualAccessibilityElements(in: host.view).contains {
-            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
-        }, "Unavailable hover context should expose the explicit no-result accessibility element")
+        assertContextualNoResultRendered(in: host.view, testCase: self)
     }
 
     func testMountedCachedNoAlignmentShowsHoverNoneWithoutAvailabilityCheck() async throws {
@@ -242,9 +241,26 @@ final class ContextualTranslationDriverTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.view.layoutIfNeeded()
         XCTAssertEqual(driver.state, .noAlignedResult)
-        XCTAssertTrue(contextualAccessibilityElements(in: host.view).contains {
-            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
-        }, "A cached no-alignment result should be exposed as the actual hover text")
+        assertContextualNoResultRendered(in: host.view, testCase: self)
+    }
+
+    func testContextualNoResultVisualOCRRecognizesKnownChineseFixture() {
+        let size = CGSize(width: 320, height: 72)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 4
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: size))
+            ("语境：无" as NSString).draw(
+                in: CGRect(x: 12, y: 15, width: 296, height: 42),
+                withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 20, weight: .semibold),
+                    .foregroundColor: UIColor.black
+                ]
+            )
+        }
+        assertContextualNoResultRecognized(in: image, testCase: self)
     }
 
     func testVerifiedPhraseScopeRejectsSameOffsetsFromDifferentOCRLine() throws {
@@ -386,38 +402,79 @@ final class ContextualTranslationDriverTests: XCTestCase {
 
 }
 
-/// Reads UIKit views and SwiftUI's virtual accessibility nodes through the
-/// public NSObject accessibility APIs. SwiftUI identifiers need not be mirrored
-/// onto the backing UIKit view.
 @MainActor
-func contextualAccessibilityElements(in root: UIView) -> [(identifier: String?, label: String?)] {
-    var result: [(identifier: String?, label: String?)] = []
-    var visited = Set<ObjectIdentifier>()
-    var pending = [root as NSObject]
-
-    while let object = pending.popLast() {
-        guard visited.insert(ObjectIdentifier(object)).inserted else { continue }
-        let identifier = (object as? UIAccessibilityIdentification)?.accessibilityIdentifier
-        let label = (object as? UIAccessibilityElement)?.accessibilityLabel
-            ?? (object as? UIView)?.accessibilityLabel
-        result.append((identifier, label))
-
-        if let view = object as? UIView {
-            pending.append(contentsOf: view.subviews.map { $0 as NSObject })
-        }
-        if let elements = object.accessibilityElements {
-            pending.append(contentsOf: elements.compactMap { $0 as? NSObject })
-        }
-
-        let count = object.accessibilityElementCount()
-        guard count > 0, count <= 4_096 else { continue }
-        for index in 0..<count {
-            guard let element = object.accessibilityElement(at: index) as? NSObject else { continue }
-            pending.append(element)
-        }
+func assertContextualNoResultRendered(in root: UIView,
+                                      testCase: XCTestCase,
+                                      file: StaticString = #filePath,
+                                      line: UInt = #line) {
+    let size = root.bounds.size
+    guard size.width > 0, size.height > 0 else {
+        XCTFail("Cannot capture the contextual no-result view with empty bounds", file: file, line: line)
+        return
     }
 
-    return result
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 4
+    format.opaque = true
+    var didDrawHierarchy = false
+    let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+        context.cgContext.setFillColor(UIColor.white.cgColor)
+        context.cgContext.fill(CGRect(origin: .zero, size: size))
+        didDrawHierarchy = root.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+    }
+    assertContextualNoResultRecognized(in: image,
+                                      drawingSucceeded: didDrawHierarchy,
+                                      testCase: testCase,
+                                      file: file,
+                                      line: line)
+}
+
+@MainActor
+func assertContextualNoResultRecognized(in image: UIImage,
+                                        drawingSucceeded: Bool = true,
+                                        testCase: XCTestCase,
+                                        file: StaticString = #filePath,
+                                        line: UInt = #line) {
+    let recognizedLines: [String]
+    do {
+        guard let cgImage = image.cgImage else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["zh-Hans"]
+        try VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:]).perform([request])
+        recognizedLines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    } catch {
+        attachContextualNoResultFailure(image, to: testCase)
+        XCTFail("Vision could not inspect the contextual no-result image: \(error)", file: file, line: line)
+        return
+    }
+
+    let normalizedLines = recognizedLines.map(normalizeContextualNoResultLine)
+    let phraseWasRecognized = normalizedLines.contains("语境:无")
+    let evidenceIsValid = drawingSucceeded && phraseWasRecognized
+    if !evidenceIsValid {
+        attachContextualNoResultFailure(image, to: testCase)
+    }
+    XCTAssertTrue(evidenceIsValid,
+                  "Expected rendered text ‘语境：无’ on one line (whitespace and colon width normalized). "
+                    + "drawHierarchy=\(drawingSucceeded), OCR lines=\(recognizedLines)",
+                  file: file,
+                  line: line)
+}
+
+private func normalizeContextualNoResultLine(_ line: String) -> String {
+    line.filter { !$0.isWhitespace }.replacingOccurrences(of: "：", with: ":")
+}
+
+@MainActor
+private func attachContextualNoResultFailure(_ image: UIImage, to testCase: XCTestCase) {
+    let attachment = XCTAttachment(image: image)
+    attachment.name = "contextual-no-result-visual-evidence"
+    attachment.lifetime = .keepAlways
+    testCase.add(attachment)
 }
 
 private actor DriverLifecycleCallCounter {

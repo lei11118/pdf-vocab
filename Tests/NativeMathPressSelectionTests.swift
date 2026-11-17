@@ -222,10 +222,23 @@ final class NativeMathPressSelectionTests: XCTestCase {
             XCTAssertNotEqual(range.location, NSNotFound, "Synthetic fixture includes \(token)")
             let selection = try XCTUnwrap(page.selection(for: range))
             let rect = selection.bounds(for: page)
-            XCTAssertNil(SelectionGeometry.nativeMathPressTarget(
-                on: page, at: CGPoint(x: rect.midX, y: rect.midY)),
-                "Prose, long variable names, and stacked text do not qualify as one native formula line: \(token)")
+            let target = SelectionGeometry.nativeMathPressTarget(
+                on: page, at: CGPoint(x: rect.midX, y: rect.midY))
+            let details = target.map {
+                "line=\(NSStringFromRange($0.lineRange)) glyph=\(NSStringFromRange($0.glyphRange))"
+            } ?? "nil"
+            XCTAssertNil(target,
+                         "Prose, long variable names, and stacked text do not qualify as one native formula line: \(token); target=\(details)")
         }
+
+        let stackedLine = source.range(of: "x =")
+        XCTAssertNotEqual(stackedLine.location, NSNotFound)
+        let xGlyph = try XCTUnwrap(page.selection(for: NSRange(location: stackedLine.location, length: 1)))
+        let xRect = xGlyph.bounds(for: page)
+        let xTarget = SelectionGeometry.nativeMathPressTarget(
+            on: page, at: CGPoint(x: xRect.midX, y: xRect.midY))
+        XCTAssertNil(xTarget,
+                     "A press on the equation's x must also reject the nearby stacked fraction; got \(xTarget.map { NSStringFromRange($0.lineRange) } ?? "nil")")
     }
 
     func testNativeMathTargetHandlesLongTextPagesAndDecimalFormulaLine() throws {
@@ -251,8 +264,11 @@ final class NativeMathPressSelectionTests: XCTestCase {
 
         let target = SelectionGeometry.nativeMathPressTarget(
             on: page, at: CGPoint(x: rect.midX, y: rect.midY))
+        let targetDetails = target.map {
+            "line=\(NSStringFromRange($0.lineRange)) text=\($0.lineSelection.string ?? "nil")"
+        } ?? "nil"
         XCTAssertEqual(target?.lineSelection.string?.trimmingCharacters(in: .whitespacesAndNewlines), "8.86/9.50",
-                       "Decimal points between digits remain part of a compact math line")
+                       "Decimal points between digits remain part of a compact math line; target=\(targetDetails)")
     }
 }
 

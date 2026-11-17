@@ -518,10 +518,7 @@ final class InteractionPolishTests:XCTestCase {
         host.view.layoutIfNeeded()
 
         let views = descendantViews(of: host.view)
-        let accessibility = contextualAccessibilityElements(in: host.view)
-        XCTAssertTrue(accessibility.contains {
-            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
-        }, "The enabled lookup entry must expose the exact no-context label and identifier")
+        assertContextualNoResultRendered(in: host.view, testCase: self)
         let dictionary = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first { $0.text == definition })
         XCTAssertEqual(dictionary.text, definition)
     }
@@ -549,9 +546,7 @@ final class InteractionPolishTests:XCTestCase {
         cardHost.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         cardHost.view.layoutIfNeeded()
-        XCTAssertTrue(contextualAccessibilityElements(in: cardHost.view).contains {
-            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
-        }, "Reader word cards should expose the exact no-context label and identifier")
+        assertContextualNoResultRendered(in: cardHost.view, testCase: self)
         cardWindow.isHidden = true
         cardWindow.rootViewController = nil
 
@@ -570,9 +565,7 @@ final class InteractionPolishTests:XCTestCase {
         capsuleHost.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         capsuleHost.view.layoutIfNeeded()
-        XCTAssertTrue(contextualAccessibilityElements(in: capsuleHost.view).contains {
-            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
-        }, "Reader word capsules should expose the exact no-context label and identifier")
+        assertContextualNoResultRendered(in: capsuleHost.view, testCase: self)
     }
 
     func testCompactContextCardShowsContextAndAllDictionaryDefinitionsTogether() async throws {
