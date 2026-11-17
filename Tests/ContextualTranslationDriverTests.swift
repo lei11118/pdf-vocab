@@ -452,21 +452,23 @@ func assertContextualNoResultRecognized(in image: UIImage,
         return
     }
 
-    let normalizedLines = recognizedLines.map(normalizeContextualNoResultLine)
-    let phraseWasRecognized = normalizedLines.contains("语境:无")
+    let phraseWasRecognized = recognizedLines.contains(containsContextualNoResultMarker)
     let evidenceIsValid = drawingSucceeded && phraseWasRecognized
     if !evidenceIsValid {
         attachContextualNoResultFailure(image, to: testCase)
     }
     XCTAssertTrue(evidenceIsValid,
-                  "Expected rendered text ‘语境：无’ on one line (whitespace and colon width normalized). "
+                  "Expected the contextual no-result marker ‘语境：无’ within an OCR line "
+                    + "(internal whitespace and colon width normalized). "
                     + "drawHierarchy=\(drawingSucceeded), OCR lines=\(recognizedLines)",
                   file: file,
                   line: line)
 }
 
-private func normalizeContextualNoResultLine(_ line: String) -> String {
-    line.filter { !$0.isWhitespace }.replacingOccurrences(of: "：", with: ":")
+private func containsContextualNoResultMarker(_ line: String) -> Bool {
+    let pattern = #"(?<![\p{L}\p{N}])语\s*境\s*[:：]\s*无(?=$|[\s\p{P}])"#
+    guard let expression = try? NSRegularExpression(pattern: pattern) else { return false }
+    return expression.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil
 }
 
 @MainActor

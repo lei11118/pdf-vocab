@@ -4,7 +4,7 @@
 
 - **当前代码**：source head `180fb23a71848549c3e16d2cf6eb4d4b9d357842` 对 PDF 文字层堆叠公式选区的两侧分别比较邻接 glyph；代码不含模型。多级分数与真实设备行为尚未验证。
 - **当前 beta IPA 已核验**：build-ipa run [44009880216](https://github.com/lei11118/pdf-vocab/actions/runs/44009880216) 成功，提交 `180fb23a71848549c3e16d2cf6eb4d4b9d357842`；52,827,480 bytes，SHA-256 `CDC957E9B01BF29D5D56676E3D63954A529FAB55258609ACCD5166B7EA26A04C`。包审计确认 CRC 63、ARM64、unsigned、无模型权重，minimum iOS 26.0、v0.73.0 / build 124。
-- **精确 head CI 待定**：unit run [44009881774](https://github.com/lei11118/pdf-vocab/actions/runs/44009881774) 与 UI run [44009880370](https://github.com/lei11118/pdf-vocab/actions/runs/44009880370) 均对应当前 head，仍待结果；当前不作验收结论。
+- **精确 head 验证**：unit run [44009881774](https://github.com/lei11118/pdf-vocab/actions/runs/44009881774) 对应 `180fb23a71848549c3e16d2cf6eb4d4b9d357842`，执行 328 项，有 1 项失败：`Tests/InteractionPolishTests.swift:568` 的 OCR 读出 `function 语境：无 ...`，而断言期望独立的一行 OCR 文本。5 项 `NativeMathPressSelectionTests`（全选后精确 glyph、空格公式、长/小数公式、拒绝堆叠式与普通文字、链接不变）通过；cached bypass 与 phrase-scope driver 测试也通过。UI run [44009880370](https://github.com/lei11118/pdf-vocab/actions/runs/44009880370) 在刚才刷新时仍为 `in_progress`。当前不作验收结论。
 
 ## 历史候选与独立观察（不代表当前 head 验收）
 
