@@ -667,7 +667,7 @@ enum SelectionGeometry {
             }
             return false
         }
-        func scan(_ direction: Int, anchor: CGRect) -> Bool {
+        func scan(_ direction: Int) -> Bool {
             var cursor = direction < 0 ? lineRange.location : NSMaxRange(lineRange)
             var scanned = 0
             while scanned < 8 {
@@ -685,13 +685,16 @@ enum SelectionGeometry {
                 }
                 scanned += neighbor.length
                 if isSeparator(neighbor) { continue }
-                guard let rect = verifiedBoundaryBounds(of: neighbor, on: page, source: source),
-                      overlapsAsStacked(rect, with: anchor) else { return false }
+                guard let rect = verifiedBoundaryBounds(of: neighbor, on: page, source: source) else {
+                    return false
+                }
+                guard overlapsAsStacked(rect, with: firstGlyph)
+                        || overlapsAsStacked(rect, with: lastGlyph) else { return false }
                 return !hasHorizontalASCIIContinuation(from: neighbor, rect: rect, direction: direction)
             }
             return false
         }
-        return scan(-1, anchor: firstGlyph) || scan(1, anchor: lastGlyph)
+        return scan(-1) || scan(1)
     }
 
     private static func verifiedLineBoundary(of range: NSRange,
