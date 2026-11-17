@@ -132,9 +132,12 @@ final class NativeMathPressSelectionTests: XCTestCase {
             XCTAssertTrue(SelectionGeometry.isValid(rect))
             return CGPoint(x: rect.midX, y: rect.midY)
         }
+        var coldDiagnostics: [String] = []
         let coldTarget = try XCTUnwrap(
-            SelectionGeometry.nativeMathPressTarget(on: page, at: ePagePoint),
-            "The first-glyph center must resolve while this DEBUG fixture page has no cached word geometry")
+            SelectionGeometry.nativeMathPressTarget(
+                on: page, at: ePagePoint, diagnostic: { coldDiagnostics.append($0) }),
+            "The first-glyph center must resolve while this DEBUG fixture page has no cached word geometry\n"
+                + coldDiagnostics.joined(separator: "\n"))
         XCTAssertEqual(coldTarget.lineRange, formulaRange,
                        "A cold E-center hit must map to the exact complete formula source range")
         XCTAssertEqual(coldTarget.glyphRange, eRange,
@@ -145,9 +148,12 @@ final class NativeMathPressSelectionTests: XCTestCase {
             SelectionGeometry.initialWord(on: page, at: classroomPagePoint),
             "The DEBUG fixture's linked classroom word must build the same warm glyph map as prior reader selection")
         XCTAssertEqual(SelectionGeometry.lookupText(for: classroomSelection), "classroom")
+        var warmDiagnostics: [String] = []
         let warmTarget = try XCTUnwrap(
-            SelectionGeometry.nativeMathPressTarget(on: page, at: ePagePoint),
-            "The same raw E-center hit must still resolve after initialWord has warmed placed glyph geometry")
+            SelectionGeometry.nativeMathPressTarget(
+                on: page, at: ePagePoint, diagnostic: { warmDiagnostics.append($0) }),
+            "The same raw E-center hit must still resolve after initialWord has warmed placed glyph geometry\n"
+                + warmDiagnostics.joined(separator: "\n"))
         XCTAssertEqual(warmTarget.lineRange, formulaRange,
                        "A warm E-center hit must map to the exact complete formula source range")
         XCTAssertEqual(warmTarget.glyphRange, eRange,

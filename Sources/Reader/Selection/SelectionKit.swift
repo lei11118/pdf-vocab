@@ -386,8 +386,21 @@ enum SelectionGeometry {
     /// line, then returns the exact native glyph under the touch. If PDFKit
     /// fragments its line selection, rebuild only the contiguous visual line
     /// around the exact range hit using source-validated character geometry.
-    static func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> NativeMathPressTarget? {
-        guard let source = page.string else { return nil }
+    static func nativeMathPressTarget(on page: PDFPage,
+                                      at point: CGPoint,
+                                      diagnostic: ((String) -> Void)? = nil) -> NativeMathPressTarget? {
+        func diagnose(_ message: @autoclosure () -> String) {
+            guard let diagnostic else { return }
+            diagnostic("[nativeMathPressTarget] \(message())")
+        }
+        func preview(_ text: String) -> String {
+            let compact = text.replacingOccurrences(of: "\n", with: "↵")
+            return String(compact.prefix(100)) + (compact.count > 100 ? "…" : "")
+        }
+        guard let source = page.string else {
+            diagnose("reject: page.string is nil")
+            return nil
+        }
         let sourceNSString = source as NSString
         let pdfLine = page.selectionForLine(at: point)
         let pdfLineRange = pdfLine.flatMap { onlySourceRange(of: $0, on: page, source: source) }
@@ -395,25 +408,43 @@ enum SelectionGeometry {
         if let usablePDFLineRange,
            let text = UTF16Span(range: usablePDFLineRange, in: source)?.substring(in: source),
            hasObviousNativeMathDisqualifier(text) {
+            diagnose("native line disqualifier: range=\(NSStringFromRange(usablePDFLineRange)) input=\"\(preview(text))\"")
             return nil
         }
         let indexedSearchRange = boundedCharacterSearchRange(
             near: page.characterIndex(at: point), in: sourceNSString)
-        let glyph = usablePDFLineRange.flatMap {
+        let glyphCandidate = usablePDFLineRange.flatMap {
             initialCharacter(on: page, at: point, tolerance: 0, within: $0)
         } ?? indexedSearchRange.flatMap {
             initialCharacter(on: page, at: point, tolerance: 0, within: $0)
         }
-        guard let glyph,
+        guard let glyph = glyphCandidate,
               glyph.pages.count == 1,
               glyph.pages.first === page,
               let glyphRange = onlySourceRange(of: glyph, on: page, source: source),
               glyphRange.length > 0,
               glyphRange.length <= 2,
-              NSMaxRange(glyphRange) <= sourceNSString.length else { return nil }
+              NSMaxRange(glyphRange) <= sourceNSString.length else {
+            if diagnostic != nil {
+                let range = glyphCandidate.flatMap { onlySourceRange(of: $0, on: page, source: source) }
+                let bounds = range.flatMap { verifiedCharacterBounds(of: $0, on: page, source: source) }
+                    ?? glyphCandidate.map { placedBounds(of: $0, on: page) }
+                let lineLabel = pdfLineRange.map(NSStringFromRange) ?? "nil"
+                let searchLabel = indexedSearchRange.map(NSStringFromRange) ?? "nil"
+                let glyphLabel = glyphCandidate.map { preview($0.string ?? "") } ?? "nil"
+                let rangeLabel = range.map(NSStringFromRange) ?? "nil"
+                let boundsLabel = bounds.map(NSStringFromCGRect) ?? "nil"
+                diagnose("exact glyph guard rejected: line=\(lineLabel) search=\(searchLabel) glyph=\(glyphLabel) range=\(rangeLabel) bounds=\(boundsLabel) point=\(NSStringFromCGPoint(point))")
+            }
+            return nil
+        }
         let glyphRect = verifiedCharacterBounds(of: glyphRange, on: page, source: source)
             ?? placedBounds(of: glyph, on: page)
-        guard isValid(glyphRect), glyphRect.contains(point) else { return nil }
+        guard isValid(glyphRect), glyphRect.contains(point) else {
+            diagnose("exact glyph bounds rejected: glyph=\(NSStringFromRange(glyphRange)) bounds=\(NSStringFromCGRect(glyphRect)) point=\(NSStringFromCGPoint(point))")
+            return nil
+        }
+        diagnose("exact glyph accepted: glyph=\(NSStringFromRange(glyphRange)) bounds=\(NSStringFromCGRect(glyphRect)) point=\(NSStringFromCGPoint(point))")
 
         // Keep the established PDFKit path as the fast route when it proves
         // one complete, parser-valid line. Neighbor geometry below detects a
@@ -440,6 +471,12 @@ enum SelectionGeometry {
                                          glyphRange: glyphRange,
                                          lineBounds: lineBounds)
         }()
+        if nativeLineTarget == nil, diagnostic != nil {
+            let input = usablePDFLineRange.flatMap { UTF16Span(range: $0, in: source)?.substring(in: source) }
+            let lineRangeLabel = pdfLineRange.map(NSStringFromRange) ?? "nil"
+            let lineInput = input.map(preview) ?? "unavailable"
+            diagnose("native line rejected by parser/range/geometry checks: range=\(lineRangeLabel) input=\(lineInput)")
+        }
 
         let nativeLineHasStackedNeighbor = nativeLineTarget.map {
             hasNearbyStackedGlyph(outside: $0.lineRange,
@@ -447,18 +484,34 @@ enum SelectionGeometry {
                                   on: page,
                                   source: source)
         } ?? false
-        if nativeLineHasStackedNeighbor { return nil }
+        if let nativeLineTarget {
+            diagnose("native stack check: range=\(NSStringFromRange(nativeLineTarget.lineRange)) stacked=\(nativeLineHasStackedNeighbor)")
+        }
+        if nativeLineHasStackedNeighbor {
+            diagnose("reject: stacked native neighbor")
+            return nil
+        }
 
         guard let visualLine = verifiedVisualLine(containing: glyphRange, on: page, source: source) else {
+            let nativeLineRange = nativeLineTarget.map { NSStringFromRange($0.lineRange) } ?? "nil"
+            diagnose("visualLine missing for glyph=\(NSStringFromRange(glyphRange)); nativeLine=\(nativeLineRange)")
             return nativeLineTarget
         }
         // An unverified stop (for example, a same-row gap or a character whose
         // source geometry did not map back exactly) could hide more of the line.
         // A complete PDFKit selection remains usable after the local 2D check
         // above, which protects stacked layouts before that native range passes.
-        if !visualLine.complete { return nativeLineTarget }
-        if let nativeLineTarget, NSEqualRanges(nativeLineTarget.lineRange, visualLine.range) {
+        if !visualLine.complete {
+            let nativeLineRange = nativeLineTarget.map { NSStringFromRange($0.lineRange) } ?? "nil"
+            diagnose("visualLine incomplete: range=\(NSStringFromRange(visualLine.range)) glyphCount=\(visualLine.glyphCount); nativeLine=\(nativeLineRange)")
             return nativeLineTarget
+        }
+        if let nativeLineTarget, NSEqualRanges(nativeLineTarget.lineRange, visualLine.range) {
+            diagnose("visualLine agrees with native range=\(NSStringFromRange(visualLine.range))")
+            return nativeLineTarget
+        }
+        if let nativeLineTarget {
+            diagnose("native range disagreement: native=\(NSStringFromRange(nativeLineTarget.lineRange)) visual=\(NSStringFromRange(visualLine.range))")
         }
         let nativeRangeFitsVisualLine = nativeLineTarget.map {
             $0.lineRange.location >= visualLine.range.location
@@ -479,7 +532,13 @@ enum SelectionGeometry {
               !hasNearbyStackedGlyph(outside: visualLine.range,
                                      lineBounds: visualLine.bounds,
                                      on: page,
-                                     source: source) else { return nil }
+                                     source: source) else {
+            if diagnostic != nil {
+                let input = UTF16Span(range: visualLine.range, in: source)?.substring(in: source) ?? "unavailable"
+                diagnose("visualLine parser/exact-selection/stack guard rejected: range=\(NSStringFromRange(visualLine.range)) input=\"\(preview(input))\"")
+            }
+            return nil
+        }
         return NativeMathPressTarget(lineSelection: line,
                                      lineRange: visualLine.range,
                                      lineIdentity: identity(for: line),
