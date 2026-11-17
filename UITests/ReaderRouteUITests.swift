@@ -926,14 +926,50 @@ extension ReaderRouteUITests {
         }
         if currentValue == enabled { return true }
 
-        // SwiftUI exposes this Toggle across its Form row; tap the visible switch at the trailing edge.
-        control.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        // Tap the accessible UISwitch directly before trying any row-level hit point.
+        control.tap()
+        if waitForSwitchValue(control, to: enabled, timeout: 5) { return true }
+
+        // A row fallback is safe only when AX still reports the original value.
+        guard switchValue(control) == currentValue else {
+            attachSwitchDiagnostic("switch-value-changed-unexpectedly-after-native-tap", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native tap; the observed value no longer matches its original value \(currentValue), so the row fallback was skipped")
+            return false
+        }
+
+        let row = settingsPanel.cells.containing(.switch, identifier: control.identifier).firstMatch
+        guard row.exists, row.isHittable else {
+            attachSwitchDiagnostic("switch-form-row-not-found", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, but its Form row was not visible as a hittable cell")
+            return false
+        }
+        let rowFrame = row.frame
+        guard rowFrame.width > 0, rowFrame.height > 0,
+              let visibleScrollView = scrollViews.first(where: { $0.exists && $0.isHittable && $0.frame.intersects(rowFrame) }) else {
+            attachSwitchDiagnostic("switch-visible-form-row-unavailable", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, and no visible Form row was available for the single fallback")
+            return false
+        }
+
+        let visibleRowFrame = rowFrame.intersection(settingsPanel.frame).intersection(visibleScrollView.frame)
+        let controlFrame = control.frame
+        let fallbackPoint = controlFrame.width > 0 && controlFrame.width < rowFrame.width * 0.6 && controlFrame.midX > rowFrame.midX
+            ? CGPoint(x: controlFrame.midX, y: controlFrame.midY)
+            : CGPoint(x: visibleRowFrame.maxX - 40, y: visibleRowFrame.midY)
+        let fallbackOffset = CGVector(dx: (fallbackPoint.x - rowFrame.minX) / rowFrame.width,
+                                      dy: (fallbackPoint.y - rowFrame.minY) / rowFrame.height)
+        guard !visibleRowFrame.isNull, !visibleRowFrame.isEmpty, visibleRowFrame.contains(fallbackPoint),
+              fallbackOffset.dx.isFinite, fallbackOffset.dy.isFinite, fallbackOffset.dx >= 0.5,
+              fallbackOffset.dx < 1, fallbackOffset.dy >= 0, fallbackOffset.dy <= 1 else {
+            attachSwitchDiagnostic("switch-row-fallback-coordinate-invalid", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) stayed at its original value after the native tap, but no valid trailing point was available inside visible row \(visibleRowFrame); candidate \(fallbackPoint)")
+            return false
+        }
+
+        row.coordinate(withNormalizedOffset: fallbackOffset).tap()
         guard waitForSwitchValue(control, to: enabled, timeout: 5) else {
-            attachSwitchDiagnostic("switch-value-did-not-change",
-                                   control: control,
-                                   expectedEnabled: enabled,
-                                   in: app)
-            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled)")
+            attachSwitchDiagnostic("switch-value-did-not-change-after-visible-row-fallback", control: control, expectedEnabled: enabled, in: app)
+            XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native tap and one visible-row fallback")
             return false
         }
         return true
