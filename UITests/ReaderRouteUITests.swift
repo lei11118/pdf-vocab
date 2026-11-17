@@ -1074,11 +1074,24 @@ extension ReaderRouteUITests {
                                                   observer: XCUIElement,
                                                   diagnosticName: String) -> Bool {
         coordinate(for: formulaEnd, in: app).press(forDuration: 1.0)
+        let formulaSelection = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == formulaText
+        }
+        let formulaAnchorText = formulaSelection?["selectedText"] as? String
+        XCTAssertEqual(formulaAnchorText, formulaText,
+                       "A standalone long press at the visible superscript first selects the complete formula")
+        guard formulaAnchorText == formulaText else {
+            attachAuditDiagnostics("\(diagnosticName)-formula-anchor-failed", app: app, observer: observer)
+            attachReaderGestureDiagnosticsFromLibrary("\(diagnosticName)-formula-anchor-failed", app: app)
+            return false
+        }
+
+        coordinate(for: formulaEnd, in: app).press(forDuration: 1.0)
         let anchorSelection = waitForAudit(observer, timeout: 15) {
             ($0["selectedText"] as? String) == "²"
         }
         let anchorText = anchorSelection?["selectedText"] as? String
-        XCTAssertEqual(anchorText, "²", "A standalone long press at the visible superscript selects exactly ²")
+        XCTAssertEqual(anchorText, "²", "Repeating the superscript long press selects exactly ²")
         guard anchorText == "²" else {
             attachAuditDiagnostics("\(diagnosticName)-superscript-anchor-failed", app: app, observer: observer)
             attachReaderGestureDiagnosticsFromLibrary("\(diagnosticName)-superscript-anchor-failed", app: app)

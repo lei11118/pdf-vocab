@@ -418,16 +418,21 @@ enum SelectionGeometry {
         } ?? indexedSearchRange.flatMap {
             initialCharacter(on: page, at: point, tolerance: 0, within: $0)
         }
+        let glyphSourceRange = glyphCandidate.flatMap { onlySourceRange(of: $0, on: page, source: source) }
+        let logicalGlyphRange = glyphSourceRange.flatMap { logicalSourceRange(from: $0, source: source) }
         guard let glyph = glyphCandidate,
               glyph.pages.count == 1,
               glyph.pages.first === page,
-              let glyphRange = onlySourceRange(of: glyph, on: page, source: source),
+              let glyphSourceRange,
+              glyphSourceRange.length > 0,
+              let glyphRange = logicalGlyphRange,
               glyphRange.length > 0,
               glyphRange.length <= 2,
+              glyphSourceRange.length <= glyphRange.length + 2,
               NSMaxRange(glyphRange) <= sourceNSString.length else {
             if diagnostic != nil {
-                let range = glyphCandidate.flatMap { onlySourceRange(of: $0, on: page, source: source) }
-                let bounds = range.flatMap { verifiedCharacterBounds(of: $0, on: page, source: source) }
+                let range = logicalGlyphRange ?? glyphSourceRange
+                let bounds = range.flatMap { verifiedCharacterOrBoundaryBounds(of: $0, on: page, source: source) }
                     ?? glyphCandidate.map { placedBounds(of: $0, on: page) }
                 let lineLabel = pdfLineRange.map(NSStringFromRange) ?? "nil"
                 let searchLabel = indexedSearchRange.map(NSStringFromRange) ?? "nil"
@@ -438,7 +443,7 @@ enum SelectionGeometry {
             }
             return nil
         }
-        let glyphRect = verifiedCharacterBounds(of: glyphRange, on: page, source: source)
+        let glyphRect = verifiedCharacterOrBoundaryBounds(of: glyphRange, on: page, source: source)
             ?? placedBounds(of: glyph, on: page)
         guard isValid(glyphRect), glyphRect.contains(point) else {
             diagnose("exact glyph bounds rejected: glyph=\(NSStringFromRange(glyphRange)) bounds=\(String(describing: glyphRect)) point=\(String(describing: point))")
@@ -455,7 +460,8 @@ enum SelectionGeometry {
                   line.pages.first === page,
                   line.selectionsByLine().count == 1,
                   isSane(line, maxPages: 1, maxChars: 160),
-                  let lineRange = onlySourceRange(of: line, on: page, source: source),
+                  let selectedLineRange = onlySourceRange(of: line, on: page, source: source),
+                  let lineRange = logicalSourceRange(from: selectedLineRange, source: source),
                   lineRange.length > 1,
                   NSMaxRange(lineRange) <= sourceNSString.length,
                   let lineText = UTF16Span(range: lineRange, in: source)?.substring(in: source),
@@ -527,7 +533,9 @@ enum SelectionGeometry {
               line.pages.count == 1,
               line.pages.first === page,
               let selectedRange = onlySourceRange(of: line, on: page, source: source),
-              NSEqualRanges(selectedRange, visualLine.range),
+              let selectedLogicalRange = logicalSourceRange(from: selectedRange, source: source),
+              NSEqualRanges(selectedLogicalRange, visualLine.range),
+              selectedRange.length <= visualLine.range.length + 2,
               isSane(line, maxPages: 1, maxChars: 160),
               !hasNearbyStackedGlyph(outside: visualLine.range,
                                      lineBounds: visualLine.bounds,
@@ -559,12 +567,54 @@ enum SelectionGeometry {
         return isValid(bounds) ? bounds : nil
     }
 
+    /// PDFKit can attach a short trailing separator (usually a newline) to a
+    /// one-character selection at a line boundary. Accept its geometry only
+    /// through the existing source-checked, bounded boundary verifier.
+    private static func verifiedCharacterOrBoundaryBounds(of range: NSRange,
+                                                          on page: PDFPage,
+                                                          source: String) -> CGRect? {
+        verifiedCharacterBounds(of: range, on: page, source: source)
+            ?? verifiedBoundaryBounds(of: range, on: page, source: source)
+    }
+
+    /// Return the exact non-separator source span represented by a PDFKit
+    /// selection range. The selection itself remains untouched for rendering
+    /// and copy routing; callers use this trimmed span only as logical identity.
+    private static func logicalSourceRange(from range: NSRange, source: String) -> NSRange? {
+        let text = source as NSString
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= text.length else { return nil }
+
+        func isBoundarySeparator(_ span: NSRange) -> Bool {
+            let value = text.substring(with: span)
+            return value.unicodeScalars.allSatisfy {
+                CharacterSet.whitespacesAndNewlines.contains($0) || $0.value == 0x000C
+            }
+        }
+
+        var start = range.location
+        var end = NSMaxRange(range)
+        while start < end {
+            let separator = text.rangeOfComposedCharacterSequence(at: start)
+            guard separator.location == start, NSMaxRange(separator) <= end,
+                  isBoundarySeparator(separator) else { break }
+            start = NSMaxRange(separator)
+        }
+        while end > start {
+            let separator = text.rangeOfComposedCharacterSequence(at: end - 1)
+            guard separator.location >= start, NSMaxRange(separator) == end,
+                  isBoundarySeparator(separator) else { break }
+            end = separator.location
+        }
+        guard start < end else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
     private static func verifiedVisualLine(containing seed: NSRange,
                                            on page: PDFPage,
                                            source: String) -> VerifiedVisualLine? {
         let text = source as NSString
         guard seed.location >= 0, seed.length > 0, NSMaxRange(seed) <= text.length,
-              let seedRect = verifiedCharacterBounds(of: seed, on: page, source: source) else { return nil }
+              let seedRect = verifiedCharacterOrBoundaryBounds(of: seed, on: page, source: source) else { return nil }
 
         let verticalTolerance = max(seedRect.height * 0.9, 3)
         func isOnSeedLine(_ rect: CGRect) -> Bool {
@@ -598,7 +648,7 @@ enum SelectionGeometry {
                 cursor = previous.location
                 continue
             }
-            guard let rect = verifiedCharacterBounds(of: previous, on: page, source: source) else {
+            guard let rect = verifiedCharacterOrBoundaryBounds(of: previous, on: page, source: source) else {
                 complete = false
                 break
             }
@@ -622,7 +672,7 @@ enum SelectionGeometry {
                 cursor = NSMaxRange(next)
                 continue
             }
-            guard let rect = verifiedCharacterBounds(of: next, on: page, source: source) else {
+            guard let rect = verifiedCharacterOrBoundaryBounds(of: next, on: page, source: source) else {
                 complete = false
                 break
             }
@@ -892,7 +942,6 @@ enum SelectionGeometry {
         guard let source = page.string else { return false }
         let text = source as NSString
         guard range.length > 0, NSMaxRange(range) <= text.length else { return false }
-        guard page.numberOfCharacters == text.length else { return false }
         var glyphRects: [CGRect] = []
         var index = range.location
         while index < NSMaxRange(range) {
@@ -900,7 +949,9 @@ enum SelectionGeometry {
             guard characterRange.length > 0, NSMaxRange(characterRange) <= NSMaxRange(range) else { return false }
             index = NSMaxRange(characterRange)
             if text.substring(with: characterRange).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
-            let rect = page.characterBounds(at: characterRange.location)
+            guard let rect = verifiedCharacterOrBoundaryBounds(of: characterRange,
+                                                               on: page,
+                                                               source: source) else { return false }
             guard isValid(rect), lineBounds.insetBy(dx: -3, dy: -3).contains(rect) else { return false }
             glyphRects.append(rect)
         }

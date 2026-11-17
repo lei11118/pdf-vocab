@@ -132,6 +132,7 @@ final class NativeMathPressSelectionTests: XCTestCase {
             XCTAssertTrue(SelectionGeometry.isValid(rect))
             return CGPoint(x: rect.midX, y: rect.midY)
         }
+        let superscriptPagePoint = try pagePoint(for: superscriptRange)
         var coldDiagnostics: [String] = []
         let coldTarget = try XCTUnwrap(
             SelectionGeometry.nativeMathPressTarget(
@@ -142,6 +143,23 @@ final class NativeMathPressSelectionTests: XCTestCase {
                        "A cold E-center hit must map to the exact complete formula source range")
         XCTAssertEqual(coldTarget.glyphRange, eRange,
                        "A cold hit at the leading glyph center must retain the E source range")
+        var coldSuperscriptDiagnostics: [String] = []
+        let coldSuperscriptTarget = try XCTUnwrap(
+            SelectionGeometry.nativeMathPressTarget(
+                on: page, at: superscriptPagePoint,
+                diagnostic: { coldSuperscriptDiagnostics.append($0) }),
+            "A cold hit at the final superscript must recover the complete formula despite a trailing PDFKit separator\n"
+                + coldSuperscriptDiagnostics.joined(separator: "\n"))
+        XCTAssertEqual(coldSuperscriptTarget.lineRange, formulaRange,
+                       "The cold superscript hit must keep the exact non-separator formula range")
+        XCTAssertEqual(coldSuperscriptTarget.glyphRange, superscriptRange,
+                       "The cold superscript hit must keep only the touched glyph in its logical range")
+        XCTAssertTrue(coldSuperscriptTarget.lineSelection.pages.first === page,
+                      "The logical trimmed range must retain the original same-page PDFSelection")
+        XCTAssertEqual(SelectionGeometry.lookupText(for: coldSuperscriptTarget.lineSelection), "E=mc²",
+                       "Selection normalization must omit only the boundary separator from formula text")
+        XCTAssertEqual(SelectionGeometry.lookupText(for: coldSuperscriptTarget.glyphSelection), "²",
+                       "Selection normalization must preserve the exact superscript glyph for copy/display")
 
         let classroomPagePoint = try pagePoint(for: classroomRange)
         let classroomSelection = try XCTUnwrap(
@@ -158,6 +176,17 @@ final class NativeMathPressSelectionTests: XCTestCase {
                        "A warm E-center hit must map to the exact complete formula source range")
         XCTAssertEqual(warmTarget.glyphRange, eRange,
                        "A warm hit at the leading glyph center must retain the E source range")
+        var warmSuperscriptDiagnostics: [String] = []
+        let warmSuperscriptTarget = try XCTUnwrap(
+            SelectionGeometry.nativeMathPressTarget(
+                on: page, at: superscriptPagePoint,
+                diagnostic: { warmSuperscriptDiagnostics.append($0) }),
+            "A warmed hit at the final superscript must still resolve the complete formula\n"
+                + warmSuperscriptDiagnostics.joined(separator: "\n"))
+        XCTAssertEqual(warmSuperscriptTarget.lineRange, formulaRange,
+                       "The warm superscript hit must keep the exact non-separator formula range")
+        XCTAssertEqual(warmSuperscriptTarget.glyphRange, superscriptRange,
+                       "The warm superscript hit must keep only the touched glyph in its logical range")
 
         let defaults = UserDefaults.standard
         let oldContextFlag = defaults.object(forKey: FeatureFlags.contextReadingEnabledKey)
@@ -212,15 +241,15 @@ final class NativeMathPressSelectionTests: XCTestCase {
             coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
         }
 
-        try longPress(at: eRange)
+        try longPress(at: superscriptRange)
         XCTAssertEqual(selected.last, "E=mc²",
-                       "The first long press at the DEBUG audit's leading E center must select the whole formula")
+                       "The first long press at the DEBUG audit's final superscript must select the whole formula")
+        try longPress(at: superscriptRange)
+        XCTAssertEqual(selected.last, "²", "Repeating the superscript press resolves its exact touched glyph")
         try longPress(at: eRange)
-        XCTAssertEqual(selected.last, "E", "The next press at E resolves its exact touched glyph")
+        XCTAssertEqual(selected.last, "E", "A following press at E resolves its exact touched glyph")
         try longPress(at: mRange)
         XCTAssertEqual(selected.last, "m", "A subsequent press at m resolves that exact glyph")
-        try longPress(at: superscriptRange)
-        XCTAssertEqual(selected.last, "²", "A following press at ² resolves that exact glyph")
     }
 #endif
 
