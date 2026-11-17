@@ -52,11 +52,14 @@ final class NativeMathPressSelectionTests: XCTestCase {
         view.layoutDocumentView()
         view.go(to: page)
 
-        func point(for range: NSRange) throws -> CGPoint {
+        func pagePoint(for range: NSRange) throws -> CGPoint {
             let selection = try XCTUnwrap(page.selection(for: range))
             let rect = selection.bounds(for: page)
             XCTAssertTrue(SelectionGeometry.isValid(rect))
-            return view.convert(CGPoint(x: rect.midX, y: rect.midY), from: page)
+            return CGPoint(x: rect.midX, y: rect.midY)
+        }
+        func point(for range: NSRange) throws -> CGPoint {
+            view.convert(try pagePoint(for: range), from: page)
         }
 
         var selected: [String] = []
@@ -67,6 +70,20 @@ final class NativeMathPressSelectionTests: XCTestCase {
         coordinator.setContextReadingMode(true, generation: 1)
         coordinator.hapticsEnabled = false
 
+        let mPagePoint = try pagePoint(for: mRange)
+        let helperTarget = try XCTUnwrap(
+            SelectionGeometry.nativeMathPressTarget(on: page, at: mPagePoint),
+            "SelectionGeometry rejected E=mc² before ReaderCoordinator routing")
+        XCTAssertEqual(helperTarget.lineRange, formulaRange,
+                       "The geometry helper must recover the complete source range after PDFKit line fragmentation")
+        XCTAssertEqual(source.substring(with: helperTarget.lineRange), "E=mc²",
+                       "The geometry helper target must be the parser-verified visual formula")
+        let coordinatorTarget = try XCTUnwrap(
+            coordinator.nativeMathPressTarget(on: page, at: mPagePoint),
+            "ReaderCoordinator rejected the valid helper target; inspect feature, document, or action guards")
+        XCTAssertEqual(coordinatorTarget.lineRange, formulaRange,
+                       "Coordinator routing must preserve the complete helper range")
+
         func longPress(at point: CGPoint) {
             let press = MutableNativeMathPress(point: point)
             coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
@@ -75,7 +92,8 @@ final class NativeMathPressSelectionTests: XCTestCase {
         }
 
         longPress(at: try point(for: mRange))
-        XCTAssertEqual(selected.last, "E=mc²", "The first press selects the bounded native visual formula line")
+        XCTAssertEqual(selected.last, "E=mc²",
+                       "Both helper and coordinator accepted the target, so the first press must apply the whole line")
         longPress(at: try point(for: mRange))
         XCTAssertEqual(selected.last, "m", "The next press resolves the exact touched glyph")
         longPress(at: try point(for: superscriptRange))
@@ -141,12 +159,42 @@ final class NativeMathPressSelectionTests: XCTestCase {
         let firstGlyph = try XCTUnwrap(page.selection(for: NSRange(location: formulaRange.location, length: 1)))
         let rect = firstGlyph.bounds(for: page)
         let point = view.convert(CGPoint(x: rect.midX, y: rect.midY), from: page)
+        XCTAssertNotNil(SelectionGeometry.nativeMathPressTarget(
+            on: page, at: CGPoint(x: rect.midX, y: rect.midY)),
+            "The linked formula fixture should qualify in the geometry helper before action guards")
+        XCTAssertNil(coordinator.nativeMathPressTarget(on: page, at: CGPoint(x: rect.midX, y: rect.midY)),
+                     "Any tappable non-widget action overlapping the formula must block two-level math selection")
         let press = MutableNativeMathPress(point: point)
         coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
         XCTAssertNotEqual(selected, "F = ma", "Linked text keeps the existing native word selection behavior")
         press.testState = .ended
         coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
         coordinator.dismissSelection()
+    }
+
+    func testNativeMathPressTargetExpandsSpacedLineFromRightmostGlyph() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 360, height: 240)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            ("F = ma" as NSString).draw(at: CGPoint(x: 45, y: 135),
+                                        withAttributes: [.font: UIFont.systemFont(ofSize: 30)])
+        }
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let source = try XCTUnwrap(page.string) as NSString
+        let formulaRange = try XCTUnwrap(source.range(of: "F = ma").location == NSNotFound
+            ? nil : source.range(of: "F = ma"))
+        let aRange = try XCTUnwrap(source.range(of: "a", options: [], range: formulaRange).location == NSNotFound
+            ? nil : source.range(of: "a", options: [], range: formulaRange))
+        let glyph = try XCTUnwrap(page.selection(for: aRange))
+        let rect = glyph.bounds(for: page)
+
+        let target = try XCTUnwrap(SelectionGeometry.nativeMathPressTarget(
+            on: page, at: CGPoint(x: rect.midX, y: rect.midY)),
+            "A right-edge hit must recover the complete spaced formula from verified neighboring glyph geometry")
+        XCTAssertEqual(target.lineRange, formulaRange,
+                       "The leftward scan must preserve every operator and intervening space")
+        XCTAssertEqual(source.substring(with: target.lineRange), "F = ma")
     }
 
     func testNativeMathPressTargetRejectsProseLongWordsAndStackedText() throws {

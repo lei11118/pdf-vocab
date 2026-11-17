@@ -459,6 +459,7 @@ final class InteractionPolishTests:XCTestCase {
 
     func testHoverBubbleHostsLongContextAndDictionaryInOneScrollableSurface() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
         let host = UIHostingController(rootView: WordBubbleContent(
             term:"function",
             detail:String(repeating:"n. 函数；功能；作用；职责。\n",count:30),
@@ -468,7 +469,11 @@ final class InteractionPolishTests:XCTestCase {
         window.frame = CGRect(x:0,y:0,width:320,height:180)
         window.rootViewController = host
         window.makeKeyAndVisible()
-        defer { window.isHidden = true; window.rootViewController = nil }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         host.view.frame = window.bounds
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
@@ -476,8 +481,11 @@ final class InteractionPolishTests:XCTestCase {
         host.view.layoutIfNeeded()
 
         let views = descendantViews(of:host.view)
-        let textView = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first)
-        XCTAssertEqual(textView.text,String(repeating:"n. 函数；功能；作用；职责。\n",count:30))
+        let expectedDictionary = String(repeating:"n. 函数；功能；作用；职责。\n",count:30)
+        let textView = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first {
+            $0.text == expectedDictionary
+        })
+        XCTAssertEqual(textView.text,expectedDictionary)
         XCTAssertFalse(textView.isScrollEnabled,"The outer bubble scroll view must own scrolling for both sections")
         let outerScroll = try XCTUnwrap(views.compactMap { $0 as? UIScrollView }.first {
             $0 !== textView && $0.isScrollEnabled && $0.contentSize.height > $0.bounds.height
@@ -487,6 +495,7 @@ final class InteractionPolishTests:XCTestCase {
 
     func testEnabledLookupWithoutValidatedContextShowsNoneAndKeepsDictionary() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
         let definition = "词典释义仍然显示。"
         let host = UIHostingController(rootView: WordBubbleContent(
             term: "function",
@@ -497,7 +506,11 @@ final class InteractionPolishTests:XCTestCase {
         window.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
         window.rootViewController = host
         window.makeKeyAndVisible()
-        defer { window.isHidden = true; window.rootViewController = nil }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         host.view.frame = window.bounds
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
@@ -505,16 +518,17 @@ final class InteractionPolishTests:XCTestCase {
         host.view.layoutIfNeeded()
 
         let views = descendantViews(of: host.view)
-        XCTAssertTrue(views.contains { $0.accessibilityIdentifier == "contextual-hover-no-result" },
-                      "The enabled lookup entry must explain that no validated context is available")
-        let dictionary = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first {
-            $0.accessibilityIdentifier == "hover-dictionary-definition"
-        })
+        let accessibility = contextualAccessibilityElements(in: host.view)
+        XCTAssertTrue(accessibility.contains {
+            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
+        }, "The enabled lookup entry must expose the exact no-context label and identifier")
+        let dictionary = try XCTUnwrap(views.compactMap { $0 as? UITextView }.first { $0.text == definition })
         XCTAssertEqual(dictionary.text, definition)
     }
 
     func testEnabledWordCardAndCapsuleExposeMissingContextForReaderLookup() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
         let cardHost = UIHostingController(rootView: WordCardPanel(
             content: .word("function"),
             onClose: {},
@@ -525,15 +539,19 @@ final class InteractionPolishTests:XCTestCase {
         cardWindow.frame = CGRect(x: 0, y: 0, width: 360, height: 500)
         cardWindow.rootViewController = cardHost
         cardWindow.makeKeyAndVisible()
-        defer { cardWindow.isHidden = true; cardWindow.rootViewController = nil }
+        defer {
+            cardWindow.isHidden = true
+            cardWindow.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         cardHost.view.frame = cardWindow.bounds
         cardHost.view.setNeedsLayout()
         cardHost.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         cardHost.view.layoutIfNeeded()
-        XCTAssertTrue(descendantViews(of: cardHost.view).contains {
-            $0.accessibilityIdentifier == "contextual-hover-no-result"
-        }, "Reader word cards without a validated context should show the explicit no-result state")
+        XCTAssertTrue(contextualAccessibilityElements(in: cardHost.view).contains {
+            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
+        }, "Reader word cards should expose the exact no-context label and identifier")
         cardWindow.isHidden = true
         cardWindow.rootViewController = nil
 
@@ -552,9 +570,9 @@ final class InteractionPolishTests:XCTestCase {
         capsuleHost.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         capsuleHost.view.layoutIfNeeded()
-        XCTAssertTrue(descendantViews(of: capsuleHost.view).contains {
-            $0.accessibilityIdentifier == "contextual-hover-no-result"
-        }, "Reader word capsules should expose the same missing-context state")
+        XCTAssertTrue(contextualAccessibilityElements(in: capsuleHost.view).contains {
+            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
+        }, "Reader word capsules should expose the exact no-context label and identifier")
     }
 
     func testCompactContextCardShowsContextAndAllDictionaryDefinitionsTogether() async throws {
@@ -572,11 +590,16 @@ final class InteractionPolishTests:XCTestCase {
             candidatePreview:String(repeating:"此处语境译义会完整显示并可随胶囊滚动。",count:8)
         ).frame(width:320,height:96))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
         let window = UIWindow(windowScene:scene)
         window.frame = CGRect(x:0,y:0,width:320,height:96)
         window.rootViewController = host
         window.makeKeyAndVisible()
-        defer { window.isHidden = true; window.rootViewController = nil }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         host.view.frame = window.bounds
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()

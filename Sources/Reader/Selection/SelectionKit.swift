@@ -170,6 +170,13 @@ enum SelectionGeometry {
         let lineBounds: CGRect
     }
 
+    private struct VerifiedVisualLine {
+        let range: NSRange
+        let bounds: CGRect
+        let glyphCount: Int
+        let complete: Bool
+    }
+
     private final class GlyphMap {
         weak var page: PDFPage?
         let text: String
@@ -376,47 +383,227 @@ enum SelectionGeometry {
 
     /// A deliberately narrow native-PDF math target. It accepts one short,
     /// parser-verified visual line whose extracted glyph positions stay on that
-    /// line, then returns the exact native glyph under the touch.
+    /// line, then returns the exact native glyph under the touch. If PDFKit
+    /// fragments its line selection, rebuild only the contiguous visual line
+    /// around the exact range hit using source-validated character geometry.
     static func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> NativeMathPressTarget? {
         guard let source = page.string else { return nil }
         let sourceNSString = source as NSString
-        guard let line = page.selectionForLine(at: point),
-              line.pages.count == 1,
-              line.pages.first === page,
-              line.selectionsByLine().count == 1,
-              isSane(line, maxPages: 1, maxChars: 160),
-              let lineRange = onlySourceRange(of: line, on: page),
-              lineRange.length > 1,
-              NSMaxRange(lineRange) <= sourceNSString.length,
-              let lineText = UTF16Span(range: lineRange, in: source)?.substring(in: source),
-              isStrongNativeMathLine(lineText),
-              let lineBounds = validLineBounds(line, on: page),
-              hasVerifiedSingleVisualLineGeometry(lineRange, on: page, within: lineBounds),
-              let glyph = initialCharacter(on: page, at: point, tolerance: 0, within: lineRange),
+        let pdfLine = page.selectionForLine(at: point)
+        let pdfLineRange = pdfLine.flatMap { onlySourceRange(of: $0, on: page, source: source) }
+        let usablePDFLineRange = pdfLineRange.flatMap { $0.length <= 160 ? $0 : nil }
+        if let usablePDFLineRange,
+           let text = UTF16Span(range: usablePDFLineRange, in: source)?.substring(in: source),
+           hasObviousNativeMathDisqualifier(text) {
+            return nil
+        }
+        let indexedSearchRange = boundedCharacterSearchRange(
+            near: page.characterIndex(at: point), in: sourceNSString)
+        let glyph = usablePDFLineRange.flatMap {
+            initialCharacter(on: page, at: point, tolerance: 0, within: $0)
+        } ?? indexedSearchRange.flatMap {
+            initialCharacter(on: page, at: point, tolerance: 0, within: $0)
+        }
+        guard let glyph,
               glyph.pages.count == 1,
               glyph.pages.first === page,
-              let glyphRange = onlySourceRange(of: glyph, on: page),
+              let glyphRange = onlySourceRange(of: glyph, on: page, source: source),
               glyphRange.length > 0,
               glyphRange.length <= 2,
-              glyphRange.location >= lineRange.location,
-              NSMaxRange(glyphRange) <= NSMaxRange(lineRange) else { return nil }
-        let glyphRect = placedBounds(of: glyph, on: page)
+              NSMaxRange(glyphRange) <= sourceNSString.length else { return nil }
+        let glyphRect = verifiedCharacterBounds(of: glyphRange, on: page, source: source)
+            ?? placedBounds(of: glyph, on: page)
         guard isValid(glyphRect), glyphRect.contains(point) else { return nil }
 
+        // Keep the established PDFKit path as the fast route when it proves
+        // one complete, parser-valid line. Neighbor geometry below detects a
+        // line range that PDFKit silently reduced to one text-run fragment.
+        let nativeLineTarget: NativeMathPressTarget? = {
+            guard let line = pdfLine,
+                  line.pages.count == 1,
+                  line.pages.first === page,
+                  line.selectionsByLine().count == 1,
+                  isSane(line, maxPages: 1, maxChars: 160),
+                  let lineRange = onlySourceRange(of: line, on: page, source: source),
+                  lineRange.length > 1,
+                  NSMaxRange(lineRange) <= sourceNSString.length,
+                  let lineText = UTF16Span(range: lineRange, in: source)?.substring(in: source),
+                  isStrongNativeMathLine(lineText),
+                  let lineBounds = validLineBounds(line, on: page),
+                  hasVerifiedSingleVisualLineGeometry(lineRange, on: page, within: lineBounds),
+                  glyphRange.location >= lineRange.location,
+                  NSMaxRange(glyphRange) <= NSMaxRange(lineRange) else { return nil }
+            return NativeMathPressTarget(lineSelection: line,
+                                         lineRange: lineRange,
+                                         lineIdentity: identity(for: line),
+                                         glyphSelection: glyph,
+                                         glyphRange: glyphRange,
+                                         lineBounds: lineBounds)
+        }()
+
+        guard let visualLine = verifiedVisualLine(containing: glyphRange, on: page, source: source) else {
+            return nativeLineTarget
+        }
+        // An unverified stop (for example, a same-row gap or a character whose
+        // source geometry did not map back exactly) could hide more of the line.
+        // Do not accept a partial PDFKit range in that case.
+        guard visualLine.complete else { return nil }
+        if let nativeLineTarget, NSEqualRanges(nativeLineTarget.lineRange, visualLine.range) {
+            return nativeLineTarget
+        }
+        let nativeRangeFitsVisualLine = nativeLineTarget.map {
+            $0.lineRange.location >= visualLine.range.location
+                && NSMaxRange($0.lineRange) <= NSMaxRange(visualLine.range)
+        } ?? true
+        guard visualLine.glyphCount > 1,
+              visualLine.range.length > 1,
+              NSMaxRange(visualLine.range) <= sourceNSString.length,
+              nativeRangeFitsVisualLine,
+              let lineText = UTF16Span(range: visualLine.range, in: source)?.substring(in: source),
+              isStrongNativeMathLine(lineText),
+              let line = page.selection(for: visualLine.range),
+              line.pages.count == 1,
+              line.pages.first === page,
+              let selectedRange = onlySourceRange(of: line, on: page, source: source),
+              NSEqualRanges(selectedRange, visualLine.range),
+              isSane(line, maxPages: 1, maxChars: 160) else { return nil }
         return NativeMathPressTarget(lineSelection: line,
-                                     lineRange: lineRange,
+                                     lineRange: visualLine.range,
                                      lineIdentity: identity(for: line),
                                      glyphSelection: glyph,
                                      glyphRange: glyphRange,
-                                     lineBounds: lineBounds)
+                                     lineBounds: visualLine.bounds)
     }
 
-    private static func onlySourceRange(of selection: PDFSelection, on page: PDFPage) -> NSRange? {
+    private static func verifiedCharacterBounds(of range: NSRange,
+                                                on page: PDFPage,
+                                                source: String) -> CGRect? {
+        guard let selection = page.selection(for: range),
+              selection.pages.count == 1,
+              selection.pages.first === page,
+              let selectedRange = onlySourceRange(of: selection, on: page, source: source),
+              NSEqualRanges(selectedRange, range) else { return nil }
+        let bounds = selection.bounds(for: page)
+        return isValid(bounds) ? bounds : nil
+    }
+
+    private static func verifiedVisualLine(containing seed: NSRange,
+                                           on page: PDFPage,
+                                           source: String) -> VerifiedVisualLine? {
+        let text = source as NSString
+        guard seed.location >= 0, seed.length > 0, NSMaxRange(seed) <= text.length,
+              let seedRect = verifiedCharacterBounds(of: seed, on: page, source: source) else { return nil }
+
+        let verticalTolerance = max(seedRect.height * 0.9, 3)
+        func isOnSeedLine(_ rect: CGRect) -> Bool {
+            isValid(rect) && abs(rect.midY - seedRect.midY) <= verticalTolerance
+        }
+        func isAdjacent(_ left: CGRect, _ right: CGRect) -> Bool {
+            let height = min(left.height, right.height)
+            let gap = right.minX - left.maxX
+            return gap >= -height * 0.6 && gap <= max(height * 1.5, 12)
+        }
+        func isLineBreak(_ range: NSRange) -> Bool {
+            let value = text.substring(with: range)
+            return value.rangeOfCharacter(from: .newlines) != nil || value.contains("\u{000C}")
+        }
+        func isWhitespace(_ range: NSRange) -> Bool {
+            text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        var lineStart = seed.location
+        var lineEnd = NSMaxRange(seed)
+        var rects: [CGRect] = [seedRect]
+        var scannedUnits = seed.length
+        var complete = true
+
+        var cursor = seed.location
+        while cursor > 0, scannedUnits < 160 {
+            let previous = text.rangeOfComposedCharacterSequence(at: cursor - 1)
+            guard NSMaxRange(previous) == cursor, !isLineBreak(previous) else { break }
+            scannedUnits += previous.length
+            if isWhitespace(previous) {
+                cursor = previous.location
+                continue
+            }
+            guard let rect = verifiedCharacterBounds(of: previous, on: page, source: source) else {
+                complete = false
+                break
+            }
+            guard isOnSeedLine(rect) else { break }
+            guard isAdjacent(rect, rects.first ?? seedRect) else {
+                complete = false
+                break
+            }
+            lineStart = previous.location
+            rects.insert(rect, at: 0)
+            cursor = previous.location
+        }
+        if scannedUnits >= 160 { complete = false }
+
+        cursor = NSMaxRange(seed)
+        while cursor < text.length, scannedUnits < 160 {
+            let next = text.rangeOfComposedCharacterSequence(at: cursor)
+            guard next.location == cursor, !isLineBreak(next) else { break }
+            scannedUnits += next.length
+            if isWhitespace(next) {
+                cursor = NSMaxRange(next)
+                continue
+            }
+            guard let rect = verifiedCharacterBounds(of: next, on: page, source: source) else {
+                complete = false
+                break
+            }
+            guard isOnSeedLine(rect) else { break }
+            guard isAdjacent(rects.last ?? seedRect, rect) else {
+                complete = false
+                break
+            }
+            lineEnd = NSMaxRange(next)
+            rects.append(rect)
+            cursor = NSMaxRange(next)
+        }
+        if scannedUnits >= 160 { complete = false }
+
+        guard lineStart < lineEnd,
+              let minMidY = rects.map(\.midY).min(),
+              let maxMidY = rects.map(\.midY).max() else { return nil }
+        let medianHeight = rects.map(\.height).sorted()[rects.count / 2]
+        guard maxMidY - minMidY <= max(medianHeight * 0.9, 3) else { return nil }
+        let bounds = rects.reduce(CGRect.null) { $0.union($1) }
+        guard isValid(bounds) else { return nil }
+        return VerifiedVisualLine(range: NSRange(location: lineStart, length: lineEnd - lineStart),
+                                  bounds: bounds,
+                                  glyphCount: rects.count,
+                                  complete: complete)
+    }
+
+    private static func onlySourceRange(of selection: PDFSelection,
+                                        on page: PDFPage,
+                                        source: String? = nil) -> NSRange? {
         guard selection.numberOfTextRanges(on: page) == 1,
-              let source = page.string,
-              let ranges = validatedSourceRanges([selection.range(at: 0, on: page)], in: source),
+              let text = source ?? page.string,
+              let ranges = validatedSourceRanges([selection.range(at: 0, on: page)], in: text),
               ranges.count == 1 else { return nil }
         return ranges[0]
+    }
+
+    private static func boundedCharacterSearchRange(near index: Int, in source: NSString) -> NSRange? {
+        guard source.length > 0, index != NSNotFound else { return nil }
+        let center = min(max(index, 0), source.length - 1)
+        var start = max(0, center - 80)
+        var end = min(source.length, start + 160)
+        start = max(0, end - 160)
+        if start > 0 { start = source.rangeOfComposedCharacterSequence(at: start).location }
+        if end < source.length, end > 0 {
+            end = NSMaxRange(source.rangeOfComposedCharacterSequence(at: end - 1))
+        }
+        guard end > start, end - start <= 162 else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func hasObviousNativeMathDisqualifier(_ text: String) -> Bool {
+        text.utf16.count > 160 || hasSentencePunctuation(text) || hasLongASCIIWord(text)
     }
 
     private static func validLineBounds(_ selection: PDFSelection, on page: PDFPage) -> CGRect? {
@@ -435,18 +622,22 @@ enum SelectionGeometry {
 
         // Long ASCII words are ordinary prose even if they contain a relation.
         // The first pass handles compact variables and symbols only.
+        return !hasLongASCIIWord(trimmed)
+    }
+
+    private static func hasLongASCIIWord(_ text: String) -> Bool {
         var asciiWordLength = 0
-        for scalar in trimmed.unicodeScalars {
+        for scalar in text.unicodeScalars {
             let isASCIIWord = scalar.value < 128
                 && ((65...90).contains(scalar.value) || (97...122).contains(scalar.value))
             if isASCIIWord {
                 asciiWordLength += 1
-                if asciiWordLength > 3 { return false }
+                if asciiWordLength > 3 { return true }
             } else {
                 asciiWordLength = 0
             }
         }
-        return true
+        return false
     }
 
     private static func hasSentencePunctuation(_ text: String) -> Bool {

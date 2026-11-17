@@ -202,9 +202,9 @@ final class ContextualTranslationDriverTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
-        XCTAssertTrue(descendantViews(of: host.view).contains {
-            $0.accessibilityIdentifier == "contextual-hover-no-result"
-        }, "Unavailable hover context should render the explicit no-result state")
+        XCTAssertTrue(contextualAccessibilityElements(in: host.view).contains {
+            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
+        }, "Unavailable hover context should expose the explicit no-result accessibility element")
     }
 
     func testMountedCachedNoAlignmentShowsHoverNoneWithoutAvailabilityCheck() async throws {
@@ -242,9 +242,9 @@ final class ContextualTranslationDriverTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.view.layoutIfNeeded()
         XCTAssertEqual(driver.state, .noAlignedResult)
-        XCTAssertTrue(descendantViews(of: host.view).contains {
-            $0.accessibilityIdentifier == "contextual-hover-no-result"
-        })
+        XCTAssertTrue(contextualAccessibilityElements(in: host.view).contains {
+            $0.identifier == "contextual-hover-no-result" && $0.label == "语境：无"
+        }, "A cached no-alignment result should be exposed as the actual hover text")
     }
 
     func testVerifiedPhraseScopeRejectsSameOffsetsFromDifferentOCRLine() throws {
@@ -384,9 +384,40 @@ final class ContextualTranslationDriverTests: XCTestCase {
                                kind: kind)
     }
 
-    private func descendantViews(of root: UIView) -> [UIView] {
-        [root] + root.subviews.flatMap { descendantViews(of: $0) }
+}
+
+/// Reads UIKit views and SwiftUI's virtual accessibility nodes through the
+/// public NSObject accessibility APIs. SwiftUI identifiers need not be mirrored
+/// onto the backing UIKit view.
+@MainActor
+func contextualAccessibilityElements(in root: UIView) -> [(identifier: String?, label: String?)] {
+    var result: [(identifier: String?, label: String?)] = []
+    var visited = Set<ObjectIdentifier>()
+    var pending = [root as NSObject]
+
+    while let object = pending.popLast() {
+        guard visited.insert(ObjectIdentifier(object)).inserted else { continue }
+        let identifier = (object as? UIAccessibilityIdentification)?.accessibilityIdentifier
+        let label = (object as? UIAccessibilityElement)?.accessibilityLabel
+            ?? (object as? UIView)?.accessibilityLabel
+        result.append((identifier, label))
+
+        if let view = object as? UIView {
+            pending.append(contentsOf: view.subviews.map { $0 as NSObject })
+        }
+        if let elements = object.accessibilityElements {
+            pending.append(contentsOf: elements.compactMap { $0 as? NSObject })
+        }
+
+        let count = object.accessibilityElementCount()
+        guard count > 0, count <= 4_096 else { continue }
+        for index in 0..<count {
+            guard let element = object.accessibilityElement(at: index) as? NSObject else { continue }
+            pending.append(element)
+        }
     }
+
+    return result
 }
 
 private actor DriverLifecycleCallCounter {

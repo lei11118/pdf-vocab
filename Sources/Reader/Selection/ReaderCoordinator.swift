@@ -806,13 +806,15 @@ final class ReaderCoordinator: NSObject {
         freezeScrolling(true)
     }
 
-    private func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
+    func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
         guard contextReadingEnabled,
               FeatureFlags.mathEnabled(),
               !docScanned,
               let target = SelectionGeometry.nativeMathPressTarget(on: page, at: point),
               !page.annotations.contains(where: {
-                  $0.type == "Link" && $0.bounds.intersects(target.lineBounds)
+                  VocabPDFView.hasTapAction($0)
+                      && $0.type != "Widget"
+                      && $0.bounds.intersects(target.lineBounds)
               }) else { return nil }
         return target
     }
