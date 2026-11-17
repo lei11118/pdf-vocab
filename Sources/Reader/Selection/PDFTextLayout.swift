@@ -5,6 +5,9 @@ import PDFKit
 /// dictionary, page number or document-specific word rules are involved.
 final class PDFTextLayout {
     struct Glyph { let text: String; let rect: CGRect; let baseline: CGPoint }
+    /// A stroke-geometry candidate only; it does not identify a math relation.
+    struct HorizontalRule { let start: CGPoint; let end: CGPoint; let lineWidth: CGFloat }
+    struct PageScan { let glyphs: [Glyph]; let horizontalRules: [HorizontalRule] }
     private struct Font {
         var unicode: [Int: String] = [:]
         var lengths: [Int] = [1]
@@ -52,7 +55,11 @@ final class PDFTextLayout {
         var leading: CGFloat = 0
         var rise: CGFloat = 0
         var textPositionKnown = true
+        var strokeWidth: CGFloat = 1
     }
+    private struct RulePath { let start: CGPoint; var end: CGPoint? }
+    private struct PathState { var hasElements = false; var candidate: RulePath? }
+    private static let maximumHorizontalRules = 4_096
     private var state = State()
     private var stack: [State] = []
     private var fonts: [String:Font] = [:]
@@ -60,11 +67,22 @@ final class PDFTextLayout {
     private var scanSerial = 0
     private var resources: CGPDFDictionaryRef?
     private var glyphs: [Glyph] = []
+    private var horizontalRules: [HorizontalRule] = []
+    private var pathState = PathState()
+    private let collectsRules: Bool
     private var depth = 0
 
+    private init(collectingRules: Bool = false) { collectsRules = collectingRules }
+
     static func glyphs(on page: PDFPage) -> [Glyph] {
-        guard let ref = page.pageRef else { return [] }
-        let layout = PDFTextLayout()
+        scan(on:page,collectingRules:false).glyphs
+    }
+    static func scan(on page: PDFPage) -> PageScan {
+        scan(on:page,collectingRules:true)
+    }
+    private static func scan(on page: PDFPage, collectingRules: Bool) -> PageScan {
+        guard let ref = page.pageRef else { return PageScan(glyphs:[],horizontalRules:[]) }
+        let layout = PDFTextLayout(collectingRules:collectingRules)
         var dictionary = ref.dictionary
         for _ in 0..<32 {
             guard let current = dictionary else { break }
@@ -76,7 +94,7 @@ final class PDFTextLayout {
         let stream = CGPDFContentStreamCreateWithPage(ref)
         defer { CGPDFContentStreamRelease(stream) }
         layout.scan(stream)
-        return layout.glyphs
+        return PageScan(glyphs:layout.glyphs,horizontalRules:layout.horizontalRules)
     }
     private static func owner(_ info: UnsafeMutableRawPointer?) -> PDFTextLayout? {
         info.map { Unmanaged<PDFTextLayout>.fromOpaque($0).takeUnretainedValue() }
@@ -105,6 +123,32 @@ final class PDFTextLayout {
         }
         CGPDFOperatorTableSetCallback(table,"cm") { scanner,p in
             guard let s = PDFTextLayout.owner(p) else { return }; s.state.ctm = PDFTextLayout.matrix(scanner).concatenating(s.state.ctm)
+        }
+        if collectsRules {
+            CGPDFOperatorTableSetCallback(table,"w") { scanner,p in
+                guard let s = PDFTextLayout.owner(p) else { return }; s.state.strokeWidth = PDFTextLayout.number(scanner)
+            }
+            CGPDFOperatorTableSetCallback(table,"m") { scanner,p in
+                guard let s = PDFTextLayout.owner(p) else { return }
+                let y = PDFTextLayout.number(scanner), x = PDFTextLayout.number(scanner)
+                s.moveTo(x,y)
+            }
+            CGPDFOperatorTableSetCallback(table,"l") { scanner,p in
+                guard let s = PDFTextLayout.owner(p) else { return }
+                let y = PDFTextLayout.number(scanner), x = PDFTextLayout.number(scanner)
+                s.lineTo(x,y)
+            }
+            for op in ["c","v","y","h","re","W","W*"] {
+                op.withCString { name in
+                    CGPDFOperatorTableSetCallback(table,name) { _,p in PDFTextLayout.owner(p)?.invalidatePath() }
+                }
+            }
+            CGPDFOperatorTableSetCallback(table,"S") { _,p in PDFTextLayout.owner(p)?.strokePath() }
+            for op in ["s","f","F","f*","B","B*","b","b*","n"] {
+                op.withCString { name in
+                    CGPDFOperatorTableSetCallback(table,name) { _,p in PDFTextLayout.owner(p)?.discardPath() }
+                }
+            }
         }
         CGPDFOperatorTableSetCallback(table,"BT") { _,p in
             guard let s = PDFTextLayout.owner(p) else { return }; s.state.text = .identity; s.state.line = .identity; s.state.textPositionKnown = true
@@ -168,6 +212,51 @@ final class PDFTextLayout {
         state.line = state.line.translatedBy(x:x,y:y); state.text = state.line; state.textPositionKnown = true
     }
     private func advance(_ x: CGFloat) { state.text = state.text.translatedBy(x:x,y:0) }
+    private func moveTo(_ x: CGFloat, _ y: CGFloat) {
+        let point = CGPoint(x:x,y:y).applying(state.ctm)
+        if pathState.hasElements {
+            pathState.candidate = nil
+        } else {
+            pathState.candidate = RulePath(start:point)
+        }
+        pathState.hasElements = true
+    }
+    private func lineTo(_ x: CGFloat, _ y: CGFloat) {
+        let point = CGPoint(x:x,y:y).applying(state.ctm)
+        guard pathState.hasElements, var candidate = pathState.candidate, candidate.end == nil else {
+            pathState.hasElements = true
+            pathState.candidate = nil
+            return
+        }
+        candidate.end = point
+        pathState.candidate = candidate
+    }
+    private func invalidatePath() {
+        pathState.hasElements = true
+        pathState.candidate = nil
+    }
+    private func discardPath() { pathState = PathState() }
+    private func strokePath() {
+        defer { discardPath() }
+        guard horizontalRules.count < Self.maximumHorizontalRules,
+              let end = pathState.candidate?.end,
+              let start = pathState.candidate?.start,
+              start.x.isFinite, start.y.isFinite, end.x.isFinite, end.y.isFinite,
+              state.strokeWidth.isFinite, state.strokeWidth > 0, state.strokeWidth <= 1_000,
+              abs(end.y-start.y) <= 0.01 else { return }
+        let length = abs(end.x-start.x)
+        let determinant = state.ctm.a*state.ctm.d-state.ctm.b*state.ctm.c
+        guard length >= 0.1, length <= 1_000_000, determinant.isFinite, abs(determinant) > 0 else { return }
+        let inverse = state.ctm.inverted()
+        let dx = end.x-start.x, dy = end.y-start.y
+        let userLength = hypot(inverse.a*dx+inverse.c*dy,inverse.b*dx+inverse.d*dy)
+        guard userLength.isFinite, userLength > 0 else { return }
+        let width = abs(determinant)*state.strokeWidth*userLength/length
+        guard width.isFinite, width > 0, width <= 1_000 else { return }
+        let left = start.x <= end.x ? start : end
+        let right = start.x <= end.x ? end : start
+        horizontalRules.append(HorizontalRule(start:left,end:right,lineWidth:width))
+    }
     private func showString(_ scanner: CGPDFScannerRef) {
         var string: CGPDFStringRef?
         if CGPDFScannerPopString(scanner,&string), let string { show(string) }
@@ -194,8 +283,9 @@ final class PDFTextLayout {
               let object = CGPDFContentStreamGetResource(parent,"XObject",name),
               CGPDFObjectGetValue(object,.stream,&form), let form,
               let dictionary = CGPDFStreamGetDictionary(form), Self.name(dictionary,"Subtype") == "Form" else { return }
-        let saved = state, savedStack = stack, savedResources = resources
-        defer { state = saved; stack = savedStack; resources = savedResources }
+        let saved = state, savedStack = stack, savedResources = resources, savedPath = pathState
+        pathState = PathState()
+        defer { state = saved; stack = savedStack; resources = savedResources; pathState = savedPath }
         if let values = Self.array(dictionary,"Matrix"), CGPDFArrayGetCount(values) == 6 {
             let v = (0..<6).map { Self.real(values,$0) }
             state.ctm = CGAffineTransform(a:v[0],b:v[1],c:v[2],d:v[3],tx:v[4],ty:v[5]).concatenating(state.ctm)
