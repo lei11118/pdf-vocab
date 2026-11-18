@@ -85,8 +85,10 @@ final class NativeFractionReaderTests: XCTestCase {
 
         let numeratorPoint = try pagePoint(for: plusRange)
         let scan = PDFTextLayout.scan(on: page)
+        let rowGlyphs = scan.glyphs.filter { $0.rect.midX > 150 && $0.rect.midX < 245 }
+            .map { "\($0.text) rect=\($0.rect) baseline=\($0.baseline)" }
         let layout = try XCTUnwrap(NativeFractionLayout.detect(in: scan).first,
-                                   "Expected geometry for both rows. Rules: \(scan.horizontalRules)")
+                                   "Expected geometry for both rows. Rules: \(scan.horizontalRules); glyphs: \(rowGlyphs)")
         _ = try XCTUnwrap(NativeFractionReadingSelection.build(fraction: layout, on: page))
         let firstTarget = try XCTUnwrap(coordinator.nativeFractionPressTarget(on: page, at: numeratorPoint),
                                           "Expected a hit at \(numeratorPoint) inside \(layout.region)")

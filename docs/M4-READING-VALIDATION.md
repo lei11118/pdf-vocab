@@ -36,3 +36,5 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 候选提交 `4d38289` 的未签名 IPA 构建成功。下载后检查了产物与 IPA 的 ZIP CRC、Info.plist 和 llama.framework。版本为 0.73.0，构建 124，最低系统为 iPadOS 26.0。包大小为 56,918,331 字节，SHA-256 为 `8863F2BBF1B761806701D5E7F802EDF18B881527A76E4ACF78FAA75ED9DCED16`。 [构建与产物](https://github.com/lei11118/pdf-vocab/actions/runs/44260101351)
 
 早期候选 `ed5be66` 的完整回归通过 341/342 个单元测试和 8/10 个 UI 测试。截图确认行内公式整体选区和重绘，同时复现分式初次长按与行内公式再次长按的失败。该结果对应手势修正前的版本。 [回归与截图](https://github.com/lei11118/pdf-vocab/actions/runs/44252271013)
+
+同一提交的三项阅读器 UI 专项测试通过。人工核对了 “73 / 91” 的原 PDF 裁剪、重排分式与 LaTeX，以及再次长按分母中数字 “1” 的精确高亮。单元测试通过 343/344 项。剩余失败是上下行距更宽的 PDF 分式，其几何修正另行回归。 [UI 截图与测试](https://github.com/lei11118/pdf-vocab/actions/runs/44260111183) [单元测试](https://github.com/lei11118/pdf-vocab/actions/runs/44260122632)

@@ -342,7 +342,7 @@ struct NativeFractionLayout {
     private static func maximumRowDistance(for height: CGFloat, around rule: RuleGeometry) -> CGFloat {
         let regularDistance = height * 1.05
         let compactRuleLimit = max(regularDistance, rule.length * 0.72)
-        return min(height * 1.5, compactRuleLimit) + rule.width * 1.5
+        return min(height * 1.8, compactRuleLimit) + rule.width * 1.5
     }
 
     private static func rowsArePlausiblySpaced(_ top: Row, _ bottom: Row, around rule: RuleGeometry) -> Bool {
@@ -357,7 +357,7 @@ struct NativeFractionLayout {
 
         // Widely spaced rows need to agree around the bar. Short table rules can
         // otherwise join text that happens to be centered on just one side.
-        return abs(topDistance - bottomDistance) <= min(topHeight, bottomHeight) * 0.4
+        return abs(topDistance - bottomDistance) <= min(topHeight, bottomHeight) * 0.55
     }
 
     private static func isSimpleMathToken(_ text: String) -> Bool {
