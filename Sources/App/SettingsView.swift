@@ -57,11 +57,12 @@ struct SettingsView: View {
                     Text("开启后:选中单词、词卡出现时自动朗读一次(美音)。")
                 }
                 Section {
-                    Toggle("语境 Token 阅读", isOn: $contextReadingEnabled)
+                    Toggle("语境阅读", isOn: $contextReadingEnabled)
                         .accessibilityIdentifier("context-reading-toggle")
-                    Toggle("数学符号与公式文字", isOn: $mathReadingEnabled)
+                    Toggle("数学符号与公式", isOn: $mathReadingEnabled)
                         .disabled(!contextReadingEnabled)
                         .accessibilityIdentifier("math-reading-toggle")
+                    NavigationLink("翻译模型") { TranslationModelsView() }
                     Button {
                         clearingContextTranslationCache = true
                         contextTranslationCacheMessage = nil
@@ -69,6 +70,7 @@ struct SettingsView: View {
                             defer { clearingContextTranslationCache = false }
                             do {
                                 try await ContextualTranslationService.shared.clearAllCaches()
+                                await LocalContextTranslation.shared.clearCache()
                                 contextTranslationCacheMessage = "语境翻译缓存已清理。"
                             } catch {
                                 contextTranslationCacheMessage = "清理语境翻译缓存失败：\(error.localizedDescription)"
@@ -88,9 +90,9 @@ struct SettingsView: View {
                             .accessibilityIdentifier("context-translation-cache-result")
                     }
                 } header: {
-                    Text("实验功能")
+                    Text("语境阅读")
                 } footer: {
-                    Text("默认关闭。Token 阅读可试用 iPadOS 26.4+ 的系统语境候选。数学功能只解析选中文字中的公式文本；不识别公式图片，也不提供图像 OCR。")
+                    Text("开启后，在 PDF 中查看词与词组的语境译义。公式选区支持带可验证文字层的公式。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)

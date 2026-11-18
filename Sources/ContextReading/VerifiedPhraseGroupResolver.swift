@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 struct VerifiedPhraseGroup: Equatable, Sendable {
     let sourceSpan: UTF16Span
@@ -8,7 +9,7 @@ struct VerifiedPhraseGroup: Equatable, Sendable {
 
 /// Resolves only exact, enabled dictionary phrases around the selected word.
 /// The bounded source context limits the search; punctuation and line breaks
-/// always terminate a candidate, and no lemma or generated n-gram is accepted.
+/// terminate a candidate. Morphology may recover an installed dictionary phrase.
 enum VerifiedPhraseGroupResolver {
     static let maximumWords = 4
     static let maximumCharacters = 40
@@ -58,6 +59,9 @@ enum VerifiedPhraseGroupResolver {
 
         let selectedWordCount = lastSelected - firstSelected + 1
         guard selectedWordCount <= maximumWords else { return nil }
+        let tagger = NLTagger(tagSchemes: [.lemma])
+        tagger.string = tokenSourceText
+        var lemmas: [Int: String] = [:]
         var matches: [(span: UTF16Span, surface: String, key: String, wordCount: Int)] = []
 
         let minimumStart = max(0, firstSelected - (maximumWords - selectedWordCount))
@@ -76,8 +80,19 @@ enum VerifiedPhraseGroupResolver {
                       span.composedCharacterRange(in: tokenSourceText) != nil,
                       let surface = span.substring(in: tokenSourceText),
                       surface.count <= maximumCharacters else { continue }
-                let key = (start...end).map { tokens[$0].sourceSurface.lowercased() }.joined(separator: " ")
-                guard exactPhraseExists(key) else { continue }
+                let words = (start...end).map { tokens[$0].sourceSurface.lowercased() }
+                var key = words.joined(separator: " ")
+                if !exactPhraseExists(key) {
+                    guard let firstWord = words.first,
+                          let range = tokens[start].span.composedCharacterRange(in: tokenSourceText),
+                          let sourceRange = Range(range, in: tokenSourceText) else { continue }
+                    let lemma = lemmas[start] ?? tagger.tag(at: sourceRange.lowerBound,
+                                                           unit: .word, scheme: .lemma).0?.rawValue.lowercased()
+                    lemmas[start] = lemma
+                    guard let lemma, lemma != firstWord else { continue }
+                    key = ([lemma] + Array(words.dropFirst())).joined(separator: " ")
+                    guard exactPhraseExists(key) else { continue }
+                }
                 matches.append((span, surface, key, wordCount))
             }
         }

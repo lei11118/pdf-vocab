@@ -24,6 +24,8 @@ packages:
   SwiftMath:
     url: https://github.com/mgriebling/SwiftMath.git
     revision: fa8244ed032f4a1ade4cb0571bf87d2f1a9fd2d7
+  TranslationRuntime:
+    path: Packages/TranslationRuntime
 
 targets:
   PdfVocab:
@@ -67,6 +69,8 @@ targets:
       - package: GRDB
       - package: ZIPFoundation
       - package: SwiftMath
+      - package: TranslationRuntime
+        product: LlamaRuntime
 
   PdfVocabTests:
     type: bundle.unit-test

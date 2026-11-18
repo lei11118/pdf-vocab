@@ -29,6 +29,8 @@ struct ReaderView: View {
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
+    @AppStorage(TranslationModel.preferenceKey) private var translationModelID = TranslationModel.systemID
+    @State private var translationPrefetch: Task<Void, Never>?
     @State private var contextReadingGeneration = 0
     @State private var contextOCRPage: ContextOCRPage?
     @State private var activeContextOCRRunID: UUID?
@@ -136,6 +138,7 @@ struct ReaderView: View {
                 if !enabled { readerHandle.coordinator?.clearHover() }
             }
             .onChange(of: currentPage) { _, page in
+                scheduleTranslationPrefetch()
                 if pendingOCRCharacterRefinement?.initiatingViewPage != page {
                     cancelPendingOCRCharacterRefinement()
                 }
@@ -143,6 +146,7 @@ struct ReaderView: View {
             .onChange(of: resolvedURL) { _, _ in
                 cancelPendingOCRCharacterRefinement()
             }
+            .onChange(of: translationModelID) { _, _ in scheduleTranslationPrefetch() }
             .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
@@ -187,6 +191,15 @@ struct ReaderView: View {
             .onReceive(NotificationCenter.default.publisher(for:PencilInkStore.didFail)) { note in
                 if note.object as? String == doc.sha256 { inkSaveFailed = true }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                translationPrefetch?.cancel()
+                Task { await LocalContextTranslation.shared.evict() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+                if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                    translationPrefetch?.cancel()
+                }
+            }
             .alert("笔迹暂未保存",isPresented:$inkSaveFailed) {
                 Button("重试保存") { readerHandle.coordinator?.retrySavingInk() }
                 Button("稍后",role:.cancel) {}
@@ -195,6 +208,8 @@ struct ReaderView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
+                    translationPrefetch?.cancel()
+                    readerHandle.coordinator?.stopReadingSpeech()
                     saveProgressNow()
                 } else {
                     // v0.28.0:回到前台重臂一次(系统可能已经重建了 PDFView 内部层级)
@@ -202,6 +217,8 @@ struct ReaderView: View {
                 }
             }
             .onDisappear {
+                translationPrefetch?.cancel()
+                readerHandle.coordinator?.stopReadingSpeech()
                 // v0.24.0:退出阅读只落盘,不再重置工具 —— 上次用什么笔、是否在书写,
                 // 下次进这本书原样恢复(用户反馈:回到主界面再进来工具被重置了)。
                 activeDocumentOCRRunID = nil
@@ -849,7 +866,13 @@ struct ReaderView: View {
                 vocab: cardVocab,
                 translationRequest:translationRequest,
                 contextReadingEnabled:contextReadingEnabled,
-                reserveTop: reserveTop
+                reserveTop: reserveTop,
+                mathSourceImage: currentSelectionInfo?.mathSourceImage,
+                selectPhrase: readerHandle.coordinator?.canExpandReadingPhrase == true
+                    ? { readerHandle.coordinator?.selectReadingPhrase() } : nil,
+                speakSelection: readerHandle.coordinator?.canSpeakReadingSelection == true
+                    ? { readerHandle.coordinator?.speakReadingSelection(fullContext: $0) } : nil,
+                pauseSpeech: { readerHandle.coordinator?.toggleReadingSpeech() }
             )
         }
         // Pencil 悬停释义使用独立气泡，长释义可滚动。
@@ -1109,6 +1132,7 @@ struct ReaderView: View {
                     hoverPreviewEnabled: pencilHoverPreview,
                     hapticsEnabled: pencilHaptics,
                     onHoverUpdate: { term, key, point, contextual in
+                        translationPrefetch?.cancel()
                         wordInteraction.hover(term,
                                               query: key,
                                               contextualSelection: contextual,
@@ -1166,6 +1190,7 @@ struct ReaderView: View {
                         scheduleSave()
                     },
                     onSelectionInfo: { info in
+                        translationPrefetch?.cancel()
                         // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
                         guard let info, !info.text.isEmpty else {
                             currentSelectionInfo = nil
@@ -1181,20 +1206,29 @@ struct ReaderView: View {
                             }
                         }
                         currentSelectionInfo = info
+                        let contextualIsCurrent = info.contextual == nil
+                            || info.contextual?.generation == contextReadingGeneration
+                        if contextReadingEnabled,
+                           mathReadingEnabled,
+                           contextualIsCurrent,
+                           let math = info.mathReadingResult {
+                            translationRequest = nil
+                            cardContent = .math(math)
+                            return
+                        }
                         let mathSourceText = info.contextual?.displaySurface ?? info.text
                         if let math = MathCardRouting.resolve(
                             sourceText: mathSourceText,
                             contextReadingEnabled: contextReadingEnabled,
                             mathEnabled: mathReadingEnabled,
-                            contextualSelectionIsCurrent: info.contextual == nil
-                                || info.contextual?.generation == contextReadingGeneration,
+                            contextualSelectionIsCurrent: contextualIsCurrent,
                             isMathDetail: info.mathDetail) {
                             translationRequest = nil
                             cardContent = .math(math)
                             return
                         }
                         if let contextual = info.contextual {
-                            if contextual.tokens.count == 1 || contextual.verifiedPhraseGroupSpan != nil {
+                            if shouldShowContextualCard(contextual) {
                                 translationRequest = nil
                                 cardContent = .contextual(contextual)
                                 if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
@@ -1212,12 +1246,24 @@ struct ReaderView: View {
                     },
                     onReadingTick: {
                         scheduleSave()
+                        scheduleTranslationPrefetch()
                     },
                     onTeardown: {
                         cancelPendingOCRCharacterRefinement()
                         saveProgressNow()
                     },
                     onTranslate: { text in
+                        if let info = currentSelectionInfo,
+                           info.text == text || info.mathReadingResult?.sourceText == text,
+                           contextReadingEnabled,
+                           mathReadingEnabled,
+                           (info.contextual == nil
+                                || info.contextual?.generation == contextReadingGeneration),
+                           let math = info.mathReadingResult {
+                            translationRequest = nil
+                            cardContent = .math(math)
+                            return
+                        }
                         if let math = MathCardRouting.resolve(
                             sourceText: text,
                             contextReadingEnabled: contextReadingEnabled,
@@ -1231,7 +1277,7 @@ struct ReaderView: View {
                            let contextual = info.contextual,
                            contextReadingEnabled,
                            contextual.generation == contextReadingGeneration,
-                           (contextual.tokens.count == 1 || contextual.verifiedPhraseGroupSpan != nil) {
+                           shouldShowContextualCard(contextual) {
                             translationRequest = nil
                             cardContent = .contextual(contextual)
                             return
@@ -1314,6 +1360,29 @@ struct ReaderView: View {
         .task(id: documentOCRTaskKey, priority: .utility) {
             guard let key = documentOCRTaskKey else { return }
             await runOCROnce(for: key)
+        }
+    }
+
+    private func shouldShowContextualCard(_ selection: ContextualSelection) -> Bool {
+        if selection.tokens.count == 1 || selection.verifiedPhraseGroupSpan != nil { return true }
+        return (2...8).contains(selection.tokens.count)
+            && selection.tokens.allSatisfy { $0.kind == .word || $0.kind == .number }
+            && selection.sentenceContext.flatMap(LocalTranslationInput.init(context:)) != nil
+    }
+
+    private func scheduleTranslationPrefetch() {
+        translationPrefetch?.cancel()
+        guard contextReadingEnabled, translationModelID != TranslationModel.systemID,
+              scenePhase == .active, !markMode, cardContent == nil, wordInteraction.preview == nil else { return }
+        let modelID = translationModelID
+        translationPrefetch = Task(priority: .utility) { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            guard let inputs = readerHandle.coordinator?.visibleTranslationInputs() else { return }
+            for input in inputs {
+                guard !Task.isCancelled, !ProcessInfo.processInfo.isLowPowerModeEnabled,
+                      ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { return }
+                _ = try? await LocalContextTranslation.shared.translate(input, modelID: modelID)
+            }
         }
     }
 

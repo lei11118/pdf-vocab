@@ -235,7 +235,7 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         return true
     }
 
-    private static func localSelectionSpans(in context: SentenceContext) throws -> [UTF16Span] {
+    static func localSelectionSpans(in context: SentenceContext) throws -> [UTF16Span] {
         if !context.sourceSpanMappings.isEmpty {
             let mappings = context.sourceSpanMappings
             let textLength = (context.text as NSString).length
@@ -346,9 +346,48 @@ struct ContextualTranslationCandidate: Equatable, Sendable {
     let translatedPhrase: String
 }
 
+enum ContextualTranslationFreshDecode {
+    case candidate(ContextualTranslationCandidate)
+    case selectedAlignmentMissing(ContextualTranslationError, hasUsefulOtherToken: Bool)
+}
+
 enum ContextualTranslationAlignment {
+    private struct ValidatedEnvelope {
+        let targetText: String
+        let targetRanges: [String: [UTF16Span]]
+        let targetGroupRanges: [String: [UTF16Span]]
+    }
+
     static func decode(request: ContextualTranslationRequest,
                        payload: ContextualTranslationPayload) throws -> ContextualTranslationCandidate {
+        let envelope = try validatedEnvelope(request: request, payload: payload)
+        return try decode(request: request, envelope: envelope)
+    }
+
+    /// Reports a definitive selection miss without parsing target attributes a
+    /// second time. Only a sibling token passing the same token-candidate checks
+    /// can make the payload reusable.
+    static func decodeFresh(request: ContextualTranslationRequest,
+                            payload: ContextualTranslationPayload) throws -> ContextualTranslationFreshDecode {
+        let envelope = try validatedEnvelope(request: request, payload: payload)
+        do {
+            return .candidate(try decode(request: request, envelope: envelope))
+        } catch let error as ContextualTranslationError where error.isDefinitiveNoAlignment {
+            return .selectedAlignmentMissing(error,
+                                             hasUsefulOtherToken: hasUsefulOtherTokenAlignment(
+                                                request: request, envelope: envelope))
+        }
+    }
+
+    static func hasUsefulOtherTokenAlignment(request: ContextualTranslationRequest,
+                                             payload: ContextualTranslationPayload) -> Bool {
+        guard request.selectedPhraseGroup == nil,
+              let envelope = try? validatedEnvelope(request: request, payload: payload) else { return false }
+        return hasUsefulOtherTokenAlignment(request: request, envelope: envelope)
+    }
+
+    private static func validatedEnvelope(request: ContextualTranslationRequest,
+                                          payload: ContextualTranslationPayload) throws -> ValidatedEnvelope {
         guard payload.sourceText.utf8.elementsEqual(request.sentenceText.utf8),
               let attributedSource = payload.attributedSourceText,
               String(attributedSource.characters).utf8.elementsEqual(request.sentenceText.utf8) else {
@@ -368,10 +407,26 @@ enum ContextualTranslationAlignment {
         let targetGroupRanges = try phraseGroupRanges(in: attributedTarget,
                                                      expectedIDs: expectedGroupIDs,
                                                      allowMissingIDs: true)
+        return ValidatedEnvelope(targetText: payload.targetText,
+                                 targetRanges: targetRanges,
+                                 targetGroupRanges: targetGroupRanges)
+    }
 
+    private static func decode(request: ContextualTranslationRequest,
+                               envelope: ValidatedEnvelope) throws -> ContextualTranslationCandidate {
+        let selectedRanges = try selectedTargetRanges(request: request, envelope: envelope)
+        return try candidate(sourcePhrase: request.selectedSourcePhrase,
+                             selectedRanges: selectedRanges,
+                             targetText: envelope.targetText,
+                             rejectWholeSentence: request.selectedPhraseGroup != nil
+                                || request.selectedTokenIDs.count < request.tokens.count)
+    }
+
+    private static func selectedTargetRanges(request: ContextualTranslationRequest,
+                                             envelope: ValidatedEnvelope) throws -> [UTF16Span] {
         var selectedRanges: [UTF16Span] = []
         if let group = request.selectedPhraseGroup {
-            if let spans = targetGroupRanges[group.id], !spans.isEmpty {
+            if let spans = envelope.targetGroupRanges[group.id], !spans.isEmpty {
                 let merged = try mergeContiguous(spans)
                 guard merged.count == 1 else { throw ContextualTranslationError.discontiguousTokenAlignment }
                 selectedRanges = merged
@@ -382,7 +437,7 @@ enum ContextualTranslationAlignment {
                 // verified phrase has one usable target range.
                 let members = try phraseMembers(of: group, request: request)
                 for member in members {
-                    guard let spans = targetRanges[member.id], !spans.isEmpty else {
+                    guard let spans = envelope.targetRanges[member.id], !spans.isEmpty else {
                         throw ContextualTranslationError.selectedPhraseGroupNotAligned
                     }
                     let merged = try mergeContiguous(spans)
@@ -394,7 +449,7 @@ enum ContextualTranslationAlignment {
             }
         } else {
             for id in request.selectedTokenIDs {
-                guard let spans = targetRanges[id], !spans.isEmpty else {
+                guard let spans = envelope.targetRanges[id], !spans.isEmpty else {
                     throw ContextualTranslationError.selectedTokenNotAligned
                 }
                 let merged = try mergeContiguous(spans)
@@ -402,22 +457,29 @@ enum ContextualTranslationAlignment {
                 selectedRanges.append(merged[0])
             }
         }
-        selectedRanges.sort { $0.location < $1.location }
-        guard let first = selectedRanges.first,
-              let last = selectedRanges.last,
+        return selectedRanges
+    }
+
+    private static func candidate(sourcePhrase: String,
+                                  selectedRanges: [UTF16Span],
+                                  targetText: String,
+                                  rejectWholeSentence: Bool) throws -> ContextualTranslationCandidate {
+        let orderedRanges = selectedRanges.sorted { $0.location < $1.location }
+        guard let first = orderedRanges.first,
+              let last = orderedRanges.last,
               let targetEnd = last.endExclusive,
-              targetEnd <= (payload.targetText as NSString).length else {
+              targetEnd <= (targetText as NSString).length else {
             throw ContextualTranslationError.selectedTokenNotAligned
         }
 
         var previousEnd = first.location
-        for span in selectedRanges {
+        for span in orderedRanges {
             guard let end = span.endExclusive, span.location >= previousEnd else {
                 throw ContextualTranslationError.overlappingTokenAlignment
             }
             if span.location > previousEnd {
                 let gap = UTF16Span(location: previousEnd, length: span.location - previousEnd)
-                guard let gapText = gap.substring(in: payload.targetText), isWhitespace(gapText) else {
+                guard let gapText = gap.substring(in: targetText), isWhitespace(gapText) else {
                     throw ContextualTranslationError.noncontiguousPhraseAlignment
                 }
             }
@@ -425,19 +487,41 @@ enum ContextualTranslationAlignment {
         }
 
         let targetSpan = UTF16Span(location: first.location, length: targetEnd - first.location)
-        guard targetSpan.composedCharacterRange(in: payload.targetText) != nil,
-              let translatedPhrase = targetSpan.substring(in: payload.targetText),
+        guard targetSpan.composedCharacterRange(in: targetText) != nil,
+              let translatedPhrase = targetSpan.substring(in: targetText),
               !translatedPhrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ContextualTranslationError.invalidTargetRange
         }
 
-        if (request.selectedPhraseGroup != nil || request.selectedTokenIDs.count < request.tokens.count),
-           isWholeSentenceTarget(targetSpan, targetText: payload.targetText) {
+        if rejectWholeSentence && isWholeSentenceTarget(targetSpan, targetText: targetText) {
             throw ContextualTranslationError.translationCoversSentence
         }
 
-        return ContextualTranslationCandidate(sourcePhrase: request.selectedSourcePhrase,
+        return ContextualTranslationCandidate(sourcePhrase: sourcePhrase,
                                               translatedPhrase: translatedPhrase)
+    }
+
+    private static func hasUsefulOtherTokenAlignment(request: ContextualTranslationRequest,
+                                                     envelope: ValidatedEnvelope) -> Bool {
+        // Phrase-group payload identities are deliberately isolated from the
+        // plain token cache, so a miss cannot provide a sibling cache consumer.
+        guard request.selectedPhraseGroup == nil else { return false }
+        let selectedIDs = Set(request.selectedTokenIDs)
+        for token in request.tokens where !selectedIDs.contains(token.id) {
+            guard let spans = envelope.targetRanges[token.id] else { continue }
+            do {
+                let merged = try mergeContiguous(spans)
+                guard merged.count == 1 else { continue }
+                _ = try candidate(sourcePhrase: token.sourceSurface,
+                                  selectedRanges: merged,
+                                  targetText: envelope.targetText,
+                                  rejectWholeSentence: true)
+                return true
+            } catch {
+                continue
+            }
+        }
+        return false
     }
 
     /// Returns every complete source token contained in the verified phrase

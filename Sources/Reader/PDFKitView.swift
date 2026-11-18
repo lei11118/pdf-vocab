@@ -10,6 +10,9 @@ struct SelectionInfo: Equatable {
     var contextual: ContextualSelection? = nil
     /// An exact glyph selected inside an active native math expression.
     var mathDetail = false
+    /// A parser-verified result for a structured native math selection.
+    var mathReadingResult: MathReadingResult? = nil
+    var mathSourceImage: UIImage? = nil
 }
 
 /// 阅读会话句柄:让 SwiftUI 侧在任意时刻取到协调器(保存阅读位置等)。

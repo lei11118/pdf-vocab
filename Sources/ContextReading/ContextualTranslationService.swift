@@ -58,11 +58,6 @@ actor ContextualTranslationService {
         let persistentCacheKey: String?
     }
 
-    private struct FreshPayloadDecodeResult {
-        let candidate: ContextualTranslationCandidate
-        let payloadMatchesCandidate: Bool
-    }
-
     private enum CandidateCacheValue {
         case candidate(ContextualTranslationCandidate)
         case noAlignedResult(ContextualTranslationError)
@@ -125,47 +120,48 @@ actor ContextualTranslationService {
             throw ContextualTranslationError.staleRequest
         }
         guard isEnabled() else { throw ContextualTranslationError.disabled }
-        let candidate: ContextualTranslationCandidate
+        var cachedCandidate: ContextualTranslationCandidate?
         var payloadToCache: ContextualTranslationPayload?
         var payloadToPersist: ContextualTranslationPayload?
+        var preserveCachedPayloadOnMiss = false
         if let cachedPayload {
             do {
-                candidate = try ContextualTranslationAlignment.decode(request: request,
-                                                                        payload: cachedPayload)
-                if loadedFromPersistentStore { payloadToCache = cachedPayload }
+                switch try ContextualTranslationAlignment.decodeFresh(request: request, payload: cachedPayload) {
+                case .candidate(let decoded):
+                    cachedCandidate = decoded
+                case .selectedAlignmentMissing(_, let hasUsefulOtherToken):
+                    preserveCachedPayloadOnMiss = hasUsefulOtherToken
+                }
             } catch {
                 // A payload can be valid for one selected token and omit another.
                 // Retry this selection, but preserve the payload for siblings if
                 // translation fails or the response only adds this token.
-                let payload = try await translatedPayload(request: request,
-                                                          sourceLanguageIdentifier: sourceLanguageIdentifier,
-                                                          targetLanguageIdentifier: targetLanguageIdentifier,
-                                                          requestGeneration: requestGeneration,
-                                                          using: translator)
-                let decoded = try decodeFreshPayload(request: request,
-                                                     payload: payload,
-                                                     candidateKey: key,
-                                                     cacheGeneration: generation,
-                                                     requestGeneration: requestGeneration)
-                candidate = decoded.candidate
-                if decoded.payloadMatchesCandidate {
-                    payloadToCache = payload
-                    payloadToPersist = payload
-                }
             }
+        }
+        let outcome: ContextualTranslationFreshDecode
+        if let cachedCandidate {
+            outcome = .candidate(cachedCandidate)
+            if loadedFromPersistentStore { payloadToCache = cachedPayload }
         } else {
             let payload = try await translatedPayload(request: request,
                                                       sourceLanguageIdentifier: sourceLanguageIdentifier,
                                                       targetLanguageIdentifier: targetLanguageIdentifier,
                                                       requestGeneration: requestGeneration,
                                                       using: translator)
-            let decoded = try decodeFreshPayload(request: request,
-                                                 payload: payload,
-                                                 candidateKey: key,
-                                                 cacheGeneration: generation,
-                                                 requestGeneration: requestGeneration)
-            candidate = decoded.candidate
-            if decoded.payloadMatchesCandidate {
+            outcome = try decodeFreshPayload(request: request,
+                                             payload: payload,
+                                             candidateKey: key,
+                                             cacheGeneration: generation,
+                                             requestGeneration: requestGeneration)
+            let payloadIsUseful: Bool
+            switch outcome {
+            case .candidate:
+                payloadIsUseful = true
+            case .selectedAlignmentMissing(_, let hasUsefulOtherToken):
+                payloadIsUseful = hasUsefulOtherToken
+            }
+            if payloadIsUseful,
+               !(preserveCachedPayloadOnMiss && isSelectionMiss(outcome)) {
                 payloadToCache = payload
                 payloadToPersist = payload
             }
@@ -175,15 +171,24 @@ actor ContextualTranslationService {
            requestGeneration == self.requestGeneration,
            !Task.isCancelled,
            isEnabled() {
-            if maximumCachedEntries > 0 {
+            if case .candidate(let candidate) = outcome, maximumCachedEntries > 0 {
                 cache[key] = .candidate(candidate)
                 touch(key)
                 evictIfNeeded()
             }
-            if maximumCachedPayloadEntries > 0, let payloadToCache {
+            let hasReplacementPayload = payloadToCache != nil || payloadToPersist != nil
+            let cachedSiblingPayloadWins = isSelectionMiss(outcome)
+                && hasReplacementPayload
+                && (preserveCachedPayloadOnMiss
+                    || payloadCache[payloadKey].map {
+                        ContextualTranslationAlignment.hasUsefulOtherTokenAlignment(request: request, payload: $0)
+                    } == true)
+            if !cachedSiblingPayloadWins,
+               maximumCachedPayloadEntries > 0, let payloadToCache {
                 storePayload(payloadToCache, for: payloadKey)
             }
-            if let payloadToPersist,
+            if !cachedSiblingPayloadWins,
+               let payloadToPersist,
                maximumCachedPayloadEntries > 0,
                let payloadStore,
                let persistentCacheKey {
@@ -200,7 +205,10 @@ actor ContextualTranslationService {
                 }
             }
         }
-        return candidate
+        switch outcome {
+        case .candidate(let candidate): return candidate
+        case .selectedAlignmentMissing(let error, _): throw error
+        }
     }
 
     /// Looks up a previously validated candidate or whole-block payload without
@@ -370,11 +378,10 @@ actor ContextualTranslationService {
                                     candidateKey: CacheKey,
                                     cacheGeneration: Int,
                                     requestGeneration: Int) throws -> FreshPayloadDecodeResult {
-        do {
-            return FreshPayloadDecodeResult(candidate: try ContextualTranslationAlignment.decode(request: request,
-                                                                                                payload: payload),
-                                            payloadMatchesCandidate: true)
-        } catch let error as ContextualTranslationError where error.isDefinitiveNoAlignment {
+        switch try ContextualTranslationAlignment.decodeFresh(request: request, payload: payload) {
+        case .candidate(let candidate):
+            return FreshPayloadDecodeResult(candidate: candidate, error: nil, payloadIsUseful: true)
+        case .selectedAlignmentMissing(let error, let hasUsefulOtherToken):
             guard maximumCachedEntries > 0,
                   cacheGeneration == self.cacheGeneration,
                   requestGeneration == self.requestGeneration,
@@ -382,13 +389,14 @@ actor ContextualTranslationService {
                   isEnabled() else { throw error }
             if let cached = cache[candidateKey], case .candidate(let candidate) = cached {
                 // A simultaneous successful result for this exact identity wins.
-                return FreshPayloadDecodeResult(candidate: candidate,
-                                                payloadMatchesCandidate: false)
+                return FreshPayloadDecodeResult(candidate: candidate, error: nil, payloadIsUseful: false)
             }
             cache[candidateKey] = .noAlignedResult(error)
             touch(candidateKey)
             evictIfNeeded()
-            throw error
+            return FreshPayloadDecodeResult(candidate: nil,
+                                            error: error,
+                                            payloadIsUseful: hasUsefulOtherToken)
         }
     }
 

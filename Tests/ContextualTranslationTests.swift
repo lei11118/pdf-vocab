@@ -919,6 +919,49 @@ final class ContextualTranslationServiceTests: XCTestCase {
         XCTAssertEqual(callsAfterClear, 2)
     }
 
+    func testSelectionMissRetainsUsefulSiblingTokenAlignment() async throws {
+        let service = ContextualTranslationService(maximumCachedEntries: 4, isEnabled: { true })
+        let calls = ContextualTranslationCallRecorder()
+        let text = "They read books daily."
+        let read = try makeRequest(text: text, selected: "read")
+        let books = try makeRequest(text: text, selected: "books")
+        let booksID = try XCTUnwrap(books.selectedTokenIDs.first)
+        let translator: ContextualTranslationService.Translator = { request, source, _, _ in
+            await calls.record()
+            let target = "他们读书每天"
+            var attributedTarget = AttributedString(target)
+            try applyToken(booksID,
+                           span: UTF16Span(location: 3, length: 1),
+                           to: &attributedTarget,
+                           source: target)
+            return ContextualTranslationPayload(sourceText: request.sentenceText,
+                                                attributedSourceText: source,
+                                                targetText: target,
+                                                attributedTargetText: attributedTarget)
+        }
+
+        do {
+            _ = try await service.translate(read,
+                                            sourceLanguageIdentifier: "en",
+                                            targetLanguageIdentifier: "zh-Hans",
+                                            backendVersion: "test-v1",
+                                            using: translator)
+            XCTFail("An unmarked selected token must remain a definitive miss")
+        } catch let error as ContextualTranslationError {
+            XCTAssertEqual(error, .selectedTokenNotAligned)
+        }
+
+        let sibling = try await service.cachedResult(for: books,
+                                                     sourceLanguageIdentifier: "en",
+                                                     targetLanguageIdentifier: "zh-Hans",
+                                                     backendVersion: "test-v1")
+        XCTAssertEqual(sibling,
+                       .candidate(ContextualTranslationCandidate(sourcePhrase: "books",
+                                                                 translatedPhrase: "书")))
+        let translationCalls = await calls.count
+        XCTAssertEqual(translationCalls, 1, "The sibling lookup must reuse the validated block payload")
+    }
+
     func testOnlySelectionAlignmentAbsenceIsClassifiedAsNoResult() {
         XCTAssertTrue(ContextualTranslationError.selectedTokenNotAligned.isDefinitiveNoAlignment)
         XCTAssertTrue(ContextualTranslationError.selectedPhraseGroupNotAligned.isDefinitiveNoAlignment)

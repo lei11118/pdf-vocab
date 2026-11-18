@@ -740,6 +740,119 @@ extension ReaderRouteUITests {
         closeReaderPanel(in: app, title: "设置")
     }
 
+    @objc func testHumanReadingAuditNativeFractionPressSelectsWholeThenExactLeaf() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+
+        let nativeDocument = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
+        XCTAssertTrue(nativeDocument.waitForExistence(timeout: 20),
+                      "The DEBUG route imports the generated searchable PDF fixture through DocumentStore")
+        nativeDocument.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let canvas = app.descendants(matching: .any).matching(identifier: "reader.pdf-canvas").firstMatch
+        XCTAssertTrue(observer.waitForExistence(timeout: 15))
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+
+        let initial = waitForAudit(observer, timeout: 20) { snapshot in
+            (snapshot["page"] as? Int) == 0
+                && self.point(in: snapshot, key: "wordPoints", text: "73", source: "text") != nil
+                && self.point(in: snapshot, key: "wordPoints", text: "91", source: "text") != nil
+        }
+        XCTAssertNotNil(initial,
+                        "The imported searchable PDF exposes native text geometry for both fraction rows")
+        guard initial != nil else {
+            attachAuditDiagnostics("native-fraction-geometry-unavailable", app: app, observer: observer)
+            return
+        }
+
+        openReaderSettings(app)
+        guard setSwitch(app.switches["context-reading-toggle"], to: true, in: app),
+              setSwitch(app.switches["math-reading-toggle"], to: true, in: app) else { return }
+        closeReaderPanel(in: app, title: "设置")
+
+        let ready = waitForAudit(observer, timeout: 15) { snapshot in
+            guard (snapshot["page"] as? Int) == 0,
+                  ((snapshot["selectedText"] as? String) ?? "").isEmpty,
+                  let numerator = self.point(in: snapshot, key: "wordPoints", text: "73", source: "text"),
+                  let denominator = self.point(in: snapshot, key: "wordPoints", text: "91", source: "text", edge: .end) else {
+                return false
+            }
+            let viewport = canvas.frame
+            return viewport.contains(CGPoint(x: numerator.x, y: numerator.y))
+                && viewport.contains(CGPoint(x: denominator.x, y: denominator.y))
+        }
+        XCTAssertNotNil(ready,
+                        "The numerator and denominator hit points from the read-only observer are visible inside the PDF canvas")
+        guard let ready,
+              let numeratorPoint = point(in: ready, key: "wordPoints", text: "73", source: "text"),
+              let denominatorLeafPoint = point(in: ready,
+                                               key: "wordPoints",
+                                               text: "91",
+                                               source: "text",
+                                               edge: .end) else {
+            attachAuditDiagnostics("native-fraction-visible-points-unavailable", app: app, observer: observer)
+            return
+        }
+
+        let geometry = XCTAttachment(string: """
+        numerator text=\(numeratorPoint.text) source=\(numeratorPoint.source) screen=(\(numeratorPoint.x), \(numeratorPoint.y))
+        denominator leaf=1 source=\(denominatorLeafPoint.source) edge=end screen=(\(denominatorLeafPoint.x), \(denominatorLeafPoint.y))
+        canvas=\(canvas.frame)
+        """)
+        geometry.name = "native-fraction-observer-hit-points"
+        geometry.lifetime = .keepAlways
+        add(geometry)
+
+        attachAuditScreenshot("native-fraction-before-touch", app: app)
+
+        let expectedWhole = "(73)/(91)"
+        coordinate(for: numeratorPoint, in: app).press(forDuration: 1.0)
+        let wholeSelection = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == expectedWhole
+        }
+        XCTAssertNotNil(wholeSelection,
+                        "The first long press on the numerator resolves the whole stroked fraction")
+        guard wholeSelection != nil else {
+            attachAuditDiagnostics("native-fraction-whole-selection-failed", app: app, observer: observer)
+            return
+        }
+
+        let mathSource = app.staticTexts["math-card-source"].firstMatch
+        XCTAssertTrue(mathSource.waitForExistence(timeout: 15),
+                      "The verified fraction selection opens the math reading card")
+        guard mathSource.exists else {
+            attachAuditDiagnostics("native-fraction-math-card-missing", app: app, observer: observer)
+            return
+        }
+        XCTAssertEqual(mathSource.label, expectedWhole)
+        let mathStatus = app.staticTexts["math-card-status"].firstMatch
+        XCTAssertTrue(mathStatus.waitForExistence(timeout: 10))
+        XCTAssertTrue(mathStatus.label.contains("已解析"), "The whole fraction has a complete parsed math result")
+        let renderedFormula = app.descendants(matching: .any)
+            .matching(identifier: "math-card-rendered-formula")
+            .firstMatch
+        XCTAssertTrue(renderedFormula.waitForExistence(timeout: 10),
+                      "The expanded math card exposes the rendered AST-derived fraction formula")
+        let latex = app.staticTexts["math-card-latex"].firstMatch
+        XCTAssertTrue(latex.waitForExistence(timeout: 10),
+                      "The math card exposes the exact LaTeX string as accessibility text")
+        XCTAssertEqual(latex.label, "\\frac{73}{91}")
+        attachAuditScreenshot("native-fraction-whole-selection-and-rendered-card", app: app)
+
+        coordinate(for: denominatorLeafPoint, in: app).press(forDuration: 1.0)
+        let leafSelection = waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == "1"
+        }
+        XCTAssertNotNil(leafSelection,
+                        "A second press at the denominator's reported final-glyph center selects only that leaf")
+        guard leafSelection != nil else {
+            attachAuditDiagnostics("native-fraction-denominator-leaf-failed", app: app, observer: observer)
+            return
+        }
+        attachAuditScreenshot("native-fraction-denominator-leaf-selection", app: app)
+    }
+
     @objc func testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]

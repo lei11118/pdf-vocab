@@ -34,11 +34,16 @@ struct FloatingCardWindow: View {
     var translationRequest: SentenceTranslationRequest? = nil
     var contextReadingEnabled = false
     var reserveTop: CGFloat = 0
+    var mathSourceImage: UIImage? = nil
+    var selectPhrase: (() -> Void)? = nil
+    var speakSelection: ((Bool) -> Void)? = nil
+    var pauseSpeech: (() -> Void)? = nil
     @StateObject private var sentenceTranslation = SentenceTranslationState()
     var body: some View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose,reserveTop:reserveTop) {
             WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,
-                          contextReadingEnabled:contextReadingEnabled)
+                          contextReadingEnabled:contextReadingEnabled, mathSourceImage: mathSourceImage,
+                          selectPhrase: selectPhrase, speakSelection: speakSelection, pauseSpeech: pauseSpeech)
                 .environment(\.readerPanelClose, onClose)
                 .environmentObject(sentenceTranslation)
         } compact: {

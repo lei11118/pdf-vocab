@@ -77,6 +77,7 @@ struct MathMeaningCard: View {
     @Environment(\.readerPanelClose) private var panelClose
     let result: MathReadingResult
     let onClose: () -> Void
+    var sourceImage: UIImage? = nil
     @State private var copied = false
     @State private var copiedLatex = false
     @ScaledMetric(relativeTo: .title2) private var formulaFontSize: CGFloat = 24
@@ -114,6 +115,14 @@ struct MathMeaningCard: View {
                     Text("原文")
                         .font(DS.Fonts.caption)
                         .foregroundStyle(DS.foreground2)
+                    if let sourceImage {
+                        Image(uiImage: sourceImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 120, alignment: .leading)
+                            .accessibilityLabel("公式原页裁剪")
+                            .accessibilityIdentifier("math-card-original-crop")
+                    }
                     Text(result.sourceText)
                         .font(.system(.body, design: .rounded).weight(.medium))
                         .foregroundStyle(DS.foreground1)

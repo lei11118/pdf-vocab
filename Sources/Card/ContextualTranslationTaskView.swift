@@ -67,6 +67,7 @@ final class ContextualTranslationDriver: ObservableObject {
         let isEnabled: Bool
         let presentation: ContextualTranslationPresentation
         let retryGeneration: Int
+        var modelID: String = TranslationModel.systemID
     }
 
     @Published private(set) var state: State = .checking
@@ -110,9 +111,13 @@ final class ContextualTranslationDriver: ObservableObject {
 
         guard isCurrent(identity, generation: localGeneration), !Task.isCancelled,
               identity.isEnabled else { return }
+        if identity.modelID != TranslationModel.systemID {
+            await translateLocally(identity, generation: localGeneration)
+            return
+        }
         let translationScope = identity.selection.verifiedPhraseTranslationScope
         let request: ContextualTranslationRequest
-        if let translationScope,
+        if identity.selection.sentenceContext == nil, let translationScope,
            let phraseRequest = try? ContextualTranslationRequest.make(from: translationScope.context,
                                                                        verifiedPhraseGroupSpan: translationScope.span) {
             request = phraseRequest
@@ -174,7 +179,7 @@ final class ContextualTranslationDriver: ObservableObject {
         } else {
             guard #available(iOS 26.4, *) else {
                 availability = .systemUnavailable
-                state = .unavailable("系统语境 Token 对齐需要 iPadOS 26.4 或更高版本；下方仍显示词典释义。")
+                state = .unavailable("系统语境翻译需要 iPadOS 26.4 或更高版本。")
                 DiagLog.log("context.translation.availability=system-unavailable")
                 return
             }
@@ -211,8 +216,37 @@ final class ContextualTranslationDriver: ObservableObject {
             state = .unsupported
             DiagLog.log("context.translation.availability=unsupported")
         case .systemUnavailable:
-            state = .unavailable("系统语境 Token 对齐需要 iPadOS 26.4 或更高版本；下方仍显示词典释义。")
+            state = .unavailable("系统语境翻译需要 iPadOS 26.4 或更高版本。")
             DiagLog.log("context.translation.availability=system-unavailable")
+        }
+    }
+
+    private func translateLocally(_ identity: Identity, generation: UInt64) async {
+        guard let context = identity.selection.sentenceContext,
+              let input = LocalTranslationInput(context: context) else {
+            state = .noAlignedResult
+            return
+        }
+        do {
+            let result: ContextualTranslationCacheHit
+            if let hit = await LocalContextTranslation.shared.cached(input, modelID: identity.modelID) {
+                result = hit
+            } else {
+                guard isCurrent(identity, generation: generation), !Task.isCancelled else { return }
+                state = .translating
+                if identity.presentation == .hover {
+                    try await Task.sleep(for: .milliseconds(150))
+                }
+                result = try await LocalContextTranslation.shared.translate(input, modelID: identity.modelID)
+            }
+            guard isCurrent(identity, generation: generation), !Task.isCancelled else { return }
+            switch result {
+            case .candidate(let candidate): state = .candidate(candidate)
+            case .noAlignedResult: state = .noAlignedResult
+            }
+        } catch {
+            guard isCurrent(identity, generation: generation), !Task.isCancelled else { return }
+            state = .failed(error.localizedDescription)
         }
     }
 
@@ -335,6 +369,7 @@ struct ContextualTranslationTaskView: View {
     @Environment(\.readerWindowSurfaceActive) private var readerWindowSurfaceActive
     @StateObject private var preparationModel = OfflineTranslationPreparationModel()
     @State private var retryGeneration = 0
+    @AppStorage(TranslationModel.preferenceKey) private var modelID = TranslationModel.systemID
 
     init(selection: ContextualSelection,
          isEnabled: Bool,
@@ -350,7 +385,8 @@ struct ContextualTranslationTaskView: View {
         ContextualTranslationDriver.Identity(selection: selection,
                                              isEnabled: isEnabled,
                                              presentation: presentation,
-                                             retryGeneration: retryGeneration)
+                                             retryGeneration: retryGeneration,
+                                             modelID: modelID)
     }
 
     private var taskIdentity: TaskIdentity {
@@ -396,12 +432,12 @@ struct ContextualTranslationTaskView: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             switch driver.state {
             case .disabled:
-                Text("启用语境 Token 阅读后，才会请求 Token 对齐候选。")
+                Text("在阅读设置开启语境阅读后可查看译义。")
                     .font(DS.Fonts.caption).foregroundStyle(DS.foreground3)
             case .checking:
                 ProgressView("检查端侧翻译语言…").font(DS.Fonts.caption)
             case .needsPreparation:
-                Text("需要先由你准备英语到简体中文的离线翻译语言。准备状态不代表 Token 对齐成功。")
+                Text("请先下载英语到简体中文的系统语言包。")
                     .font(DS.Fonts.caption).foregroundStyle(DS.foreground2)
                     .accessibilityIdentifier("contextual-translation-status-preparation")
                 OfflineTranslationPreparationView(model: preparationModel)
@@ -428,10 +464,10 @@ struct ContextualTranslationTaskView: View {
                     .accessibilityIdentifier("contextual-translation-status-error")
                 retryButton
             case .translating:
-                ProgressView("正在生成选中 Token 的系统对齐候选…").font(DS.Fonts.caption)
+                ProgressView("翻译中").font(DS.Fonts.caption)
             case .candidate(let candidate):
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Label("语境译义候选 · 系统对齐，待校对", systemImage: "text.magnifyingglass")
+                    Label("语境翻译", systemImage: "text.magnifyingglass")
                         .font(DS.Fonts.caption.weight(.semibold)).foregroundStyle(DS.foreground2)
                     Text(candidate.sourcePhrase).font(DS.Fonts.caption).foregroundStyle(DS.foreground3)
                         .textSelection(.enabled)
@@ -472,7 +508,9 @@ struct ContextualTranslationTaskView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("contextual-hover-error")
             }
-        case .disabled, .checking, .needsPreparation, .translating:
+        case .translating:
+            Text("翻译中").font(.caption2).foregroundStyle(DS.foreground2)
+        case .disabled, .checking, .needsPreparation:
             EmptyView()
         }
     }

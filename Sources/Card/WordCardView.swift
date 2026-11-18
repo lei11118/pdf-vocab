@@ -26,6 +26,10 @@ struct WordCardPanel: View {
     let onSelectWord: (String) -> Void
     var vocab: CardVocabBridge? = nil
     var contextReadingEnabled = false
+    var mathSourceImage: UIImage? = nil
+    var selectPhrase: (() -> Void)? = nil
+    var speakSelection: ((Bool) -> Void)? = nil
+    var pauseSpeech: (() -> Void)? = nil
     @State private var selectedSentenceWord: String?
 
     var body: some View {
@@ -59,7 +63,26 @@ struct WordCardPanel: View {
             case .contextual(let selection):
                 ContextualCardView(selection: selection, onClose: onClose, vocab: vocab)
             case .math(let result):
-                MathMeaningCard(result: result, onClose: onClose)
+                MathMeaningCard(result: result, onClose: onClose, sourceImage: mathSourceImage)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if case .contextual = content {
+                HStack {
+                    if let selectPhrase { Button("选中词组", action: selectPhrase) }
+                    if let speakSelection {
+                        Menu("朗读", systemImage: "speaker.wave.2") {
+                            Button("朗读选区") { speakSelection(false) }
+                            Button("朗读上下文") { speakSelection(true) }
+                            if let pauseSpeech { Button("暂停或继续", action: pauseSpeech) }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(.callout)
+                .padding(.horizontal, DS.Space.m)
+                .padding(.vertical, DS.Space.s)
+                .background(.regularMaterial)
             }
         }
         .onChange(of:content) { _, _ in selectedSentenceWord = nil }

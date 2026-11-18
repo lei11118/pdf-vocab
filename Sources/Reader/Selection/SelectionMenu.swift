@@ -21,6 +21,7 @@ final class SelectionMenuController: NSObject {
     /// 当前选词的收录状态(收录与否 + 现有高亮色),菜单构建时取一次
     var vocabStateProvider: (() -> (collected: Bool, colorName: String?))?
     var customActions: (() -> [UIMenuElement])?
+    var readerActions: (() -> [UIMenuElement])?
 
     private(set) var isPresented = false
     private var toolbar: UIVisualEffectView?
@@ -228,6 +229,6 @@ extension SelectionMenuController {
             children: [collect, highlightMenu, removeHighlight]
         )
 
-        return UIMenu(children: [copy, lookup, translate, vocabMenu, webSearch, share])
+        return UIMenu(children: [copy, lookup, translate] + (readerActions?() ?? []) + [vocabMenu, webSearch, share])
     }
 }
