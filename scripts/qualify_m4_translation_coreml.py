@@ -11,11 +11,11 @@ CONTEXT_LENGTH = 1536
 CHUNK_LENGTH = 128
 
 
-def convert(output: Path) -> None:
+def convert(output: Path, smoke: bool) -> None:
     import coremltools as ct
     import numpy as np
     import torch
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoConfig, AutoModelForCausalLM
 
     class Cache:
         def __init__(self, keys, values, start, end):
@@ -60,11 +60,25 @@ def convert(output: Path) -> None:
             last = self.backbone.norm(hidden[:, -1:, :])
             return self.lm_head(last).argmax(dim=-1).to(torch.int32)
 
-    upstream = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, revision=REVISION, dtype=torch.float16, attn_implementation="eager",
-    ).eval()
+    if smoke:
+        torch.manual_seed(7)
+        config = AutoConfig.from_pretrained(MODEL_ID, revision=REVISION)
+        config.hidden_size = 128
+        config.num_attention_heads = 4
+        config.num_key_value_heads = 2
+        config.head_dim = 32
+        config.num_hidden_layers = 2
+        config.intermediate_size = 256
+        config.vocab_size = 256
+        config.bos_token_id, config.eos_token_id, config.pad_token_id = 1, 2, 0
+        upstream = AutoModelForCausalLM.from_config(config, attn_implementation="eager").half().eval()
+    else:
+        upstream = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, revision=REVISION, dtype=torch.float16, attn_implementation="eager",
+        ).eval()
     decoder = Decoder(upstream).eval()
-    seed = torch.tensor([[120000, 120006, 569, 13, 120007]], dtype=torch.int32)
+    seed_ids = [1, 5, 8, 13, 34] if smoke else [120000, 120006, 569, 13, 120007]
+    seed = torch.tensor([seed_ids], dtype=torch.int32)
     start = torch.tensor([0], dtype=torch.int32)
     with torch.inference_mode():
         expected = upstream(seed, use_cache=False, logits_to_keep=1).logits.argmax(dim=-1)
@@ -90,19 +104,22 @@ def convert(output: Path) -> None:
         skip_model_load=True,
     )
     config = ct.optimize.coreml.OptimizationConfig(
-        global_config=ct.optimize.coreml.OpPalettizerConfig(nbits=4, mode="kmeans"),
+        global_config=ct.optimize.coreml.OpLinearQuantizerConfig(
+            mode="linear_symmetric", dtype="int4", granularity="per_block", block_size=32,
+        ),
     )
-    candidate = ct.optimize.coreml.palettize_weights(model, config)
+    candidate = ct.optimize.coreml.linear_quantize_weights(model, config)
     candidate.author = "Tencent Hy-MT2, converted for PdfVocab"
     candidate.license = "Apache-2.0"
-    candidate.user_defined_metadata["pdfvocab.weights_revision"] = REVISION
+    candidate.user_defined_metadata["pdfvocab.weights_revision"] = "synthetic-smoke" if smoke else REVISION
     candidate.save(str(output))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="Destination with an .mlpackage suffix")
+    parser.add_argument("--smoke", action="store_true", help="Use a tiny random checkpoint to test conversion")
     args = parser.parse_args()
     if args.output.suffix != ".mlpackage" or args.output.exists():
         parser.error("output must be a new .mlpackage path")
-    convert(args.output)
+    convert(args.output, args.smoke)

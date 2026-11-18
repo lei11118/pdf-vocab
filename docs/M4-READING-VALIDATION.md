@@ -7,7 +7,7 @@
 
 设备开发构建在「设置 → 语境阅读 → 翻译模型」中列出可下载的 Hy-MT2 GGUF。8 GB 档可评测 1.8B Q4 与 2-bit，16 GB 档还可评测 7B Q4。发布构建的可下载列表需根据设备实测结果放行。
 
-Core ML 候选使用同源 1.8B 权重、4-bit 调色板量化和带状态的 KV 缓存。使用独立 Python 环境安装支持 Hy-MT2 的 Transformers 5.6、PyTorch、NumPy 和 Core ML Tools，运行：
+Core ML 候选使用同源 1.8B 权重、4-bit 分块量化和带状态的 KV 缓存。导出环境使用 Python 3.12、Transformers 5.6.0、PyTorch 2.8、NumPy 1.26.4 和 Core ML Tools 9。
 
 ```sh
 python scripts/qualify_m4_translation_coreml.py Hy-MT2-1.8B.mlpackage
@@ -22,3 +22,7 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 - 在 8 GB 与 16 GB M4 上，以固定亮度和相同初始温度无线录制 Instruments Power Profiler。记录无翻译阅读基线，再轮换系统翻译与各本地后端。用 `LocalTranslation` 类别的 `Context gloss` signpost 标记推理区间。记录首次加载、热启动未命中、缓存命中、峰值内存、温升及每条正确译义的增量能耗。
 - 在相同设备和负载上优先选达到质量标准且能耗距最低值不超过 10% 的最快 1.8B 配置。延迟相差不足 5% 时选能耗更低者。分别记录 7B 的专业译义增益。Core ML 的实际设备分配以性能报告和运行 trace 为准。
 - 在阅读器分别验收原页、公式重绘、整体、分子或分母以及单符号高亮。截图需对应本次运行的提交。扫描页的模型输出及其原页几何分别验收。
+
+## 扫描公式初筛
+
+在 x86-64 CPU 上用 PaddleOCR 3.3.2、PaddlePaddle 3.2.2 运行 PP-FormulaNet_plus-S 官方权重。七个合成裁剪加一个 OpenStax 原页裁剪中，六个保持数学结构与符号。嵌套分式漏掉内层分母，偏导把小写 x 识别成大写 X。扫描模型保留为候选。测试处理的是预裁剪公式，整页定位和字符级选区还需独立验证。 [模型权重](https://huggingface.co/PaddlePaddle/PP-FormulaNet_plus-S/tree/3d46f557e3a1752f4bf81202395af3b5ecfadfd2)

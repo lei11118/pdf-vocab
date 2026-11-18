@@ -1274,6 +1274,8 @@ struct ReaderView: View {
         }
     }
 
+    // Swift 6.3.3 CopyPropagation miscompiles the optional selection borrow in Release.
+    @_optimize(none)
     private func receiveSelection(_ info: SelectionInfo?) {
         translationPrefetch?.cancel()
         // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
@@ -1283,7 +1285,8 @@ struct ReaderView: View {
             translationRequest = nil
             return
         }
-        if let contextual = info.contextual {
+        let contextual = info.contextual
+        if let contextual {
             guard contextReadingEnabled,
                   contextual.generation == contextReadingGeneration else {
                 currentSelectionInfo = nil
@@ -1291,34 +1294,28 @@ struct ReaderView: View {
             }
         }
         currentSelectionInfo = info
-        let contextualIsCurrent = info.contextual == nil
-            || info.contextual?.generation == contextReadingGeneration
         if contextReadingEnabled,
            mathReadingEnabled,
-           contextualIsCurrent,
            let math = info.mathReadingResult {
             translationRequest = nil
             cardContent = .math(math)
             return
         }
-        let mathSourceText = info.contextual?.displaySurface ?? info.text
+        let mathSourceText = contextual?.displaySurface ?? info.text
         if let math = MathCardRouting.resolve(
             sourceText: mathSourceText,
             contextReadingEnabled: contextReadingEnabled,
             mathEnabled: mathReadingEnabled,
-            contextualSelectionIsCurrent: contextualIsCurrent,
             isMathDetail: info.mathDetail) {
             translationRequest = nil
             cardContent = .math(math)
             return
         }
-        if let contextual = info.contextual {
-            if shouldShowContextualCard(contextual) {
-                translationRequest = nil
-                cardContent = .contextual(contextual)
-                if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
-                return
-            }
+        if let contextual, shouldShowContextualCard(contextual) {
+            translationRequest = nil
+            cardContent = .contextual(contextual)
+            if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
+            return
         }
         if info.wordCount <= 1, !info.primaryTerm.isEmpty {
             if cardContent != .word(info.primaryTerm) { translationRequest = nil }
