@@ -235,7 +235,7 @@ struct ContextualTranslationRequest: Equatable, Sendable {
         return true
     }
 
-    static func localSelectionSpans(in context: SentenceContext) throws -> [UTF16Span] {
+    static func localSelectionSpans(in context: SentenceContext, allowsFragment: Bool = false) throws -> [UTF16Span] {
         if !context.sourceSpanMappings.isEmpty {
             let mappings = context.sourceSpanMappings
             let textLength = (context.text as NSString).length
@@ -285,7 +285,8 @@ struct ContextualTranslationRequest: Equatable, Sendable {
             return local
         }
 
-        guard context.kind == .completeSentence || context.kind == .layoutBlock else {
+        guard !context.selectedSourceSpans.isEmpty,
+              allowsFragment || context.kind == .completeSentence || context.kind == .layoutBlock else {
             throw ContextualTranslationError.invalidSelection
         }
         var local: [UTF16Span] = []

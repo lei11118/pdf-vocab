@@ -1,4 +1,5 @@
 import Foundation
+import CoreML
 import LlamaRuntime
 import os
 
@@ -13,10 +14,15 @@ struct LocalTranslationInput: Hashable, Sendable {
 
     init?(context: SentenceContext) {
         guard !context.selectedSourceSpans.isEmpty,
-              let spans = try? ContextualTranslationRequest.localSelectionSpans(in: context),
+              let spans = try? ContextualTranslationRequest.localSelectionSpans(in: context, allowsFragment: true),
               let first = spans.first, let end = spans.last?.endExclusive,
               context.text.utf16.count <= ContextualTranslationRequest.maximumInputUTF16Units
         else { return nil }
+        for (left, right) in zip(spans, spans.dropFirst()) {
+            guard let leftEnd = left.endExclusive,
+                  let gap = UTF16Span(location: leftEnd, length: right.location - leftEnd).substring(in: context.text),
+                  gap.allSatisfy(\.isWhitespace) else { return nil }
+        }
         let range = UTF16Span(location: first.location, length: end - first.location)
         guard let selected = range.substring(in: context.text),
               !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -89,36 +95,40 @@ actor LocalContextTranslation {
 
     private struct CacheKey: Hashable {
         let model: String
+        let backend: TranslationModel.Backend
         let input: LocalTranslationInput
         let dictionaryRevision: Int
     }
 
     private var cache: [CacheKey: ContextualTranslationCacheHit] = [:]
     private var order: [CacheKey] = []
-    private var loaded: (modelID: String, session: MetalTranslationSession)?
+    private var loaded: (modelID: String, backend: TranslationModel.Backend, session: any TranslationInferenceSession)?
     private var idleRelease: Task<Void, Never>?
 
-    func testLoad(_ model: TranslationModel) throws {
-        _ = try session(for: model)
+    func testLoad(_ model: TranslationModel, backend: TranslationModel.Backend) throws {
+        _ = try session(for: model, backend: model.runtimeBackend(backend))
     }
 
-    func cached(_ input: LocalTranslationInput, modelID: String) -> ContextualTranslationCacheHit? {
+    func cached(_ input: LocalTranslationInput, modelID: String,
+                backend: TranslationModel.Backend = .metal) -> ContextualTranslationCacheHit? {
         guard let model = TranslationModel.available.first(where: { $0.id == modelID }) else { return nil }
-        return cache[CacheKey(model: model.sha256, input: input,
+        return cache[CacheKey(model: model.sha256, backend: model.runtimeBackend(backend), input: input,
                               dictionaryRevision: DictionaryStore.shared.exactPhraseLookupRevision)]
     }
 
-    func translate(_ input: LocalTranslationInput, modelID: String) throws -> ContextualTranslationCacheHit {
+    func translate(_ input: LocalTranslationInput, modelID: String,
+                   backend: TranslationModel.Backend = .metal) throws -> ContextualTranslationCacheHit {
         try Task.checkCancellation()
         guard let model = TranslationModel.available.first(where: { $0.id == modelID }) else {
             throw Failure.unavailable
         }
-        let key = CacheKey(model: model.sha256, input: input,
+        let runtime = model.runtimeBackend(backend)
+        let key = CacheKey(model: model.sha256, backend: runtime, input: input,
                            dictionaryRevision: DictionaryStore.shared.exactPhraseLookupRevision)
         if let cached = cache[key] { return cached }
         let interval = Self.signposter.beginInterval("Context gloss")
         defer { Self.signposter.endInterval("Context gloss", interval) }
-        let session = try session(for: model)
+        let session = try session(for: model, backend: runtime)
         let entry = DictionaryStore.shared.entry(for: input.source)
         let professional = entry?.sources.contains(where: { $0.hasPrefix("ECDICT ·") }) == true
         let terminology = professional ? entry?.translation.map { String($0.prefix(120)) } : nil
@@ -152,20 +162,28 @@ actor LocalContextTranslation {
         }
     }
 
-    private func session(for model: TranslationModel) throws -> MetalTranslationSession {
+    private func session(for model: TranslationModel,
+                         backend: TranslationModel.Backend) throws -> any TranslationInferenceSession {
         let url = TranslationModelManager.modelURL(model)
         guard FileManager.default.fileExists(atPath: url.path) else { throw Failure.unavailable }
-        if loaded?.modelID != model.id { evict() }
-        let session: MetalTranslationSession
+        if loaded?.modelID != model.id || loaded?.backend != backend { evict() }
+        let session: any TranslationInferenceSession
         if let existing = loaded?.session {
             session = existing
         } else {
             do {
-                session = try MetalTranslationSession(modelURL: url)
+                switch backend {
+                case .metal:
+                    session = try MetalTranslationSession(modelURL: url)
+                case .coreMLAll, .coreMLNeural:
+                    session = try CoreMLTranslationSession(compiledModel: TranslationModel.coreMLLabModel,
+                                                           tokenizerGGUF: url,
+                                                           computeUnits: backend == .coreMLAll ? .all : .cpuAndNeuralEngine)
+                }
             } catch {
                 throw Failure.inference
             }
-            loaded = (model.id, session)
+            loaded = (model.id, backend, session)
         }
         idleRelease?.cancel()
         idleRelease = Task { [weak self] in

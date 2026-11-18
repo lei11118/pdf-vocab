@@ -148,20 +148,14 @@ actor ContextualTranslationService {
                                                       targetLanguageIdentifier: targetLanguageIdentifier,
                                                       requestGeneration: requestGeneration,
                                                       using: translator)
-            outcome = try decodeFreshPayload(request: request,
-                                             payload: payload,
-                                             candidateKey: key,
-                                             cacheGeneration: generation,
-                                             requestGeneration: requestGeneration)
-            let payloadIsUseful: Bool
-            switch outcome {
-            case .candidate:
-                payloadIsUseful = true
-            case .selectedAlignmentMissing(_, let hasUsefulOtherToken):
-                payloadIsUseful = hasUsefulOtherToken
-            }
-            if payloadIsUseful,
-               !(preserveCachedPayloadOnMiss && isSelectionMiss(outcome)) {
+            let decoded = try decodeFreshPayload(request: request,
+                                                 payload: payload,
+                                                 candidateKey: key,
+                                                 cacheGeneration: generation,
+                                                 requestGeneration: requestGeneration)
+            outcome = decoded.outcome
+            if decoded.payloadIsUseful,
+               !(preserveCachedPayloadOnMiss && outcome.isSelectionMiss) {
                 payloadToCache = payload
                 payloadToPersist = payload
             }
@@ -177,7 +171,7 @@ actor ContextualTranslationService {
                 evictIfNeeded()
             }
             let hasReplacementPayload = payloadToCache != nil || payloadToPersist != nil
-            let cachedSiblingPayloadWins = isSelectionMiss(outcome)
+            let cachedSiblingPayloadWins = outcome.isSelectionMiss
                 && hasReplacementPayload
                 && (preserveCachedPayloadOnMiss
                     || payloadCache[payloadKey].map {
@@ -377,10 +371,11 @@ actor ContextualTranslationService {
                                     payload: ContextualTranslationPayload,
                                     candidateKey: CacheKey,
                                     cacheGeneration: Int,
-                                    requestGeneration: Int) throws -> FreshPayloadDecodeResult {
+                                    requestGeneration: Int) throws
+        -> (outcome: ContextualTranslationFreshDecode, payloadIsUseful: Bool) {
         switch try ContextualTranslationAlignment.decodeFresh(request: request, payload: payload) {
         case .candidate(let candidate):
-            return FreshPayloadDecodeResult(candidate: candidate, error: nil, payloadIsUseful: true)
+            return (.candidate(candidate), true)
         case .selectedAlignmentMissing(let error, let hasUsefulOtherToken):
             guard maximumCachedEntries > 0,
                   cacheGeneration == self.cacheGeneration,
@@ -389,14 +384,12 @@ actor ContextualTranslationService {
                   isEnabled() else { throw error }
             if let cached = cache[candidateKey], case .candidate(let candidate) = cached {
                 // A simultaneous successful result for this exact identity wins.
-                return FreshPayloadDecodeResult(candidate: candidate, error: nil, payloadIsUseful: false)
+                return (.candidate(candidate), false)
             }
             cache[candidateKey] = .noAlignedResult(error)
             touch(candidateKey)
             evictIfNeeded()
-            return FreshPayloadDecodeResult(candidate: nil,
-                                            error: error,
-                                            payloadIsUseful: hasUsefulOtherToken)
+            return (.selectedAlignmentMissing(error, hasUsefulOtherToken: hasUsefulOtherToken), hasUsefulOtherToken)
         }
     }
 
@@ -453,6 +446,13 @@ actor ContextualTranslationService {
         }
     }
 
+}
+
+private extension ContextualTranslationFreshDecode {
+    var isSelectionMiss: Bool {
+        if case .selectedAlignmentMissing = self { return true }
+        return false
+    }
 }
 
 /// Captures a TranslationSession only for the lifetime of one SwiftUI

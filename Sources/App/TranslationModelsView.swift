@@ -3,6 +3,7 @@ import SwiftUI
 struct TranslationModelsView: View {
     @ObservedObject private var manager = TranslationModelManager.shared
     @AppStorage(TranslationModel.preferenceKey) private var modelID = TranslationModel.systemID
+    @AppStorage(TranslationModel.labBackendKey) private var backend = TranslationModel.Backend.metal
 
     var body: some View {
         Form {
@@ -74,6 +75,17 @@ struct TranslationModelsView: View {
                 }
                 #endif
             }
+            #if DEBUG && !targetEnvironment(simulator)
+            if FileManager.default.fileExists(atPath: TranslationModel.coreMLLabModel.path) {
+                Section {
+                    Picker("1.8B Q4 测试后端", selection: $backend) {
+                        ForEach(TranslationModel.Backend.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                }
+            }
+            #endif
         }
         .navigationTitle("翻译模型")
     }

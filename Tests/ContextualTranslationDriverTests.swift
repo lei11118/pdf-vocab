@@ -143,7 +143,7 @@ final class ContextualTranslationDriverTests: XCTestCase {
         XCTAssertEqual(driver.state, .disabled)
     }
 
-    func testEachWordInVerifiedPhraseRequestsSamePhraseAndKeepsWordSurface() async throws {
+    func testEachWordInVerifiedPhraseRequestsItsOwnMeaning() async throws {
         let capturedRequests = DriverTranslationRequests()
         let driver = ContextualTranslationDriver(availabilityProvider: { .installed },
                                                  translator: { request in
@@ -166,8 +166,9 @@ final class ContextualTranslationDriverTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
         let first = try XCTUnwrap(requests.first)
         let second = try XCTUnwrap(requests.dropFirst().first)
-        XCTAssertEqual(first, second)
-        XCTAssertEqual(first.selectedSourcePhrase, "read books")
+        XCTAssertEqual(first.selectedSourcePhrase, "read")
+        XCTAssertEqual(second.selectedSourcePhrase, "books")
+        XCTAssertNotEqual(first.selectedSourceSpans, second.selectedSourceSpans)
     }
 
     func testEmptyHoverHostsTranslationLifecycleTask() async throws {

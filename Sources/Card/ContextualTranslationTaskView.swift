@@ -68,6 +68,7 @@ final class ContextualTranslationDriver: ObservableObject {
         let presentation: ContextualTranslationPresentation
         let retryGeneration: Int
         var modelID: String = TranslationModel.systemID
+        var backend: TranslationModel.Backend = .metal
     }
 
     @Published private(set) var state: State = .checking
@@ -229,7 +230,8 @@ final class ContextualTranslationDriver: ObservableObject {
         }
         do {
             let result: ContextualTranslationCacheHit
-            if let hit = await LocalContextTranslation.shared.cached(input, modelID: identity.modelID) {
+            if let hit = await LocalContextTranslation.shared.cached(input, modelID: identity.modelID,
+                                                                     backend: identity.backend) {
                 result = hit
             } else {
                 guard isCurrent(identity, generation: generation), !Task.isCancelled else { return }
@@ -237,7 +239,8 @@ final class ContextualTranslationDriver: ObservableObject {
                 if identity.presentation == .hover {
                     try await Task.sleep(for: .milliseconds(150))
                 }
-                result = try await LocalContextTranslation.shared.translate(input, modelID: identity.modelID)
+                result = try await LocalContextTranslation.shared.translate(input, modelID: identity.modelID,
+                                                                           backend: identity.backend)
             }
             guard isCurrent(identity, generation: generation), !Task.isCancelled else { return }
             switch result {
@@ -370,6 +373,7 @@ struct ContextualTranslationTaskView: View {
     @StateObject private var preparationModel = OfflineTranslationPreparationModel()
     @State private var retryGeneration = 0
     @AppStorage(TranslationModel.preferenceKey) private var modelID = TranslationModel.systemID
+    @AppStorage(TranslationModel.labBackendKey) private var backend = TranslationModel.Backend.metal
 
     init(selection: ContextualSelection,
          isEnabled: Bool,
@@ -386,7 +390,7 @@ struct ContextualTranslationTaskView: View {
                                              isEnabled: isEnabled,
                                              presentation: presentation,
                                              retryGeneration: retryGeneration,
-                                             modelID: modelID)
+                                             modelID: modelID, backend: backend)
     }
 
     private var taskIdentity: TaskIdentity {

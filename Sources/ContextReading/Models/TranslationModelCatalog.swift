@@ -18,7 +18,31 @@ struct TranslationModel: Identifiable, Sendable {
     }
 
     static let preferenceKey = "contextReading.translationModel"
+    static let labBackendKey = "contextReading.translationLabBackend"
     static let systemID = "apple"
+
+    enum Backend: String, CaseIterable, Identifiable, Sendable {
+        case metal, coreMLAll, coreMLNeural
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .metal: return "llama.cpp Metal"
+            case .coreMLAll: return "Core ML · 自动分配"
+            case .coreMLNeural: return "Core ML · CPU 与 Neural Engine"
+            }
+        }
+    }
+
+    static var coreMLLabModel: URL {
+        URL.documentsDirectory.appending(path: "TranslationLab/Hy-MT2-1.8B.mlmodelc", directoryHint: .isDirectory)
+    }
+
+    func runtimeBackend(_ requested: Backend) -> Backend {
+        #if DEBUG && !targetEnvironment(simulator)
+        if id == "hy-mt2-18-q4" { return requested }
+        #endif
+        return .metal
+    }
 
     static let candidates = [
         TranslationModel(id: "hy-mt2-18-q4", name: "Hy-MT2 1.8B · Q4_K_M",

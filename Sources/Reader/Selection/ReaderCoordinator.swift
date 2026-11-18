@@ -2062,17 +2062,8 @@ final class ReaderCoordinator: NSObject {
             contextual = nil
             text = sub.map { $0.text.components(separatedBy:.whitespacesAndNewlines).joined() }.joined(separator: " ")
         }
-        if let base = contextual,
-           src != "doubleTap",
-           src != "math-glyph",
-           base.verifiedPhraseGroupSpan == nil,
-           base.tokens.count == 1,
-           range.lowerBound == range.upperBound,
-           let expansion = verifiedOCRPhraseExpansion(page: page, index: range.lowerBound) {
-            contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual)
-                ?? base
-        }
         guard !text.isEmpty else { return }
+        stopReadingSpeech()
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
         let bounds = page.bounds(for: .mediaBox)
         var desired: [String: (page: PDFPage, rect: CGRect)] = [:]
@@ -3440,7 +3431,7 @@ final class ReaderCoordinator: NSObject {
 
     var canExpandReadingPhrase: Bool { expandReadingPhrase != nil }
     var canSpeakReadingSelection: Bool {
-        readingSelection?.sentenceContext != nil || readingSelection?.phraseLookupContext != nil
+        readingSelection != nil
     }
 
     private func selectWholeFormula() {
@@ -3518,22 +3509,32 @@ final class ReaderCoordinator: NSObject {
 
     func speakReadingSelection(fullContext: Bool) {
         guard let selection = readingSelection,
-              let page = pdfView?.document?.page(at: selection.pageIndex),
-              let context = (ocrSelectionActive ? selection.phraseLookupContext : nil) ?? selection.sentenceContext,
-              let input = LocalTranslationInput(context: context) else { return }
-        let speechText = fullContext ? input.text : input.source
-        let baseOffset = fullContext ? 0 : input.span.location
+              let page = pdfView?.document?.page(at: selection.pageIndex) else { return }
+        let context = (ocrSelectionActive ? selection.phraseLookupContext : nil) ?? selection.sentenceContext
         let ocr = ocrSelectionActive ? pinnedSnapshot(for: page)?.contextSource : nil
         let nativeText = page.string ?? ""
-        let sourceOffset = context.sourceSpan.location
-        let audioWordBoxes = ocr?.entries.filter { $0.blockID == context.blockID } ?? []
+        let blockID = context?.blockID ?? selection.primaryToken?.blockID
+        let audioWordBoxes = ocr?.entries.filter { $0.blockID == blockID } ?? []
+        let speechText: String
+        let sourceOffset: Int
+        if let context, let input = LocalTranslationInput(context: context) {
+            speechText = fullContext ? input.text : input.source
+            sourceOffset = context.sourceSpan.location + (fullContext ? 0 : input.span.location)
+        } else if selection.sourceSpans.count == 1, let span = selection.sourceSpans.first {
+            let ocrLine = audioWordBoxes.first.flatMap { entry in ocr?.page.lines[entry.lineIndex].sourceText }
+            speechText = span.substring(in: ocrLine ?? nativeText) ?? selection.displaySurface
+            sourceOffset = span.location
+        } else {
+            SpeechService.shared.speak(selection.displaySurface, language: SpeechService.usVoice)
+            return
+        }
         SpeechService.shared.play(speechText, language: SpeechService.usVoice, owner: speechOwner,
                                   onRange: { [weak self, weak page] range in
             guard let self, let page else { return }
             self.clearSpeakingHighlight()
             guard let spokenSpan = UTF16Span(range: range, in: speechText),
                   let spoken = spokenSpan.substring(in: speechText) else { return }
-            let span = UTF16Span(location: sourceOffset + baseOffset + range.location, length: range.length)
+            let span = UTF16Span(location: sourceOffset + range.location, length: range.length)
             let rect: CGRect?
             if ocr != nil {
                 rect = audioWordBoxes.first { $0.sourceSpan.intersects(span) }.map {

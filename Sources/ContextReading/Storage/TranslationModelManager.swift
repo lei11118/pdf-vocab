@@ -79,7 +79,9 @@ final class TranslationModelManager: ObservableObject {
         enabling = model.id
         defer { enabling = nil }
         do {
-            try await LocalContextTranslation.shared.testLoad(model)
+            let rawBackend = UserDefaults.standard.string(forKey: TranslationModel.labBackendKey)
+            let backend = rawBackend.flatMap(TranslationModel.Backend.init(rawValue:)) ?? .metal
+            try await LocalContextTranslation.shared.testLoad(model, backend: backend)
             UserDefaults.standard.set(model.id, forKey: TranslationModel.preferenceKey)
             messages[model.id] = nil
         } catch {
@@ -126,6 +128,8 @@ private final class ModelDownload: NSObject, URLSessionDownloadDelegate, @unchec
     private let queue = OperationQueue()
     private var outcome: Result<Void, Error>?
     private var task: URLSessionDownloadTask?
+    private var waitingForPauseData = false
+    private var completionSent = false
 
     init(model: TranslationModel, destination: URL, resumeURL: URL,
          onProgress: @escaping @Sendable (Double) -> Void,
@@ -154,8 +158,19 @@ private final class ModelDownload: NSObject, URLSessionDownloadDelegate, @unchec
     }
 
     func pause() {
-        // The delegate receives resume data in didCompleteWithError.
-        task?.cancel(byProducingResumeData: { _ in })
+        queue.addOperation { [weak self] in
+            guard let self, !self.waitingForPauseData, self.outcome == nil,
+                  let task = self.task, task.state == .running else { return }
+            self.waitingForPauseData = true
+            task.cancel { [weak self] data in
+                guard let self else { return }
+                self.queue.addOperation {
+                    guard !self.completionSent else { return }
+                    if let data { try? data.write(to: self.resumeURL, options: .atomic) }
+                    self.complete(.failure(Failure.paused))
+                }
+            }
+        }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
@@ -176,16 +191,24 @@ private final class ModelDownload: NSObject, URLSessionDownloadDelegate, @unchec
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         defer { session.finishTasksAndInvalidate() }
+        guard !completionSent else { return }
         if let outcome {
-            onCompletion(outcome)
+            complete(outcome)
         } else if let error = error as NSError? {
             if let data = error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 try? data.write(to: resumeURL, options: .atomic)
             }
-            onCompletion(.failure(error.code == NSURLErrorCancelled ? Failure.paused : error))
+            if waitingForPauseData { return }
+            complete(.failure(error.code == NSURLErrorCancelled ? Failure.paused : error))
         } else {
-            onCompletion(.failure(Failure.response))
+            complete(.failure(Failure.response))
         }
+    }
+
+    private func complete(_ result: Result<Void, Error>) {
+        guard !completionSent else { return }
+        completionSent = true
+        onCompletion(result)
     }
 
     private static func verify(_ url: URL, model: TranslationModel) throws -> Bool {

@@ -30,6 +30,7 @@ struct ReaderView: View {
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
     @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
     @AppStorage(TranslationModel.preferenceKey) private var translationModelID = TranslationModel.systemID
+    @AppStorage(TranslationModel.labBackendKey) private var translationBackend = TranslationModel.Backend.metal
     @State private var translationPrefetch: Task<Void, Never>?
     @State private var contextReadingGeneration = 0
     @State private var contextOCRPage: ContextOCRPage?
@@ -147,6 +148,7 @@ struct ReaderView: View {
                 cancelPendingOCRCharacterRefinement()
             }
             .onChange(of: translationModelID) { _, _ in scheduleTranslationPrefetch() }
+            .onChange(of: translationBackend) { _, _ in scheduleTranslationPrefetch() }
             .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
                 if blocked { readerHandle.coordinator?.clearHover() }
@@ -1375,13 +1377,14 @@ struct ReaderView: View {
         guard contextReadingEnabled, translationModelID != TranslationModel.systemID,
               scenePhase == .active, !markMode, cardContent == nil, wordInteraction.preview == nil else { return }
         let modelID = translationModelID
+        let backend = translationBackend
         translationPrefetch = Task(priority: .utility) { @MainActor in
             do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
             guard let inputs = readerHandle.coordinator?.visibleTranslationInputs() else { return }
             for input in inputs {
                 guard !Task.isCancelled, !ProcessInfo.processInfo.isLowPowerModeEnabled,
                       ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { return }
-                _ = try? await LocalContextTranslation.shared.translate(input, modelID: modelID)
+                _ = try? await LocalContextTranslation.shared.translate(input, modelID: modelID, backend: backend)
             }
         }
     }
