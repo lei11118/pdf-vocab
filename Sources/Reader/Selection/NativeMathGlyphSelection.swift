@@ -45,7 +45,8 @@ enum NativeMathGlyphSelection {
     /// source range and the merged PDFKit selection contains only those ranges.
     static func map(_ glyphs: [PDFTextLayout.Glyph],
                     on page: PDFPage,
-                    anchoredAt characterIndex: Int) -> Mapping? {
+                    anchoredAt characterIndex: Int,
+                    allowingInterveningWhitespace: Bool = false) -> Mapping? {
         guard !glyphs.isEmpty,
               glyphs.count <= maximumGlyphs,
               let source = page.string else { return nil }
@@ -74,11 +75,13 @@ enum NativeMathGlyphSelection {
             let sourceRange = NSRange(location: range.location, length: range.length)
             guard isComposedRange(sourceRange, in: sourceText),
                   let selection = page.selection(for: sourceRange),
-                  isExactSinglePageSelection(selection, range: sourceRange, on: page, source: source) else { continue }
+                  isExactSinglePageSelection(selection, range: sourceRange, on: page, source: source,
+                                             allowingTrailingWhitespace: allowingInterveningWhitespace) else { continue }
 
             let sourceGlyph = normalized(sourceText.substring(with: sourceRange))
             guard targets.contains(sourceGlyph),
-                  normalized(selection.string ?? "") == sourceGlyph else { continue }
+                  selectionText(selection, allowingTrailingWhitespace: allowingInterveningWhitespace) == sourceGlyph
+            else { continue }
 
             let bounds = selection.bounds(for: page).standardized
             guard isPlausible(bounds, inside: pageBounds) else { continue }
@@ -107,7 +110,8 @@ enum NativeMathGlyphSelection {
                                  selection: match.selection))
         }
 
-        guard let merged = merge(entries, on: page)?.selection else { return nil }
+        guard let merged = merge(entries, on: page,
+                                 allowingInterveningWhitespace: allowingInterveningWhitespace)?.selection else { return nil }
 
         return Mapping(entries: entries, mergedSelection: merged)
     }
@@ -115,7 +119,8 @@ enum NativeMathGlyphSelection {
     /// Rebuilds a checked selection for any subset of mapped glyph entries.
     /// The returned ranges preserve the subset's input order.
     static func merge(_ entries: [Entry],
-                      on page: PDFPage) -> (selection: PDFSelection, ranges: [NSRange])? {
+                      on page: PDFPage, allowingInterveningWhitespace: Bool = false)
+        -> (selection: PDFSelection, ranges: [NSRange])? {
         guard !entries.isEmpty,
               let source = page.string,
               let pageBounds = validPageBounds(page) else { return nil }
@@ -127,20 +132,28 @@ enum NativeMathGlyphSelection {
             guard isPlausible(entry.glyph.rect, inside: pageBounds),
                   isComposedRange(range, in: source as NSString),
                   normalized((source as NSString).substring(with: range)) == normalized(entry.glyph.text),
-                  isExactSinglePageSelection(entry.selection, range: range, on: page, source: source),
-                  normalized(entry.selection.string ?? "") == normalized(entry.glyph.text),
+                  isExactSinglePageSelection(entry.selection, range: range, on: page, source: source,
+                                             allowingTrailingWhitespace: allowingInterveningWhitespace),
+                  selectionText(entry.selection, allowingTrailingWhitespace: allowingInterveningWhitespace)
+                    == normalized(entry.glyph.text),
                   isPlausible(entry.selection.bounds(for: page), inside: pageBounds) else { return nil }
         }
 
         guard let selection = checkedMergedSelection(for: entries.map(\.selection),
                                                      expectedRanges: ranges,
                                                      on: page,
-                                                     source: source) else { return nil }
+                                                     source: source,
+                                                     allowingInterveningWhitespace: allowingInterveningWhitespace) else { return nil }
         return (selection, ranges)
     }
 
     private static func normalized(_ text: String) -> String {
         text.precomposedStringWithCanonicalMapping
+    }
+
+    private static func selectionText(_ selection: PDFSelection, allowingTrailingWhitespace: Bool) -> String {
+        let text = selection.string ?? ""
+        return normalized(allowingTrailingWhitespace ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text)
     }
 
     private static func boundedSearchRange(near index: Int, in source: NSString) -> NSRange? {
@@ -228,15 +241,19 @@ enum NativeMathGlyphSelection {
     private static func isExactSinglePageSelection(_ selection: PDFSelection,
                                                    range: NSRange,
                                                    on page: PDFPage,
-                                                   source: String) -> Bool {
+                                                   source: String,
+                                                   allowingTrailingWhitespace: Bool = false) -> Bool {
         guard selection.pages.count == 1,
               selection.pages.first === page,
               selection.numberOfTextRanges(on: page) == 1 else { return false }
         let actual = selection.range(at: 0, on: page)
-        guard actual.location == range.location,
-              actual.length == range.length,
-              isComposedRange(actual, in: source as NSString) else { return false }
-        return true
+        let text = source as NSString
+        guard actual.location == range.location, isComposedRange(actual, in: text) else { return false }
+        if actual.length == range.length { return true }
+        let trailingLength = actual.length - range.length
+        guard allowingTrailingWhitespace, (1...2).contains(trailingLength) else { return false }
+        let trailing = NSRange(location: NSMaxRange(range), length: trailingLength)
+        return text.substring(with: trailing).allSatisfy(\.isWhitespace)
     }
 
     private static func validPageBounds(_ page: PDFPage) -> CGRect? {
@@ -301,7 +318,8 @@ enum NativeMathGlyphSelection {
     private static func checkedMergedSelection(for selections: [PDFSelection],
                                                expectedRanges: [NSRange],
                                                on page: PDFPage,
-                                               source: String) -> PDFSelection? {
+                                               source: String,
+                                               allowingInterveningWhitespace: Bool) -> PDFSelection? {
         guard let firstRange = expectedRanges.first,
               let merged = page.selection(for: firstRange) else { return nil }
         if selections.count > 1 {
@@ -320,8 +338,24 @@ enum NativeMathGlyphSelection {
             actualRanges.append(range)
         }
 
-        guard coalesced(actualRanges) == coalesced(expectedRanges) else { return nil }
-        return merged
+        if coalesced(actualRanges) == coalesced(expectedRanges) { return merged }
+        guard allowingInterveningWhitespace else { return nil }
+        let text = source as NSString
+        func visibleStarts(in ranges: [NSRange]) -> [Int] {
+            coalesced(ranges).flatMap { range in
+                var starts: [Int] = []
+                var index = range.location
+                while index < NSMaxRange(range) {
+                    let grapheme = text.rangeOfComposedCharacterSequence(at: index)
+                    if !text.substring(with: grapheme).allSatisfy(\.isWhitespace) {
+                        starts.append(grapheme.location)
+                    }
+                    index = NSMaxRange(grapheme)
+                }
+                return starts
+            }
+        }
+        return visibleStarts(in: actualRanges) == visibleStarts(in: expectedRanges) ? merged : nil
     }
 
     private static func coalesced(_ ranges: [NSRange]) -> [NSRange] {

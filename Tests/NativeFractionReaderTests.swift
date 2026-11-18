@@ -90,7 +90,7 @@ final class NativeFractionReaderTests: XCTestCase {
         }
         XCTAssertEqual(firstTarget.detail.sourceText, "(x+1)/(x+2)")
         XCTAssertEqual(firstTarget.detail.sourceRanges, expectedGlyphRanges)
-        XCTAssertEqual(coalesced(ranges(of: firstTarget.detail.selection, on: page)),
+        XCTAssertEqual(coalesced(visibleRanges(of: firstTarget.detail.selection, on: page, source: source)),
                        [numeratorRange, denominatorRange].sorted { $0.location < $1.location })
 
         longPress(at: view.convert(numeratorPoint, from: page))
@@ -115,7 +115,7 @@ final class NativeFractionReaderTests: XCTestCase {
             return XCTFail("A rule hit must address the whole fraction")
         }
         XCTAssertEqual(ruleTarget.detail.sourceRanges, expectedGlyphRanges)
-        XCTAssertEqual(coalesced(ranges(of: ruleTarget.detail.selection, on: page)),
+        XCTAssertEqual(coalesced(visibleRanges(of: ruleTarget.detail.selection, on: page, source: source)),
                        [numeratorRange, denominatorRange].sorted { $0.location < $1.location })
         longPress(at: view.convert(rulePoint, from: page))
         XCTAssertEqual(selected.last?.text, "(x+1)/(x+2)")
@@ -152,8 +152,16 @@ final class NativeFractionReaderTests: XCTestCase {
         (range.location..<NSMaxRange(range)).map { NSRange(location: $0, length: 1) }
     }
 
-    private func ranges(of selection: PDFSelection, on page: PDFPage) -> [NSRange] {
-        (0..<selection.numberOfTextRanges(on: page)).map { selection.range(at: $0, on: page) }
+    private func visibleRanges(of selection: PDFSelection, on page: PDFPage, source: NSString) -> [NSRange] {
+        (0..<selection.numberOfTextRanges(on: page)).flatMap { index in
+            let range = selection.range(at: index, on: page)
+            return (range.location..<NSMaxRange(range)).compactMap { offset in
+                let character = source.rangeOfComposedCharacterSequence(at: offset)
+                guard character.location == offset,
+                      !source.substring(with: character).allSatisfy(\.isWhitespace) else { return nil }
+                return character
+            }
+        }
     }
 
     private func coalesced(_ ranges: [NSRange]) -> [NSRange] {

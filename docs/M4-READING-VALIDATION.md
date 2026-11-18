@@ -16,6 +16,10 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 
 把编译产物放在设备开发构建的 `Documents/TranslationLab/Hy-MT2-1.8B.mlmodelc`。下载 1.8B Q4 GGUF 提供同源词表，然后在模型页选择 Metal、Core ML 自动分配或 Core ML CPU 与 Neural Engine。Core ML 导出脚本先比较原始模型与带状态包装器的预填充及后续预测。量化后的输出和资源使用仍需在设备上评测。
 
+本地导出的完整模型为 1,008,933,858 字节。检查了模型格式、两个状态缓存、输入输出及 225 个分块解压算子。Linux 能完成导出与格式检查，实际 Core ML 推理和功耗仍需实体 iPad。
+
+原始权重的七条桌面试译均未通过当前严格输出格式检查。部分结果翻译了整句，另有结果在要求河岸的选区中误译为「银行」。四条选区另试了括号标注和短释义提示，仍出现错义或标注丢失。下载候选保留在测试入口。
+
 ## 设备记录
 
 - 使用 `Tests/Fixtures/ContextTranslation-M4.json` 的人工编写样本做首轮筛选。对可译项分别记正确、错误和缺失，语义等价的译法由双语评审判断。校验已展示译义准确率至少为 95%，可译项覆盖率至少为 85%。
@@ -26,3 +30,9 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 ## 扫描公式初筛
 
 在 x86-64 CPU 上用 PaddleOCR 3.3.2、PaddlePaddle 3.2.2 运行 PP-FormulaNet_plus-S 官方权重。七个合成裁剪加一个 OpenStax 原页裁剪中，六个保持数学结构与符号。嵌套分式漏掉内层分母，偏导把小写 x 识别成大写 X。扫描模型保留为候选。测试处理的是预裁剪公式，整页定位和字符级选区还需独立验证。 [模型权重](https://huggingface.co/PaddlePaddle/PP-FormulaNet_plus-S/tree/3d46f557e3a1752f4bf81202395af3b5ecfadfd2)
+
+## CI 与截图
+
+候选提交 `07baf2d` 的未签名 IPA 构建成功。ZIP CRC、Info.plist 和 llama.framework 已在下载后检查。包大小为 56,917,877 字节，SHA-256 为 `7F1DCA5AFDF8B95BD911D23D8FF73B47123FC7E1829A664B33700468472EEB85`。 [构建与产物](https://github.com/lei11118/pdf-vocab/actions/runs/44256098915)
+
+早期候选 `ed5be66` 的完整回归通过 341/342 个单元测试和 8/10 个 UI 测试。截图确认行内公式整体选区和重绘，同时复现分式初次长按与行内公式再次长按的失败。该结果对应手势修正前的版本。 [回归与截图](https://github.com/lei11118/pdf-vocab/actions/runs/44252271013)

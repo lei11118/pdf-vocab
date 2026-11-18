@@ -338,7 +338,9 @@ final class InteractionPolishTests:XCTestCase {
         coordinator.dismissSelection()
         let beforeSingleTap = events.count
         coordinator.perform(NSSelectorFromString("handleTap:"), with: CompletedWordTap(point: chargePoint))
-        XCTAssertEqual(events.count, beforeSingleTap, "Context mode must not change single-tap selection behavior")
+        XCTAssertEqual(events.count, beforeSingleTap + 1)
+        XCTAssertEqual(events.compactMap { $0 }.last?.contextual?.tokens.map(\.sourceSurface), ["charge"])
+        coordinator.dismissSelection()
 
         let press = MutableContextPress(point: chargePoint)
         coordinator.perform(NSSelectorFromString("handlePress:"), with: press)
@@ -366,6 +368,9 @@ final class InteractionPolishTests:XCTestCase {
         coordinator.setContextReadingMode(true, generation: 13)
         XCTAssertFalse(coordinator.contextReadingEnabled, "An older window generation must not restore a stale mode")
         XCTAssertEqual(coordinator.contextReadingGeneration, 14)
+        let beforeLegacyTap = events.count
+        coordinator.perform(NSSelectorFromString("handleTap:"), with: CompletedWordTap(point: chargePoint))
+        XCTAssertEqual(events.count, beforeLegacyTap)
         coordinator.perform(NSSelectorFromString("handleDoubleTap:"), with: CompletedWordTap(point: chargePoint))
         let legacyInfo = try XCTUnwrap(events.compactMap { $0 }.last)
         XCTAssertNil(legacyInfo.contextual, "Turning context mode off restores the legacy selection payload")

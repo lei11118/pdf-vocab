@@ -37,12 +37,18 @@ struct NativeFractionReadingSelection {
         let ordered = fraction.orderedGlyphs
         guard let anchorGlyph = ordered.first else { return nil }
 
-        let anchor = page.characterIndex(at: CGPoint(x: anchorGlyph.glyph.rect.midX,
-                                                     y: anchorGlyph.glyph.rect.midY))
-        guard anchor >= 0,
-              let mapping = NativeMathGlyphSelection.map(ordered.map(\.glyph),
-                                                         on: page,
-                                                         anchoredAt: anchor),
+        let anchorPoint = CGPoint(x: anchorGlyph.glyph.rect.midX, y: anchorGlyph.glyph.rect.midY)
+        let pointIndex = page.characterIndex(at: anchorPoint)
+        let areaIndex = page.selection(for: fraction.region).flatMap { selection -> Int? in
+            guard selection.numberOfTextRanges(on: page) > 0 else { return nil }
+            return selection.range(at: 0, on: page).location
+        }
+        let anchors = [pointIndex, areaIndex ?? NSNotFound].filter { $0 >= 0 && $0 != NSNotFound }
+        let glyphsForMapping = ordered.map(\.glyph)
+        guard let mapping = anchors.lazy.compactMap({
+            NativeMathGlyphSelection.map(glyphsForMapping, on: page, anchoredAt: $0,
+                                         allowingInterveningWhitespace: true)
+        }).first,
               mapping.entries.count == ordered.count,
               mapping.entries.enumerated().allSatisfy({ $0.offset == $0.element.glyphIndex }) else {
             return nil
@@ -170,7 +176,8 @@ struct NativeFractionReadingSelection {
                                    sourceText: String,
                                    readingResult: MathReadingResult?,
                                    on page: PDFPage) -> Detail? {
-        guard let merged = NativeMathGlyphSelection.merge(entries, on: page) else { return nil }
+        guard let merged = NativeMathGlyphSelection.merge(entries, on: page, allowingInterveningWhitespace: true)
+        else { return nil }
         return Detail(scope: scope,
                       selection: merged.selection,
                       sourceRanges: merged.ranges,

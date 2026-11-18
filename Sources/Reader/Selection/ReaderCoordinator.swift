@@ -3445,7 +3445,7 @@ final class ReaderCoordinator: NSObject {
         return UIGraphicsImageRenderer(size: crop.size, format: format).image { renderer in
             let context = renderer.cgContext
             context.setFillColor(UIColor.white.cgColor)
-            context.fill(CGRect(origin: .zero, size: crop.size))
+            context.fill(CGRect(origin: .zero, size: crop.size).insetBy(dx: -1, dy: -1))
             context.translateBy(x: -crop.minX, y: crop.maxY)
             context.scaleBy(x: 1, y: -1)
             context.drawPDFPage(pageRef)
