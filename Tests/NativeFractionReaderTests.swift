@@ -155,7 +155,7 @@ final class NativeFractionReaderTests: XCTestCase {
     private func visibleRanges(of selection: PDFSelection, on page: PDFPage, source: NSString) -> [NSRange] {
         (0..<selection.numberOfTextRanges(on: page)).flatMap { index in
             let range = selection.range(at: index, on: page)
-            return (range.location..<NSMaxRange(range)).compactMap { offset in
+            return (range.location..<NSMaxRange(range)).compactMap { offset -> NSRange? in
                 let character = source.rangeOfComposedCharacterSequence(at: offset)
                 guard character.location == offset,
                       !source.substring(with: character).allSatisfy(\.isWhitespace) else { return nil }
