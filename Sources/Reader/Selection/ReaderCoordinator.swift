@@ -1057,26 +1057,7 @@ final class ReaderCoordinator: NSObject {
             // glyph press proceed; repeated presses on the current glyph still
             // yield to the normal handle drag.
             if handleHitTest(viewPoint) {
-                let isFractionSibling: Bool = {
-                    guard let active = activeNativeMathParent,
-                          active.page === hit.page,
-                          let fractionTarget,
-                          case .fraction(let identity, _, _, let selectedDetail) = active.kind,
-                          identity == fractionTarget.identity else { return false }
-                    return SelectionGeometry.identity(for: selectedDetail.selection)
-                        != SelectionGeometry.identity(for: fractionTarget.detail.selection)
-                }()
-                let isLinearSibling: Bool = {
-                    guard let active = activeNativeMathParent,
-                          active.page === hit.page,
-                          let target = nativeMathTarget,
-                          case .line(let sourceRange, let identity, let selectedRange) = active.kind else { return false }
-                    return NSEqualRanges(sourceRange, target.lineRange)
-                        && identity == target.lineIdentity
-                        && !NSEqualRanges(selectedRange, target.glyphRange)
-                }()
-                let isMathSibling = isFractionSibling || isLinearSibling
-                guard isMathSibling else {
+                guard mathDetailTakesPriority(on: hit.page, line: nativeMathTarget, fraction: fractionTarget) else {
                     DiagLog.log("press.began(\(kind)): on handle → yield")
                     return
                 }
@@ -3963,6 +3944,21 @@ final class ReaderCoordinator: NSObject {
         }
         return "finger"
     }
+
+    private func mathDetailTakesPriority(on page: PDFPage,
+                                         line: SelectionGeometry.NativeMathPressTarget?,
+                                         fraction: NativeFractionPressTarget?) -> Bool {
+        guard let active = activeNativeMathParent, active.page === page else { return false }
+        switch active.kind {
+        case .line(let range, let identity, let selectedRange):
+            guard let line else { return false }
+            return NSEqualRanges(range, line.lineRange) && identity == line.lineIdentity
+                && !NSEqualRanges(selectedRange, line.glyphRange)
+        case .fraction(let identity, _, _, let detail):
+            guard let fraction, fraction.identity == identity else { return false }
+            return detail.sourceRanges != fraction.detail.sourceRanges
+        }
+    }
 }
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
@@ -3983,7 +3979,14 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         }
         // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
-        if !multiTap, let pdfView, handleHitTest(touch.location(in:pdfView)) { return false }
+        if !multiTap, let pdfView, handleHitTest(touch.location(in: pdfView)) {
+            guard gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
+                  activeNativeMathParent != nil,
+                  let hit = pageHit(touch.location(in: pdfView)) else { return false }
+            let fraction = nativeFractionPressTarget(on: hit.page, at: hit.point)
+            let line = fraction == nil ? nativeMathPressTarget(on: hit.page, at: hit.point) : nil
+            guard mathDetailTakesPriority(on: hit.page, line: line, fraction: fraction) else { return false }
+        }
         if gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
            let pdfView {
             let touchPoint = touch.location(in: pdfView)

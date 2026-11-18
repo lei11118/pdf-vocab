@@ -144,7 +144,9 @@ final class PDFTextLayout {
                 }
             }
             CGPDFOperatorTableSetCallback(table,"S") { _,p in PDFTextLayout.owner(p)?.strokePath() }
-            for op in ["s","f","F","f*","B","B*","b","b*","n"] {
+            // Closing and stroking a single straight segment still paints the same rule.
+            CGPDFOperatorTableSetCallback(table,"s") { _,p in PDFTextLayout.owner(p)?.strokePath() }
+            for op in ["f","F","f*","B","B*","b","b*","n"] {
                 op.withCString { name in
                     CGPDFOperatorTableSetCallback(table,name) { _,p in PDFTextLayout.owner(p)?.discardPath() }
                 }

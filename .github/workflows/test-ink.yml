@@ -53,12 +53,18 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: llama-simulator
         with:
           path: Packages/TranslationRuntime/llama.xcframework
           key: llama-ios-401563f-xcode-26.6
       - name: Prepare simulator translation runtime
         run: bash scripts/prepare_translation_runtime.sh
+      - uses: actions/cache/save@v4
+        if: steps.llama-simulator.outputs.cache-hit != 'true'
+        with:
+          path: Packages/TranslationRuntime/llama.xcframework
+          key: llama-ios-401563f-xcode-26.6
       - name: Run iPad regression tests
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c '

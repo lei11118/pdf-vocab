@@ -322,7 +322,6 @@ struct NativeFractionLayout {
         let maximumVerticalDistance = medianHeight * 1.05 + rule.width * 1.5
         guard signedCenter >= minimumSideDistance,
               signedCenter <= maximumVerticalDistance,
-              abs(baselineY - rule.y) <= maximumVerticalDistance,
               abs(baselineY - centerY) <= medianHeight * 0.8 + rule.width else { return nil }
 
         let rowWidth = rect.width
