@@ -1327,6 +1327,8 @@ struct ReaderView: View {
         }
     }
 
+    // See the Swift 6.3.3 ownership workaround on receiveSelection.
+    @_optimize(none)
     private func translateSelection(_ text: String) {
         if let info = currentSelectionInfo,
            info.text == text || info.mathReadingResult?.sourceText == text,

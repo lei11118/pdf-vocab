@@ -2,6 +2,7 @@
 """Convert pinned Hy-MT2 weights to a stateful 4-bit Core ML lab candidate."""
 
 import argparse
+import gc
 from pathlib import Path
 
 
@@ -103,6 +104,8 @@ def convert(output: Path, smoke: bool) -> None:
                 for name in ("keys", "values")],
         skip_model_load=True,
     )
+    del traced, decoder, upstream
+    gc.collect()
     config = ct.optimize.coreml.OptimizationConfig(
         global_config=ct.optimize.coreml.OpLinearQuantizerConfig(
             mode="linear_symmetric", dtype="int4", granularity="per_block", block_size=32,
