@@ -6,6 +6,7 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 .swiftpm/
+Packages/TranslationRuntime/llama.xcframework/
 
 # —— 生成的大文件(CI 里重新生成)——
 Resources/ecdict.sqlite

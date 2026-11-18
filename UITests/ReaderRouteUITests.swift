@@ -826,6 +826,7 @@ extension ReaderRouteUITests {
             return
         }
         XCTAssertEqual(mathSource.label, expectedWhole)
+        XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.waitForExistence(timeout: 10))
         let mathStatus = app.staticTexts["math-card-status"].firstMatch
         XCTAssertTrue(mathStatus.waitForExistence(timeout: 10))
         XCTAssertTrue(mathStatus.label.contains("已解析"), "The whole fraction has a complete parsed math result")

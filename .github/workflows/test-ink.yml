@@ -53,6 +53,12 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
+      - uses: actions/cache@v4
+        with:
+          path: Packages/TranslationRuntime/llama.xcframework
+          key: llama-ios-401563f-xcode-26.6
+      - name: Prepare simulator translation runtime
+        run: bash scripts/prepare_translation_runtime.sh
       - name: Run iPad regression tests
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c '
@@ -96,6 +102,7 @@ jobs:
             fi
             TEST_ARGS=(
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryAndMath
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditNativeFractionPressSelectsWholeThenExactLeaf
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR
             )
             XCODEBUILD_ARGS=(-parallel-testing-enabled NO)
