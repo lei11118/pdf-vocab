@@ -128,6 +128,31 @@ final class NativeFractionLayoutTests: XCTestCase {
         XCTAssertEqual(fractions.count, 1)
     }
 
+    func testNestedFractionSelectsOuterRowInnerSubrowAndLeaf() throws {
+        let outer = PDFTextLayout.HorizontalRule(start: CGPoint(x: 18, y: 100),
+                                                 end: CGPoint(x: 34, y: 100), lineWidth: 0.6)
+        let inner = PDFTextLayout.HorizontalRule(start: CGPoint(x: 22, y: 107),
+                                                 end: CGPoint(x: 30, y: 107), lineWidth: 0.5)
+        let glyphs = [
+            glyph("7", x: 23, y: 108, width: 2, height: 4, baselineY: 108.7),
+            glyph("3", x: 27, y: 108, width: 2, height: 4, baselineY: 108.7),
+            glyph("9", x: 24, y: 102, width: 4, height: 4, baselineY: 104),
+            glyph("x", x: 23.5, y: 94, width: 5, height: 6, baselineY: 96),
+        ]
+        let fractions = NativeFractionLayout.detect(
+            in: PDFTextLayout.PageScan(glyphs: glyphs, horizontalRules: [outer, inner]))
+        XCTAssertEqual(fractions.count, 1)
+        let whole = try XCTUnwrap(fractions.first)
+        XCTAssertEqual(whole.orderedGlyphs.map(\.sourceIndex), [0, 1, 2, 3])
+        XCTAssertNotNil(whole.numerator.nestedFraction)
+        guard case .row(.numerator)? = whole.hitTest(CGPoint(x: 26, y: 107)),
+              case .subrow(let indices)? = whole.hitTest(CGPoint(x: 26, y: 110)),
+              case .glyph(1, .numerator)? = whole.hitTest(CGPoint(x: 28, y: 110)) else {
+            return XCTFail("Expected the nested fraction, its numerator and its exact glyph")
+        }
+        XCTAssertEqual(indices, [0, 1])
+    }
+
     private func rule(x: CGFloat, length: CGFloat) -> PDFTextLayout.HorizontalRule {
         PDFTextLayout.HorizontalRule(start: CGPoint(x: x, y: barY),
                                      end: CGPoint(x: x + length, y: barY),

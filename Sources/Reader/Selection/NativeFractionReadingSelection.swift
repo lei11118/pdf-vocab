@@ -28,6 +28,7 @@ struct NativeFractionReadingSelection {
     private let numerator: Detail
     private let denominator: Detail
     private let glyphs: [GlyphDetail]
+    private let subrows: [[Int]: Detail]
 
     /// Maps all fraction glyphs from a verified glyph midpoint, then checks that
     /// both rows map back to exact source coverage before parsing the fraction.
@@ -52,12 +53,10 @@ struct NativeFractionReadingSelection {
               numeratorCount < mapping.entries.count else { return nil }
         let numeratorEntries = Array(mapping.entries.prefix(numeratorCount))
         let denominatorEntries = Array(mapping.entries.dropFirst(numeratorCount))
-        let numeratorText = fraction.numerator.glyphs.map { $0.glyph.text }.joined()
-        let denominatorText = fraction.denominator.glyphs.map { $0.glyph.text }.joined()
-        guard !numeratorText.isEmpty,
-              !denominatorText.isEmpty,
-              let numeratorInput = safeParserText(numeratorText),
-              let denominatorInput = safeParserText(denominatorText) else { return nil }
+        let numeratorText = surface(of: fraction.numerator)
+        let denominatorText = surface(of: fraction.denominator)
+        guard let numeratorInput = parserInput(for: fraction.numerator),
+              let denominatorInput = parserInput(for: fraction.denominator) else { return nil }
 
         let parserInput = "\\frac{\(numeratorInput)}{\(denominatorInput)}"
         guard let parsed = MathReadingService.resolve(parserInput),
@@ -105,10 +104,26 @@ struct NativeFractionReadingSelection {
                                             detail: detail))
         }
 
+        let entriesByIndex = Dictionary(uniqueKeysWithValues: zip(ordered.map(\.sourceIndex), mapping.entries))
+        var subrows: [[Int]: Detail] = [:]
+        for (position, row) in [(NativeFractionLayout.RowPosition.numerator, fraction.numerator),
+                                (.denominator, fraction.denominator)] {
+            for nested in descendants(of: row) {
+                let indices = nested.glyphs.map(\.sourceIndex)
+                let entries = indices.compactMap { entriesByIndex[$0] }
+                guard entries.count == indices.count, let parser = parserInput(for: nested) else { return nil }
+                let text = surface(of: nested)
+                guard let detail = makeDetail(scope: .row(position), entries: entries,
+                                              sourceText: text, readingResult: rowResult(sourceText: text, parserText: parser),
+                                              on: page) else { return nil }
+                subrows[indices] = detail
+            }
+        }
         return NativeFractionReadingSelection(whole: whole,
                                               numerator: numeratorDetail,
                                               denominator: denominatorDetail,
-                                              glyphs: glyphDetails)
+                                              glyphs: glyphDetails,
+                                              subrows: subrows)
     }
 
     /// Preserves the distinction needed by the reader: full fraction, one row,
@@ -121,11 +136,33 @@ struct NativeFractionReadingSelection {
             return numerator
         case .row(.denominator):
             return denominator
+        case .subrow(let indices):
+            return subrows[indices]
         case .glyph(let sourceIndex, let row):
             return glyphs.first {
                 $0.row == row && $0.sourceIndex == sourceIndex
             }?.detail
         }
+    }
+
+    private static func descendants(of row: NativeFractionLayout.Row) -> [NativeFractionLayout.Row] {
+        guard let nested = row.nestedFraction else { return [] }
+        return [nested.numerator, nested.denominator]
+            + descendants(of: nested.numerator) + descendants(of: nested.denominator)
+    }
+
+    private static func surface(of row: NativeFractionLayout.Row) -> String {
+        if let nested = row.nestedFraction {
+            return "(\(surface(of: nested.numerator)))/(\(surface(of: nested.denominator)))"
+        }
+        return row.glyphs.map { $0.glyph.text }.joined()
+    }
+
+    private static func parserInput(for row: NativeFractionLayout.Row) -> String? {
+        guard let nested = row.nestedFraction else { return safeParserText(surface(of: row)) }
+        guard let numerator = parserInput(for: nested.numerator),
+              let denominator = parserInput(for: nested.denominator) else { return nil }
+        return "\\frac{\(numerator)}{\(denominator)}"
     }
 
     private static func makeDetail(scope: Scope,

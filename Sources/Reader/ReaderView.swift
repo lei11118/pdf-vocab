@@ -1191,61 +1191,7 @@ struct ReaderView: View {
                         currentPage = page
                         scheduleSave()
                     },
-                    onSelectionInfo: { info in
-                        translationPrefetch?.cancel()
-                        // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
-                        guard let info, !info.text.isEmpty else {
-                            currentSelectionInfo = nil
-                            cardContent = nil
-                            translationRequest = nil
-                            return
-                        }
-                        if let contextual = info.contextual {
-                            guard contextReadingEnabled,
-                                  contextual.generation == contextReadingGeneration else {
-                                currentSelectionInfo = nil
-                                return
-                            }
-                        }
-                        currentSelectionInfo = info
-                        let contextualIsCurrent = info.contextual == nil
-                            || info.contextual?.generation == contextReadingGeneration
-                        if contextReadingEnabled,
-                           mathReadingEnabled,
-                           contextualIsCurrent,
-                           let math = info.mathReadingResult {
-                            translationRequest = nil
-                            cardContent = .math(math)
-                            return
-                        }
-                        let mathSourceText = info.contextual?.displaySurface ?? info.text
-                        if let math = MathCardRouting.resolve(
-                            sourceText: mathSourceText,
-                            contextReadingEnabled: contextReadingEnabled,
-                            mathEnabled: mathReadingEnabled,
-                            contextualSelectionIsCurrent: contextualIsCurrent,
-                            isMathDetail: info.mathDetail) {
-                            translationRequest = nil
-                            cardContent = .math(math)
-                            return
-                        }
-                        if let contextual = info.contextual {
-                            if shouldShowContextualCard(contextual) {
-                                translationRequest = nil
-                                cardContent = .contextual(contextual)
-                                if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
-                                return
-                            }
-                        }
-                        if info.wordCount <= 1, !info.primaryTerm.isEmpty {
-                            if cardContent != .word(info.primaryTerm) { translationRequest = nil }
-                            cardContent = .word(info.primaryTerm)
-                            autoSpeak(info.primaryTerm)
-                        } else {
-                            if cardContent != .sentence(info.text,info.wordCount) { translationRequest = nil }
-                            cardContent = .sentence(info.text, info.wordCount)
-                        }
-                    },
+                    onSelectionInfo: receiveSelection,
                     onReadingTick: {
                         scheduleSave()
                         scheduleTranslationPrefetch()
@@ -1254,44 +1200,7 @@ struct ReaderView: View {
                         cancelPendingOCRCharacterRefinement()
                         saveProgressNow()
                     },
-                    onTranslate: { text in
-                        if let info = currentSelectionInfo,
-                           info.text == text || info.mathReadingResult?.sourceText == text,
-                           contextReadingEnabled,
-                           mathReadingEnabled,
-                           (info.contextual == nil
-                                || info.contextual?.generation == contextReadingGeneration),
-                           let math = info.mathReadingResult {
-                            translationRequest = nil
-                            cardContent = .math(math)
-                            return
-                        }
-                        if let math = MathCardRouting.resolve(
-                            sourceText: text,
-                            contextReadingEnabled: contextReadingEnabled,
-                            mathEnabled: mathReadingEnabled) {
-                            translationRequest = nil
-                            cardContent = .math(math)
-                            return
-                        }
-                        if let info = currentSelectionInfo,
-                           info.text == text,
-                           let contextual = info.contextual,
-                           contextReadingEnabled,
-                           contextual.generation == contextReadingGeneration,
-                           shouldShowContextualCard(contextual) {
-                            translationRequest = nil
-                            cardContent = .contextual(contextual)
-                            return
-                        }
-                        let count = WordPicker.countWords(in:text)
-                        if SelectionGeometry.isSingleWordText(text) {
-                            cardContent = .word(text)
-                        } else {
-                            cardContent = .sentence(text,count)
-                            translationRequest = SentenceTranslationRequest(text:text)
-                        }
-                    }
+                    onTranslate: translateSelection
                 )
                 .id(pdfLoadAttempt)
             } else {
@@ -1362,6 +1271,101 @@ struct ReaderView: View {
         .task(id: documentOCRTaskKey, priority: .utility) {
             guard let key = documentOCRTaskKey else { return }
             await runOCROnce(for: key)
+        }
+    }
+
+    private func receiveSelection(_ info: SelectionInfo?) {
+        translationPrefetch?.cancel()
+        // v0.6.4:点空白清选区 → 编辑栏与弹窗一起消失(用户要求);选区变化则更新弹窗内容
+        guard let info, !info.text.isEmpty else {
+            currentSelectionInfo = nil
+            cardContent = nil
+            translationRequest = nil
+            return
+        }
+        if let contextual = info.contextual {
+            guard contextReadingEnabled,
+                  contextual.generation == contextReadingGeneration else {
+                currentSelectionInfo = nil
+                return
+            }
+        }
+        currentSelectionInfo = info
+        let contextualIsCurrent = info.contextual == nil
+            || info.contextual?.generation == contextReadingGeneration
+        if contextReadingEnabled,
+           mathReadingEnabled,
+           contextualIsCurrent,
+           let math = info.mathReadingResult {
+            translationRequest = nil
+            cardContent = .math(math)
+            return
+        }
+        let mathSourceText = info.contextual?.displaySurface ?? info.text
+        if let math = MathCardRouting.resolve(
+            sourceText: mathSourceText,
+            contextReadingEnabled: contextReadingEnabled,
+            mathEnabled: mathReadingEnabled,
+            contextualSelectionIsCurrent: contextualIsCurrent,
+            isMathDetail: info.mathDetail) {
+            translationRequest = nil
+            cardContent = .math(math)
+            return
+        }
+        if let contextual = info.contextual {
+            if shouldShowContextualCard(contextual) {
+                translationRequest = nil
+                cardContent = .contextual(contextual)
+                if !info.primaryTerm.isEmpty { autoSpeak(info.primaryTerm) }
+                return
+            }
+        }
+        if info.wordCount <= 1, !info.primaryTerm.isEmpty {
+            if cardContent != .word(info.primaryTerm) { translationRequest = nil }
+            cardContent = .word(info.primaryTerm)
+            autoSpeak(info.primaryTerm)
+        } else {
+            if cardContent != .sentence(info.text,info.wordCount) { translationRequest = nil }
+            cardContent = .sentence(info.text, info.wordCount)
+        }
+    }
+
+    private func translateSelection(_ text: String) {
+        if let info = currentSelectionInfo,
+           info.text == text || info.mathReadingResult?.sourceText == text,
+           contextReadingEnabled,
+           mathReadingEnabled,
+           (info.contextual == nil
+                || info.contextual?.generation == contextReadingGeneration),
+           let math = info.mathReadingResult {
+            translationRequest = nil
+            cardContent = .math(math)
+            return
+        }
+        if let math = MathCardRouting.resolve(
+            sourceText: text,
+            contextReadingEnabled: contextReadingEnabled,
+            mathEnabled: mathReadingEnabled) {
+            translationRequest = nil
+            cardContent = .math(math)
+            return
+        }
+        if let info = currentSelectionInfo,
+           info.text == text,
+           let contextual = info.contextual,
+           contextReadingEnabled,
+           contextual.generation == contextReadingGeneration,
+           shouldShowContextualCard(contextual) {
+            translationRequest = nil
+            cardContent = .contextual(contextual)
+            return
+        }
+        let count = WordPicker.countWords(in:text)
+        if SelectionGeometry.isSingleWordText(text) {
+            cardContent = .word(text)
+        } else {
+            cardContent = .sentence(text,count)
+            translationRequest = SentenceTranslationRequest(text:text)
         }
     }
 

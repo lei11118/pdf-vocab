@@ -1,7 +1,7 @@
 import UIKit
 import PDFKit
 
-/// A conservative geometry-only candidate for a simple, vertically stacked fraction.
+/// A conservative geometry-only candidate for vertically stacked fractions.
 /// It preserves PDFTextLayout's source glyphs and indices; it does not infer math meaning.
 struct NativeFractionLayout {
     enum RowPosition: Equatable {
@@ -15,14 +15,23 @@ struct NativeFractionLayout {
     }
 
     struct Row {
+        indirect enum Structure { case fraction(Fraction) }
+
         let region: CGRect
         /// Original glyphs ordered left-to-right, with their positions in the scanned page.
         let glyphs: [GlyphReference]
+        var structure: Structure? = nil
+
+        var nestedFraction: Fraction? {
+            guard case .fraction(let fraction) = structure else { return nil }
+            return fraction
+        }
     }
 
     enum Hit {
         case glyph(sourceIndex: Int, row: RowPosition)
         case row(row: RowPosition)
+        case subrow(indices: [Int])
         case rule
         case fraction
     }
@@ -57,6 +66,16 @@ struct NativeFractionLayout {
             }
 
             guard row.region.contains(pagePoint) else { return .fraction }
+            if let child = row.nestedFraction, let childHit = child.hitTest(pagePoint) {
+                switch childHit {
+                case .rule, .fraction: return .row(row: position)
+                case .glyph(let sourceIndex, _): return .glyph(sourceIndex: sourceIndex, row: position)
+                case .row(let childPosition):
+                    let childRow = childPosition == .numerator ? child.numerator : child.denominator
+                    return .subrow(indices: childRow.glyphs.map(\.sourceIndex))
+                case .subrow: return childHit
+                }
+            }
             let matchingGlyphs = row.glyphs.filter { $0.glyph.rect.contains(pagePoint) }
             if matchingGlyphs.count == 1, let glyph = matchingGlyphs.first {
                 return .glyph(sourceIndex: glyph.sourceIndex, row: position)
@@ -81,7 +100,7 @@ struct NativeFractionLayout {
     private static let maximumHorizontalSliceGlyphs = 4_096
     private static let allowedSymbols = Set("+-−×·÷=*/^_(),.[]{}<>≤≥≠≈±")
 
-    /// Finds only isolated horizontal rules with one unambiguous, compact row on each side.
+    /// Narrow rules are resolved first so a verified child can occupy a parent row.
     static func detect(in scan: PDFTextLayout.PageScan) -> [Fraction] {
         let glyphs = scan.glyphs.enumerated().compactMap { index, glyph -> PositionedGlyph? in
             guard validRect(glyph.rect),
@@ -91,16 +110,13 @@ struct NativeFractionLayout {
         }.sorted { $0.center.x < $1.center.x }
 
         var candidates: [Fraction] = []
-        for rule in scan.horizontalRules {
-            guard let geometry = ruleGeometry(rule) else { continue }
+        let rules = scan.horizontalRules.compactMap { rule in ruleGeometry(rule).map { (rule, $0) } }
+            .sorted { $0.1.length < $1.1.length }
+        for (rule, geometry) in rules {
             guard let localGlyphs = nearbyGlyphs(glyphs, rule: geometry) else { continue }
-            guard let numerator = rowCandidates(localGlyphs, side: 1, rule: geometry),
-                  let denominator = rowCandidates(localGlyphs, side: -1, rule: geometry),
-                  numerator.count == 1,
-                  denominator.count == 1 else { continue }
-
-            let top = numerator[0].row
-            let bottom = denominator[0].row
+            guard let top = resolveRow(localGlyphs, side: 1, rule: geometry, candidates: candidates),
+                  let bottom = resolveRow(localGlyphs, side: -1, rule: geometry, candidates: candidates)
+            else { continue }
             let usedIndices = Set(top.glyphs.map(\.sourceIndex))
             guard bottom.glyphs.allSatisfy({ !usedIndices.contains($0.sourceIndex) }) else { continue }
 
@@ -113,6 +129,10 @@ struct NativeFractionLayout {
                                        ruleY: geometry.y))
         }
 
+        let consumedRules = candidates.flatMap {
+            [$0.numerator.nestedFraction?.ruleRegion, $0.denominator.nestedFraction?.ruleRegion].compactMap { $0 }
+        }
+        candidates.removeAll { consumedRules.contains($0.ruleRegion) }
         candidates.sort {
             let left = ($0.rule.start.x + $0.rule.end.x) * 0.5
             let right = ($1.rule.start.x + $1.rule.end.x) * 0.5
@@ -129,6 +149,29 @@ struct NativeFractionLayout {
         return candidates.filter { candidate in
             candidate.orderedGlyphs.allSatisfy { claimCounts[$0.sourceIndex] == 1 }
         }
+    }
+
+    private static func resolveRow(_ glyphs: [PositionedGlyph], side: CGFloat, rule: RuleGeometry,
+                                   candidates: [Fraction]) -> Row? {
+        guard let ordinary = rowCandidates(glyphs, side: side, rule: rule) else { return nil }
+        let children = candidates.filter { child in
+            let region = child.region
+            let barWidth = child.ruleRegion.width
+            let gap = side > 0 ? region.minY - rule.rect.maxY : rule.rect.minY - region.maxY
+            return gap >= 0 && gap <= min(region.height * 0.48, rule.length * 0.5)
+                && barWidth >= rule.length * 0.30 && barWidth <= rule.length * 0.83
+                && abs(region.midX - rule.x) <= rule.length * 0.18
+                && region.minX >= rule.minX - rule.width && region.maxX <= rule.maxX + rule.width
+        }
+        if children.count == 1, let child = children.first {
+            let indices = Set(child.orderedGlyphs.map(\.sourceIndex))
+            guard ordinary.allSatisfy({ $0.row.glyphs.allSatisfy { indices.contains($0.sourceIndex) } }) else {
+                return nil
+            }
+            return Row(region: child.region, glyphs: child.orderedGlyphs, structure: .fraction(child))
+        }
+        guard children.isEmpty, ordinary.count == 1 else { return nil }
+        return ordinary.first?.row
     }
 
     private struct RuleGeometry {
