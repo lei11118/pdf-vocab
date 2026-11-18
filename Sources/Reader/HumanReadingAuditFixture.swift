@@ -8,8 +8,9 @@ enum HumanReadingAuditFixture {
     private static let pageBounds = CGRect(x: 0, y: 0, width: 600, height: 800)
 
     static func importFixtures(into store: DocumentStore) throws {
-        UserDefaults.standard.set(false, forKey: FeatureFlags.contextReadingEnabledKey)
-        UserDefaults.standard.set(false, forKey: FeatureFlags.mathEnabledKey)
+        let startWithMathEnabled = ProcessInfo.processInfo.arguments.contains("--human-reading-audit-start-with-math")
+        UserDefaults.standard.set(startWithMathEnabled, forKey: FeatureFlags.contextReadingEnabledKey)
+        UserDefaults.standard.set(startWithMathEnabled, forKey: FeatureFlags.mathEnabledKey)
         UserDefaults.standard.set(false, forKey: "restoreWritingState")
         UserDefaults.standard.set("vertical", forKey: "readerLayoutMode")
         for key in ["readerCardX", "readerCardY", "readerCardW", "readerCardH"] {

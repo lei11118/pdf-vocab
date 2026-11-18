@@ -742,7 +742,10 @@ extension ReaderRouteUITests {
 
     @objc func testHumanReadingAuditNativeFractionPressSelectsWholeThenExactLeaf() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = [
+            "--human-reading-audit", "--human-reading-audit-start-with-math",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+        ]
         app.launch()
 
         let nativeDocument = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
@@ -765,11 +768,6 @@ extension ReaderRouteUITests {
             attachAuditDiagnostics("native-fraction-geometry-unavailable", app: app, observer: observer)
             return
         }
-
-        openReaderSettings(app)
-        guard setSwitch(app.switches["context-reading-toggle"], to: true, in: app),
-              setSwitch(app.switches["math-reading-toggle"], to: true, in: app) else { return }
-        closeReaderPanel(in: app, title: "设置")
 
         let ready = waitForAudit(observer, timeout: 15) { snapshot in
             guard (snapshot["page"] as? Int) == 0,
