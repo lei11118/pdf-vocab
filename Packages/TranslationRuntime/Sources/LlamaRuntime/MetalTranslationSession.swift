@@ -10,13 +10,19 @@ public final class MetalTranslationSession: TranslationInferenceSession {
         case model, context, input, inference, output
     }
 
+    public enum PromptStyle: Sendable, Equatable {
+        case hyMT2
+        case qwen35ShortGloss
+    }
+
     static let initialize: Void = llama_backend_init()
     private let model: OpaquePointer
     private let context: OpaquePointer
     private let vocabulary: OpaquePointer
+    private let promptStyle: PromptStyle
     static let contextLength = 1536
 
-    public init(modelURL: URL) throws {
+    public init(modelURL: URL, promptStyle: PromptStyle = .hyMT2) throws {
         _ = Self.initialize
         var modelParameters = llama_model_default_params()
         modelParameters.n_gpu_layers = -1
@@ -36,6 +42,7 @@ public final class MetalTranslationSession: TranslationInferenceSession {
         self.model = model
         self.vocabulary = vocabulary
         self.context = context
+        self.promptStyle = promptStyle
     }
 
     deinit {
@@ -45,10 +52,10 @@ public final class MetalTranslationSession: TranslationInferenceSession {
 
     public func generate(_ instruction: String, maximumOutput: Int) throws -> String {
         try Task.checkCancellation()
-        var tokens = try Self.tokenize(instruction, vocabulary: vocabulary, maximumOutput: maximumOutput)
+        var tokens = try Self.tokenize(instruction, vocabulary: vocabulary,
+                                       maximumOutput: maximumOutput, style: promptStyle)
         let count = Int32(tokens.count)
-        guard
-              let sampler = llama_sampler_init_greedy() else { throw Failure.input }
+        let sampler = try makeSampler()
         defer { llama_sampler_free(sampler) }
         llama_memory_clear(llama_get_memory(context), false)
         let status = tokens.withUnsafeMutableBufferPointer {
@@ -74,10 +81,40 @@ public final class MetalTranslationSession: TranslationInferenceSession {
         throw Failure.output
     }
 
+    private func makeSampler() throws -> UnsafeMutablePointer<llama_sampler> {
+        guard let greedy = llama_sampler_init_greedy() else { throw Failure.input }
+        guard promptStyle == .qwen35ShortGloss else { return greedy }
+        guard let chain = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
+            llama_sampler_free(greedy)
+            throw Failure.input
+        }
+        guard let grammar = Self.shortGlossGrammar.withCString({
+            llama_sampler_init_grammar(vocabulary, $0, "root")
+        }) else {
+            llama_sampler_free(greedy)
+            llama_sampler_free(chain)
+            throw Failure.input
+        }
+        llama_sampler_chain_add(chain, grammar)
+        llama_sampler_chain_add(chain, greedy)
+        return chain
+    }
+
+    private static let shortGlossGrammar = #"""
+    root ::= ws "{" ws "\"meaning\"" ws ":" ws string ws "}" ws
+    ws ::= [ \t]*
+    string ::= "\"" ([^"\\\x00-\x1F] | "\\" ["\\/bfnrt] | "\\u" [0-9a-fA-F]{4})* "\""
+    """#
+
     static func tokenize(_ instruction: String, vocabulary: OpaquePointer,
-                         maximumOutput: Int) throws -> [llama_token] {
-        // Single-user-turn form of the pinned Hy-MT2 chat template.
-        let prompt = "<｜hy_begin▁of▁sentence｜><｜hy_User｜>\(instruction)<｜hy_Assistant｜>"
+                         maximumOutput: Int, style: PromptStyle = .hyMT2) throws -> [llama_token] {
+        let prompt: String
+        switch style {
+        case .hyMT2:
+            prompt = "<｜hy_begin▁of▁sentence｜><｜hy_User｜>\(instruction)<｜hy_Assistant｜>"
+        case .qwen35ShortGloss:
+            prompt = "<|im_start|>user\n\(instruction)<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        }
         let capacity = Int32(contextLength)
         var tokens = [llama_token](repeating: 0, count: contextLength)
         let count = prompt.withCString {

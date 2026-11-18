@@ -56,16 +56,45 @@ struct LocalTranslationInput: Hashable, Sendable {
         """
     }
 
-    func decode(_ output: String) throws -> ContextualTranslationCacheHit {
+    func qwenPrompt() throws -> String {
+        guard let end = span.endExclusive,
+              let prefix = UTF16Span(location: 0, length: span.location).substring(in: text),
+              let suffix = UTF16Span(location: end, length: text.utf16.count - end).substring(in: text)
+        else { throw LocalContextTranslation.Failure.output }
+
+        func escape(_ value: String) -> String {
+            value.replacingOccurrences(of: "<", with: "＜")
+                .replacingOccurrences(of: "【", with: "［")
+                .replacingOccurrences(of: "】", with: "］")
+        }
+        let marked = "\(escape(prefix))【\(escape(source))】\(escape(suffix))"
+        return """
+        任务：根据上下文，只译【】中的词或词组。省略句中其他字词。使用最短的自然简体中文释义。没有独立译义填“无”。
+        原文：The 【pitch】 of the note was unusually high.
+        输出：{"meaning":"音高"}
+        原文：They 【pitched】 their tent next to the lake.
+        输出：{"meaning":"搭建"}
+        原文：This is the device 【which】 we ordered yesterday.
+        输出：{"meaning":"无"}
+        原文：\(marked)
+        输出：
+        """
+    }
+
+    func decode(_ output: String, requiresSourceOffsets: Bool = true) throws -> ContextualTranslationCacheHit {
         struct Output: Decodable {
-            let start: Int
-            let count: Int
+            let start: Int?
+            let count: Int?
             let meaning: String
         }
         guard output.utf8.count <= 768,
-              let result = try? JSONDecoder().decode(Output.self, from: Data(output.utf8)),
-              result.start == span.location, result.count == span.length else {
+              let result = try? JSONDecoder().decode(Output.self, from: Data(output.utf8)) else {
             throw LocalContextTranslation.Failure.output
+        }
+        if requiresSourceOffsets {
+            guard result.start == span.location, result.count == span.length else {
+                throw LocalContextTranslation.Failure.output
+            }
         }
         let meaning = result.meaning.trimmingCharacters(in: .whitespacesAndNewlines)
         if meaning == "无" { return .noAlignedResult }
@@ -129,10 +158,16 @@ actor LocalContextTranslation {
         let interval = Self.signposter.beginInterval("Context gloss")
         defer { Self.signposter.endInterval("Context gloss", interval) }
         let session = try session(for: model, backend: runtime)
-        let entry = DictionaryStore.shared.entry(for: input.source)
-        let professional = entry?.sources.contains(where: { $0.hasPrefix("ECDICT ·") }) == true
-        let terminology = professional ? entry?.translation.map { String($0.prefix(120)) } : nil
-        let prompt = try input.prompt(terminology: terminology)
+        let requiresSourceOffsets = model.promptStyle == .hyMT2
+        let prompt: String
+        if requiresSourceOffsets {
+            let entry = DictionaryStore.shared.entry(for: input.source)
+            let professional = entry?.sources.contains(where: { $0.hasPrefix("ECDICT ·") }) == true
+            let terminology = professional ? entry?.translation.map { String($0.prefix(120)) } : nil
+            prompt = try input.prompt(terminology: terminology)
+        } else {
+            prompt = try input.qwenPrompt()
+        }
         let output: String
         do {
             output = try session.generate(prompt, maximumOutput: 96)
@@ -142,7 +177,7 @@ actor LocalContextTranslation {
             throw Failure.inference
         }
         try Task.checkCancellation()
-        let result = try input.decode(output)
+        let result = try input.decode(output, requiresSourceOffsets: requiresSourceOffsets)
         if order.count == 384 { cache.removeValue(forKey: order.removeFirst()) }
         order.append(key)
         cache[key] = result
@@ -174,7 +209,7 @@ actor LocalContextTranslation {
             do {
                 switch backend {
                 case .metal:
-                    session = try MetalTranslationSession(modelURL: url)
+                    session = try MetalTranslationSession(modelURL: url, promptStyle: model.promptStyle)
                 case .coreMLAll, .coreMLNeural:
                     session = try CoreMLTranslationSession(compiledModel: TranslationModel.coreMLLabModel,
                                                            tokenizerGGUF: url,

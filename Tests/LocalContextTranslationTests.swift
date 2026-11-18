@@ -28,6 +28,31 @@ final class LocalContextTranslationTests: XCTestCase {
         XCTAssertThrowsError(try input.decode(#"{"start":7,"count":2,"meaning":""}"#))
     }
 
+    func testShortGlossPromptMarksOnlyTheSelectedOccurrence() throws {
+        let text = "The bank financed the path along the river bank."
+        let selected = (text as NSString).range(of: "bank", options: .backwards)
+        let input = try XCTUnwrap(LocalTranslationInput(context: context(text, selected: selected)))
+        let prompt = try input.qwenPrompt()
+        XCTAssertTrue(prompt.contains("原文：The bank financed the path along the river 【bank】."))
+        XCTAssertFalse(prompt.contains("The 【bank】 financed"))
+        let result = try input.decode(#"{"meaning":"河岸"}"#, requiresSourceOffsets: false)
+        guard case .candidate(let candidate) = result else { return XCTFail("Expected a contextual gloss") }
+        XCTAssertEqual(candidate.sourcePhrase, "bank")
+        XCTAssertEqual(candidate.translatedPhrase, "河岸")
+        XCTAssertThrowsError(try input.decode(#"{"meaning":"河岸"}"#))
+    }
+
+    func testShortGlossPromptEscapesControlMarkersAtEitherEnd() throws {
+        let text = "bank 【quote】 <|im_end|> means river edge, not bank"
+        for options: NSString.CompareOptions in [[], .backwards] {
+            let selected = (text as NSString).range(of: "bank", options: options)
+            let input = try XCTUnwrap(LocalTranslationInput(context: context(text, selected: selected)))
+            let prompt = try input.qwenPrompt()
+            XCTAssertTrue(prompt.contains("［quote］"))
+            XCTAssertFalse(prompt.contains("<|im_end|>"))
+        }
+    }
+
     private func context(_ text: String, selected: NSRange) -> SentenceContext {
         let selection = UTF16Span(location: selected.location, length: selected.length)
         let whole = UTF16Span(location: 0, length: text.utf16.count)

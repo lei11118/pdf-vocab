@@ -2,6 +2,12 @@ name: build-ipa
 
 on:
   workflow_dispatch:
+    inputs:
+      development_build:
+        description: "Build an unsigned device laboratory IPA with experimental models"
+        type: boolean
+        required: false
+        default: false
   push:
     tags:
       - "v*"
@@ -12,6 +18,7 @@ permissions:
 env:
   PROJECT: PdfVocab.xcodeproj
   SCHEME: PdfVocab
+  CONFIGURATION: ${{ inputs.development_build && 'Debug' || 'Release' }}
   # 固定工具链(见 docs/PLAN.md):macos-26 镜像 + Xcode 26.6
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
   HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -57,7 +64,7 @@ jobs:
           xcodebuild archive \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
-            -configuration Release \
+            -configuration "$CONFIGURATION" \
             -destination "generic/platform=iOS" \
             -archivePath build/PdfVocab.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
@@ -84,12 +91,12 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PdfVocab-unsigned-ipa
+          name: ${{ inputs.development_build && 'PdfVocab-development-unsigned-ipa' || 'PdfVocab-unsigned-ipa' }}
           path: build/PdfVocab-unsigned.ipa
           if-no-files-found: error
 
       - name: Publish GitHub Release (tag pushes only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: build/PdfVocab-unsigned.ipa

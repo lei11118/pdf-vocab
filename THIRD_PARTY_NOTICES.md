@@ -18,8 +18,9 @@
 | ECDICT | 离线英语词库数据(构建期裁剪生成 SQLite,数据文件本身不入库) | MIT | https://github.com/skywind3000/ECDICT |
 | llama.cpp b12499 | iPad 本地翻译推理 | MIT | https://github.com/ggml-org/llama.cpp/tree/401563f10ec60754e688cd3165c1343cf4be9642 |
 | 腾讯 Hy-MT2 GGUF | 下载后在端侧运行的英中翻译候选 | Apache-2.0 | https://github.com/Tencent-Hunyuan/Hy-MT2 |
+| 阿里云 Qwen3.5 4B，Unsloth GGUF | 端侧语境释义候选 | Apache-2.0 | https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523 |
 
-Hy-MT2 的权重由腾讯发布。应用自带模型下载目录和校验信息，权重按用户操作下载。运行库与模型许可文本见 `Resources/ThirdPartyNotices/`。
+Hy-MT2 的权重由腾讯发布。Qwen3.5 的原始权重由阿里云发布，应用引用 Unsloth 的量化版本。应用自带模型下载目录和校验信息，权重按用户操作下载。运行库与模型许可文本见 `Resources/ThirdPartyNotices/`。
 
 ## 构建期工具(不随 App 分发)
 
