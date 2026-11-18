@@ -58,8 +58,8 @@ struct NativeFractionReadingSelection {
         guard let numeratorInput = parserInput(for: fraction.numerator),
               let denominatorInput = parserInput(for: fraction.denominator) else { return nil }
 
-        let parserInput = "\\frac{\(numeratorInput)}{\(denominatorInput)}"
-        guard let parsed = MathReadingService.resolve(parserInput),
+        let formulaLatex = "\\frac{\(numeratorInput)}{\(denominatorInput)}"
+        guard let parsed = MathReadingService.resolve(formulaLatex),
               parsed.status == .parsedText,
               parsed.ast?.isComplete == true,
               isSingleCompleteFraction(parsed.ast),

@@ -2264,6 +2264,7 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log(menu.isPresented ? "tap: show menu (selection kept)" : "tap: dismiss menu (selection kept)")
                 return
             }
+            if contextReadingEnabled, !markMode, selectText(at: point, source: "singleTap") { return }
         }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
         guard !rects.isEmpty || menu.isPresented else { return }
@@ -2283,14 +2284,14 @@ final class ReaderCoordinator: NSObject {
     @discardableResult
     private func selectText(at viewPoint: CGPoint, source: String) -> Bool {
         guard let pdfView, let hit = pageHit(viewPoint) else { return false }
-        let tolerance = min(8, 6 / max(pdfView.scaleFactor, 0.1))
+        let tolerance = source == "singleTap" ? CGFloat(0.5) : min(8, 6 / max(pdfView.scaleFactor, 0.1))
         let link = hit.page.annotations.contains { VocabPDFView.hasTapAction($0) && $0.bounds.contains(hit.point) }
         let roundTrip = pdfView.convert(hit.point, from: hit.page)
         DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
             source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
             hit.point.x, hit.point.y, pdfView.scaleFactor, hypot(roundTrip.x-viewPoint.x,roundTrip.y-viewPoint.y), link ? 1 : 0))
         let wordSeed = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
-        let characterSeed = wordSeed == nil
+        let characterSeed = wordSeed == nil && source != "singleTap"
             ? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance)
             : nil
         if let selection = wordSeed ?? characterSeed {
