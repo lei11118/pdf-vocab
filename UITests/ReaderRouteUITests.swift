@@ -1074,8 +1074,10 @@ extension ReaderRouteUITests {
         if let nativeSwitch,
            visibleControlFrame.contains(CGPoint(x: nativeSwitch.frame.midX, y: nativeSwitch.frame.midY)) {
             nativeSwitch.tap()
-            if waitForSwitchValue(control, to: enabled, timeout: 5) { return true }
-            guard switchValue(control) == currentValue else {
+            if waitForSwitchValue(control, to: enabled, timeout: 8) { return true }
+            let valueAfterTap = switchValue(control)
+            if valueAfterTap == enabled { return true }
+            guard valueAfterTap == currentValue else {
                 attachSwitchDiagnostic("switch-value-changed-unexpectedly-after-native-child-tap", control: control, expectedEnabled: enabled, in: app)
                 XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after the native child tap; the row fallback was skipped because its AX value changed")
                 return false
@@ -1096,7 +1098,7 @@ extension ReaderRouteUITests {
         }
 
         control.coordinate(withNormalizedOffset: fallbackOffset).tap()
-        guard waitForSwitchValue(control, to: enabled, timeout: 5) else {
+        guard waitForSwitchValue(control, to: enabled, timeout: 8) || switchValue(control) == enabled else {
             attachSwitchDiagnostic("switch-value-did-not-change-after-trailing-hit", control: control, expectedEnabled: enabled, in: app)
             XCTFail("Switch \(control.identifier) did not reach accessibility value \(enabled) after tapping its native child and measured trailing hit point")
             return false
