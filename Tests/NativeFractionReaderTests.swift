@@ -84,7 +84,12 @@ final class NativeFractionReaderTests: XCTestCase {
         coordinator.hapticsEnabled = false
 
         let numeratorPoint = try pagePoint(for: plusRange)
-        let firstTarget = try XCTUnwrap(coordinator.nativeFractionPressTarget(on: page, at: numeratorPoint))
+        let scan = PDFTextLayout.scan(on: page)
+        let layout = try XCTUnwrap(NativeFractionLayout.detect(in: scan).first,
+                                   "Expected geometry for both rows. Rules: \(scan.horizontalRules)")
+        _ = try XCTUnwrap(NativeFractionReadingSelection.build(fraction: layout, on: page))
+        let firstTarget = try XCTUnwrap(coordinator.nativeFractionPressTarget(on: page, at: numeratorPoint),
+                                          "Expected a hit at \(numeratorPoint) inside \(layout.region)")
         guard case .whole = firstTarget.detail.scope else {
             return XCTFail("The first candidate press must select the whole fraction")
         }

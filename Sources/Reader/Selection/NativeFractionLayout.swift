@@ -117,6 +117,7 @@ struct NativeFractionLayout {
             guard let top = resolveRow(localGlyphs, side: 1, rule: geometry, candidates: candidates),
                   let bottom = resolveRow(localGlyphs, side: -1, rule: geometry, candidates: candidates)
             else { continue }
+            guard rowsArePlausiblySpaced(top, bottom, around: geometry) else { continue }
             let usedIndices = Set(top.glyphs.map(\.sourceIndex))
             guard bottom.glyphs.allSatisfy({ !usedIndices.contains($0.sourceIndex) }) else { continue }
 
@@ -244,7 +245,7 @@ struct NativeFractionLayout {
             let inHorizontalWindow = glyph.center.x >= rule.minX - xPadding
                 && glyph.center.x <= rule.maxX + xPadding
             let nearRule = signedCenter > 0
-                && signedCenter <= height * 1.05 + rule.width * 1.5
+                && signedCenter <= maximumRowDistance(for: height, around: rule)
             guard inHorizontalWindow, nearRule else { continue }
             guard nearby.count < maximumNearbyGlyphsPerRule else { return nil }
             nearby.append(glyph)
@@ -319,7 +320,7 @@ struct NativeFractionLayout {
         let baselineY = median(glyphs.map { $0.baseline.y })
         let signedCenter = (centerY - rule.y) * side
         let minimumSideDistance = max(rule.width * 0.5, medianHeight * 0.06)
-        let maximumVerticalDistance = medianHeight * 1.05 + rule.width * 1.5
+        let maximumVerticalDistance = maximumRowDistance(for: medianHeight, around: rule)
         guard signedCenter >= minimumSideDistance,
               signedCenter <= maximumVerticalDistance,
               abs(baselineY - centerY) <= medianHeight * 0.8 + rule.width else { return nil }
@@ -336,6 +337,27 @@ struct NativeFractionLayout {
         let references = ordered.map(\.reference)
         let row = Row(region: rect, glyphs: references)
         return RowCandidate(row: row)
+    }
+
+    private static func maximumRowDistance(for height: CGFloat, around rule: RuleGeometry) -> CGFloat {
+        let regularDistance = height * 1.05
+        let compactRuleLimit = max(regularDistance, rule.length * 0.72)
+        return min(height * 1.5, compactRuleLimit) + rule.width * 1.5
+    }
+
+    private static func rowsArePlausiblySpaced(_ top: Row, _ bottom: Row, around rule: RuleGeometry) -> Bool {
+        guard top.nestedFraction == nil, bottom.nestedFraction == nil else { return true }
+        let topDistance = median(top.glyphs.map { $0.glyph.rect.midY }) - rule.y
+        let bottomDistance = rule.y - median(bottom.glyphs.map { $0.glyph.rect.midY })
+        let topHeight = median(top.glyphs.map { $0.glyph.rect.height })
+        let bottomHeight = median(bottom.glyphs.map { $0.glyph.rect.height })
+        let topLimit = topHeight * 1.05 + rule.width * 1.5
+        let bottomLimit = bottomHeight * 1.05 + rule.width * 1.5
+        if topDistance <= topLimit, bottomDistance <= bottomLimit { return true }
+
+        // Widely spaced rows need to agree around the bar. Short table rules can
+        // otherwise join text that happens to be centered on just one side.
+        return abs(topDistance - bottomDistance) <= min(topHeight, bottomHeight) * 0.4
     }
 
     private static func isSimpleMathToken(_ text: String) -> Bool {

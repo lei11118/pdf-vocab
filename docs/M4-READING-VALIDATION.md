@@ -33,6 +33,6 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 
 ## CI 与截图
 
-候选提交 `07baf2d` 的未签名 IPA 构建成功。ZIP CRC、Info.plist 和 llama.framework 已在下载后检查。包大小为 56,917,877 字节，SHA-256 为 `7F1DCA5AFDF8B95BD911D23D8FF73B47123FC7E1829A664B33700468472EEB85`。 [构建与产物](https://github.com/lei11118/pdf-vocab/actions/runs/44256098915)
+候选提交 `4d38289` 的未签名 IPA 构建成功。下载后检查了产物与 IPA 的 ZIP CRC、Info.plist 和 llama.framework。版本为 0.73.0，构建 124，最低系统为 iPadOS 26.0。包大小为 56,918,331 字节，SHA-256 为 `8863F2BBF1B761806701D5E7F802EDF18B881527A76E4ACF78FAA75ED9DCED16`。 [构建与产物](https://github.com/lei11118/pdf-vocab/actions/runs/44260101351)
 
 早期候选 `ed5be66` 的完整回归通过 341/342 个单元测试和 8/10 个 UI 测试。截图确认行内公式整体选区和重绘，同时复现分式初次长按与行内公式再次长按的失败。该结果对应手势修正前的版本。 [回归与截图](https://github.com/lei11118/pdf-vocab/actions/runs/44252271013)
