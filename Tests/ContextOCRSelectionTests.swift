@@ -258,10 +258,9 @@ final class ContextOCRSelectionTests: XCTestCase {
         let base = try XCTUnwrap(source.contextualSelection(for: 0...0, generation: 1))
         XCTAssertEqual(base.sentenceContext?.kind, .layoutBlock)
         let sentence = try XCTUnwrap(base.phraseLookupContext)
-        let group = try XCTUnwrap(VerifiedPhraseGroupResolver.resolve(in: sentence,
-                                                                       selectedSourceSpans: base.sourceSpans,
-                                                                       sourceText: page.lines[0].sourceText,
-                                                                       exactPhraseExists: { $0 == "take off" }))
+        let selected = try XCTUnwrap(base.sourceSpans.first)
+        let group = try XCTUnwrap(ReadingPhraseGrouper.group(in: sentence, selected: selected,
+                                                           sourceText: page.lines[0].sourceText, allowsLineWrap: false))
 
         XCTAssertEqual(source.entryRange(for: group.sourceSpan, containing: 0), 0...1)
         let grouped = try XCTUnwrap(source.contextualSelection(for: 0...1,

@@ -1,0 +1,197 @@
+[
+  {
+    "id": "negation-past-isolated",
+    "text": "The witness didn’t recall the exact date.",
+    "selection": "didn’t",
+    "accepted": [
+      "没有",
+      "没"
+    ]
+  },
+  {
+    "id": "near-zero",
+    "text": "We could scarcely distinguish the two peaks.",
+    "selection": "scarcely",
+    "accepted": [
+      "几乎不"
+    ]
+  },
+  {
+    "id": "phrase-adverb-logic",
+    "text": "The effect is not necessarily permanent.",
+    "selection": "not necessarily",
+    "accepted": [
+      "未必",
+      "不一定",
+      "并不一定"
+    ]
+  },
+  {
+    "id": "complex-qualifier",
+    "text": "The treatment did not substantially reduce the error rate.",
+    "selection": "did not substantially reduce",
+    "accepted": [
+      "未显著降低",
+      "没有显著降低",
+      "没有大幅降低",
+      "没有明显降低",
+      "并未大幅降低",
+      "未明显降低"
+    ]
+  },
+  {
+    "id": "combined-science",
+    "text": "The normal force does no work along the horizontal track.",
+    "selection": "does no work",
+    "accepted": [
+      "不做功",
+      "没有做功",
+      "未做功"
+    ]
+  },
+  {
+    "id": "physics-different-field",
+    "text": "He left the field before the match ended.",
+    "selection": "field",
+    "accepted": [
+      "球场",
+      "赛场",
+      "场地"
+    ]
+  },
+  {
+    "id": "statistics-frequency",
+    "text": "In the experiment the mode occurred twice as often as any other value.",
+    "selection": "mode",
+    "accepted": [
+      "众数"
+    ]
+  },
+  {
+    "id": "newton-domain",
+    "text": "A small net force produced measurable acceleration.",
+    "selection": "net force",
+    "accepted": [
+      "合力",
+      "净力"
+    ]
+  },
+  {
+    "id": "math-power",
+    "text": "Write the result as a power of two.",
+    "selection": "power of two",
+    "accepted": [
+      "二的幂",
+      "2的幂",
+      "以二为底的幂",
+      "2 的幂"
+    ]
+  },
+  {
+    "id": "number-variance",
+    "text": "The pooled variance changes as more observations are added.",
+    "selection": "pooled variance",
+    "accepted": [
+      "合并方差",
+      "汇总方差",
+      "混合方差"
+    ]
+  },
+  {
+    "id": "legal-stay",
+    "text": "The injunction stayed the eviction.",
+    "selection": "stayed",
+    "accepted": [
+      "暂缓",
+      "中止",
+      "暂停"
+    ]
+  },
+  {
+    "id": "protocol",
+    "text": "The volunteers dropped out before the follow-up visit.",
+    "selection": "dropped out",
+    "accepted": [
+      "退出",
+      "中途退出",
+      "脱落"
+    ]
+  },
+  {
+    "id": "negative-ruleout",
+    "text": "The report does not completely rule out a leak.",
+    "selection": "does not completely rule out",
+    "accepted": [
+      "没有完全排除",
+      "并未完全排除",
+      "并不完全排除",
+      "未完全排除",
+      "不能完全排除"
+    ]
+  },
+  {
+    "id": "long-distance",
+    "text": "Hours after the engines stopped, the crew finally put the fire out.",
+    "selection": "put",
+    "accepted": [
+      "扑灭",
+      "熄灭"
+    ]
+  },
+  {
+    "id": "non-contiguous-literal",
+    "text": "She put the glass outside after the meal.",
+    "selection": "put",
+    "accepted": [
+      "放",
+      "放置",
+      "放了"
+    ]
+  },
+  {
+    "id": "function-to",
+    "text": "She promised to return the book.",
+    "selection": "to",
+    "accepted": []
+  },
+  {
+    "id": "function-particle",
+    "text": "The device was too hot to touch.",
+    "selection": "too hot",
+    "accepted": [
+      "太烫",
+      "太热",
+      "过热"
+    ]
+  },
+  {
+    "id": "restricted-no-equivalent",
+    "text": "The copy which you requested is ready.",
+    "selection": "which",
+    "accepted": []
+  },
+  {
+    "id": "duplicate-wave",
+    "text": "A wave of nausea passed as the next wave broke.",
+    "selection": "wave",
+    "accepted": [
+      "海浪",
+      "浪",
+      "波浪"
+    ],
+    "occurrence": 2
+  },
+  {
+    "id": "parenthetic-polarity",
+    "text": "The committee found the claim, however, hardly plausible.",
+    "selection": "hardly plausible",
+    "accepted": [
+      "几乎不可信",
+      "不大可信",
+      "难以置信",
+      "很难让人信服",
+      "难以相信",
+      "不太可信"
+    ]
+  }
+]

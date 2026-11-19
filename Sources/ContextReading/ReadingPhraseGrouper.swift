@@ -1,6 +1,11 @@
 import Foundation
 import NaturalLanguage
 
+struct ReadingPhraseGroup: Equatable, Sendable {
+    let sourceSpan: UTF16Span
+    let sourceSurface: String
+}
+
 /// Forms a consistent partition before looking up the selected occurrence.
 /// Word boundaries and POS tags are evidence; offset ranges are always taken
 /// from the source so PDF highlights and the translation prompt agree.
@@ -26,10 +31,11 @@ enum ReadingPhraseGrouper {
         "should", "must", "might", "may", "shall", "will", "would"
     ]
     private static let negativeModifiers: Set<String> = ["hardly", "barely", "scarcely", "never", "rarely", "seldom"]
-    private static let degreeModifiers: Set<String> = ["very", "quite", "too", "highly", "strongly", "statistically", "significantly"]
+    private static let degreeModifiers: Set<String> = ["very", "quite", "too", "highly", "strongly", "statistically",
+        "significantly", "substantially", "completely", "entirely"]
     private static let termHeads: Set<String> = [
         "coefficient", "rate", "moment", "center", "centre", "conservation", "degree", "order",
-        "law", "point", "axis", "radius", "standard"
+        "law", "point", "axis", "radius", "standard", "power"
     ]
     private static let fixedPhrases: Set<String> = [
         "as a result", "in spite of", "due to", "according to", "rather than",
@@ -38,11 +44,15 @@ enum ReadingPhraseGrouper {
         "with respect to", "per unit", "out of phase", "in phase"
     ]
     private static let verbFrames: Set<String> = [
-        "account for", "break down", "bring about", "carry out", "come across", "do work", "figure out",
+        "account for", "break down", "bring about", "carry out", "come across", "differ by much", "do no work", "do work", "figure out",
         "find out", "give up", "look after", "look for", "look into", "look up",
         "make up", "point out", "put off", "put up with", "rule out", "run into", "run out of",
         "set up", "shut down", "take off", "take into account", "take place", "turn down",
         "turn into", "turn off", "work out"
+    ]
+    private static let separableFrames: Set<String> = [
+        "bring up", "hand in", "look up", "pick up", "put away", "put out",
+        "rule out", "switch off", "take off", "turn down", "turn off"
     ]
     private static let upwardDirections: Set<String> = [
         "at", "toward", "towards", "to", "into", "through", "above"
@@ -52,7 +62,7 @@ enum ReadingPhraseGrouper {
     ]
 
     static func group(in context: SentenceContext, selected: UTF16Span,
-                      sourceText: String?, allowsLineWrap: Bool) -> VerifiedPhraseGroup? {
+                      sourceText: String?, allowsLineWrap: Bool) -> ReadingPhraseGroup? {
         let source: String
         if let sourceText {
             guard let raw = context.sourceSpan.substring(in: sourceText) else { return nil }
@@ -118,10 +128,9 @@ enum ReadingPhraseGrouper {
                             length: NSMaxRange(words[ends[start]].range) - words[start].range.location)
         let raw = text.substring(with: range)
         guard raw.count <= maximumCharacters else { return nil }
-        return VerifiedPhraseGroup(
+        return ReadingPhraseGroup(
             sourceSpan: UTF16Span(location: context.sourceSpan.location + range.location, length: range.length),
-            sourceSurface: raw.split(whereSeparator: \.isWhitespace).joined(separator: " "),
-            lookupKey: words[start...ends[start]].map(\.text).joined(separator: " ")
+            sourceSurface: raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         )
     }
 
@@ -133,7 +142,7 @@ enum ReadingPhraseGrouper {
         let limit = min(words.count - 1, start + maximumWords - 1)
         guard start < limit else { return result }
 
-        let verbEnd = verbFrameEnd(at: start, in: words)
+        let verbEnd = verbFrameEnd(at: start, in: words) ?? separableFrameEnd(at: start, in: words)
         if let verbEnd { result.append(Chunk(end: verbEnd, score: 27 + verbEnd - start)) }
         for end in (start + 1)...min(limit, start + 4) {
             let surface = words[start...end].map(\.text).joined(separator: " ")
@@ -153,10 +162,12 @@ enum ReadingPhraseGrouper {
             }
             core += 1
         }
-        if core > start, carriesNegation,
-           words[core].tag == .verb || words[core].tag == .adjective || verbFrameEnd(at: core, in: words) != nil {
-            let end = verbFrameEnd(at: core, in: words) ?? core
-            if end <= limit { result.append(Chunk(end: end, score: 36 + end - start)) }
+        if core > start, carriesNegation {
+            let frame = verbFrameEnd(at: core, in: words) ?? separableFrameEnd(at: core, in: words)
+            let end = frame ?? core
+            if end <= limit && (frame != nil || words[core].tag == .verb || words[core].tag == .adjective) {
+                result.append(Chunk(end: end, score: 39 + end - start))
+            }
         }
 
         // Base noun phrases stop at the head. Keep determiners available for a
@@ -186,6 +197,10 @@ enum ReadingPhraseGrouper {
             for end in (start + 2)...limit {
                 let next = words[end]
                 if end > start + 2 && next.tag != .noun { break }
+                if words[start].lemma == "power", end == start + 2, next.tag == .number {
+                    result.append(Chunk(end: end, score: 29))
+                    break
+                }
                 if end == start + 2 && next.tag != .noun && next.tag != .adjective { break }
                 if next.tag == .noun {
                     result.append(Chunk(end: end, score: 23 + 3 * (end - start)))
@@ -207,6 +222,26 @@ enum ReadingPhraseGrouper {
                 let destination = next.tag == .determiner && end + 2 < words.count ? words[end + 2] : next
                 if upwardPaths.contains(destination.lemma) { continue }
             }
+            return end
+        }
+        return nil
+    }
+
+    private static func separableFrameEnd(at verb: Int, in words: [Word]) -> Int? {
+        // Keep short objects inside their phrasal verb. A new determiner
+        // after the particle often starts a directional complement.
+        guard words[verb].tag == .verb, verb + 2 < words.count,
+              words[verb+1].tag == .determiner || words[verb+1].tag == .pronoun else { return nil }
+        var objectHasHead = false
+        for end in (verb+2)...min(verb+5, words.count-1) {
+            let previous = words[end-1]
+            if previous.tag == .noun || previous.tag == .pronoun { objectHasHead = true }
+            if end > verb + 2 {
+                guard let tag = previous.tag, [NLTag.noun, .adjective, .pronoun, .number].contains(tag) else { break }
+            }
+            let particle = words[end].text
+            guard objectHasHead, separableFrames.contains("\(words[verb].lemma) \(particle)") else { continue }
+            if end+1 < words.count, words[end+1].tag == .determiner { continue }
             return end
         }
         return nil

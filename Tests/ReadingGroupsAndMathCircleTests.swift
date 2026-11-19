@@ -13,11 +13,16 @@ final class ReadingPhraseGrouperTests: XCTestCase {
             ("She looked up the chimney.", "looked", nil),
             ("They carried out the experiment twice.", "out", "carried out"),
             ("She took into account the measurement error.", "account", "took into account"),
-            ("The board turned the offer down after the vote.", "turned", nil),
+            ("The board turned the offer down after the vote.", "turned", "turned the offer down"),
+            ("The crew put the fire out before dawn.", "out", "put the fire out"),
+            ("The driver turned the car down the street.", "turned", nil),
             ("The researchers did not rule out a sampling error.", "not", "did not rule out"),
+            ("The report does not completely rule out a leak.", "completely", "does not completely rule out"),
             ("The researchers did not rule out a sampling error.", "out", "did not rule out"),
             ("The results don't support that conclusion.", "don't", "don't support"),
             ("The shear load could not explain the failure.", "explain", "could not explain"),
+            ("The two readings didn't differ by much.", "differ", "didn't differ by much"),
+            ("The normal force does no work along this path.", "work", "does no work"),
             ("I could hardly hear the announcement.", "hardly", "could hardly hear"),
             ("The coefficient of friction did not change under load.", "friction", "coefficient of friction"),
             ("The small trial found no statistically significant difference.", "difference", "no statistically significant difference"),
@@ -43,8 +48,38 @@ final class ReadingPhraseGrouperTests: XCTestCase {
         XCTAssertNil(try group(in: "An estimate of\n\nchange was reported.", selected: "change", allowWrap: false))
     }
 
+    @MainActor
+    func testNativePDFPhraseWrapRequiresTrustedSingleColumn() throws {
+        for secondLineX in [50.0, 330.0] {
+            let doc = try XCTUnwrap(PDFDocument(data: UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 720, height: 780))
+                .pdfData { context in
+                    context.beginPage()
+                    let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 17)]
+                    ("The controller reports the rate" as NSString).draw(at: CGPoint(x: 50, y: 100), withAttributes: attributes)
+                    ("of change once every few seconds." as NSString).draw(at: CGPoint(x: secondLineX, y: 121), withAttributes: attributes)
+                }))
+            let page = try XCTUnwrap(doc.page(at: 0))
+            let source = try XCTUnwrap(page.string)
+            let raw = source as NSString
+            let anchor = try XCTUnwrap(UTF16Span(range: raw.range(of: "rate"), in: source))
+            let end = NSMaxRange(raw.range(of: "change"))
+            let span = UTF16Span(location: anchor.location, length: end - anchor.location)
+            let selection = try XCTUnwrap(page.selection(for: try XCTUnwrap(span.nsRange(in: source))))
+            let contextual = ContextSelectionRouter.route(selection: selection, page: page,
+                documentSHA256: "wrapped", pageIndex: 0, displaySurface: "rate of change", geometryQuality: .word,
+                generation: 1, verifiedPhraseGroupSpan: span, verifiedPhraseAnchorSpan: anchor)
+            if secondLineX == 50.0 {
+                let context = try XCTUnwrap(contextual?.sentenceContext)
+                XCTAssertEqual(try ContextualTranslationRequest.make(from: context, verifiedPhraseGroupSpan: span)
+                    .selectedSourcePhrase, "rate of change")
+            } else {
+                XCTAssertNil(contextual)
+            }
+        }
+    }
+
     private func group(in source: String, selected: String, origin: Int = 0, allowWrap: Bool = false) throws
-        -> VerifiedPhraseGroup? {
+        -> ReadingPhraseGroup? {
         let range = (source as NSString).range(of: selected)
         let absolute = UTF16Span(location: origin + range.location, length: range.length)
         let span = UTF16Span(location: origin, length: source.utf16.count)

@@ -311,10 +311,8 @@ final class GlyphSelectionTests: XCTestCase {
                 record("seed_source_span_missing")
                 continue
             }
-            guard let phrase = VerifiedPhraseGroupResolver.resolve(in: sentenceContext,
-                                                                   selectedSourceSpans: [selectedSpan],
-                                                                   sourceText: source,
-                                                                   exactPhraseExists: { _ in true }) else {
+            guard let phrase = ReadingPhraseGrouper.group(in: sentenceContext, selected: selectedSpan,
+                                                               sourceText: source, allowsLineWrap: false) else {
                 record("resolver_miss")
                 continue
             }

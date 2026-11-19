@@ -412,11 +412,8 @@ final class InteractionPolishTests:XCTestCase {
         let seedRect = seedSelection.bounds(for: page)
         let point = view.convert(CGPoint(x: seedRect.midX, y: seedRect.midY), from: page)
         var events: [SelectionInfo?] = []
-        let phraseLookup = VerifiedPhraseGroupLookup(dictionaryRevision: { 0 },
-                                                    exactPhraseExists: { $0 == "quantum mechanics" })
         let coordinator = ReaderCoordinator(onPageChanged: { _ in },
-                                            onSelectionInfo: { events.append($0) },
-                                            phraseLookup: phraseLookup)
+                                            onSelectionInfo: { events.append($0) })
         coordinator.pdfView = view
         coordinator.docSha = "verified-phrase-doubletap"
         coordinator.contextReadingEnabled = true

@@ -112,8 +112,7 @@ final class ReaderCoordinator: NSObject {
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
     private var hoverEntry: (page: PDFPage, rect: CGRect, annotation: PDFAnnotation)?
-    private let verifiedPhraseLookup: VerifiedPhraseGroupLookup?
-    private var readingPhraseCache: (context: SentenceContext, allowsLineWrap: Bool, result: VerifiedPhraseGroup?)?
+    private var readingPhraseCache: (context: SentenceContext, allowsLineWrap: Bool, result: ReadingPhraseGroup?)?
 
     /// v0.11.0(M6):扫描版 OCR 取词
     var ocrStore: OCRStore?
@@ -297,12 +296,10 @@ final class ReaderCoordinator: NSObject {
 
     init(
         onPageChanged: @escaping (Int) -> Void,
-        onSelectionInfo: @escaping (SelectionInfo?) -> Void,
-        phraseLookup: VerifiedPhraseGroupLookup? = nil
+        onSelectionInfo: @escaping (SelectionInfo?) -> Void
     ) {
         self.onPageChanged = onPageChanged
         self.onSelectionInfo = onSelectionInfo
-        verifiedPhraseLookup = phraseLookup
     }
 
     deinit {
@@ -891,8 +888,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
-        guard (activeNativeMathParent?.page === page || (contextReadingEnabled && FeatureFlags.mathEnabled())),
-              !docScanned,
+        guard activeNativeMathParent?.page === page || (!docScanned && contextReadingEnabled && FeatureFlags.mathEnabled()),
               let target = activeScopedMathGlyph(on: page, at: point)
                 ?? SelectionGeometry.nativeMathPressTarget(on: page, at: point),
               !page.annotations.contains(where: {
@@ -928,8 +924,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func nativeFractionHitContext(on page: PDFPage, at point: CGPoint) -> NativeFractionHitContext? {
-        guard activeNativeMathParent?.page === page || (contextReadingEnabled && FeatureFlags.mathEnabled()),
-              !docScanned else { return nil }
+        guard activeNativeMathParent?.page === page || (!docScanned && contextReadingEnabled && FeatureFlags.mathEnabled()) else { return nil }
         let all = cachedNativeFractions(on: page)
         return NativeFractionHitContext(candidates: all.filter { $0.region.contains(point) })
     }
@@ -1598,7 +1593,8 @@ final class ReaderCoordinator: NSObject {
                 let term = target.phraseSurface ?? WordPicker.firstLexicalWord(in: text) ?? text
                 let query = VocabStore.normalizedKey(term)
                 guard !query.isEmpty,
-                      let rect = hoverPageRect(for: hit.page, selection: target.selection) else {
+                      let rect = hoverPageRect(for: hit.page, selection: target.selection.selectionsByLine().count > 1
+                                                ? word : target.selection) else {
                     clearHover()
                     return
                 }
@@ -1706,14 +1702,9 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func cachedPhraseGroup(in context: SentenceContext,
-                                   selectedSourceSpans: [UTF16Span],
+                                   selected: UTF16Span,
                                    sourceText: String,
-                                   allowsLineWrap: Bool = false) -> VerifiedPhraseGroup? {
-        if let verifiedPhraseLookup {
-            return verifiedPhraseLookup.resolve(in: context, selectedSourceSpans: selectedSourceSpans,
-                                                sourceText: sourceText)
-        }
-        guard let selected = selectedSourceSpans.first, selectedSourceSpans.count == 1 else { return nil }
+                                   allowsLineWrap: Bool = false) -> ReadingPhraseGroup? {
         if let cached = readingPhraseCache, cached.context == context, cached.allowsLineWrap == allowsLineWrap {
             return cached.result
         }
@@ -1727,7 +1718,7 @@ final class ReaderCoordinator: NSObject {
                                                page: PDFPage,
                                                geometryQuality: SourceGeometryQuality = .word,
                                                baseContextual: ContextualSelection? = nil)
-        -> (selection: PDFSelection, phrase: VerifiedPhraseGroup, contextual: ContextualSelection)? {
+        -> (selection: PDFSelection, phrase: ReadingPhraseGroup, contextual: ContextualSelection)? {
         guard let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0,
               let sourceText = page.string,
               let contextual = baseContextual
@@ -1742,7 +1733,7 @@ final class ReaderCoordinator: NSObject {
               contextual.sourceSpans.count == 1,
               let selectedSpan = contextual.sourceSpans.first,
               let phrase = cachedPhraseGroup(in: sentenceContext,
-                                             selectedSourceSpans: [selectedSpan],
+                                             selected: selectedSpan,
                                              sourceText: sourceText,
                                              allowsLineWrap: sentenceContext.kind == .layoutBlock),
               let phraseRange = phrase.sourceSpan.nsRange(in: sourceText),
@@ -1802,7 +1793,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func verifiedOCRPhraseExpansion(page: PDFPage, index: Int)
-        -> (range: ClosedRange<Int>, phrase: VerifiedPhraseGroup, contextual: ContextualSelection)? {
+        -> (range: ClosedRange<Int>, phrase: ReadingPhraseGroup, contextual: ContextualSelection)? {
         guard contextReadingEnabled,
               let pageIndex = pdfView?.document?.index(for: page), pageIndex >= 0,
               let source = pinnedSnapshot(for: page)?.contextSource
@@ -1814,7 +1805,7 @@ final class ReaderCoordinator: NSObject {
               let sentenceContext = base.phraseLookupContext ?? base.sentenceContext,
               let selectedSpan = base.sourceSpans.first,
               let phrase = cachedPhraseGroup(in: sentenceContext,
-                                             selectedSourceSpans: [selectedSpan],
+                                             selected: selectedSpan,
                                              sourceText: source.page.lines[source.entries[index].lineIndex].sourceText),
               let range = source.entryRange(for: phrase.sourceSpan, containing: index),
               let contextual = source.contextualSelection(for: range,
@@ -1887,7 +1878,6 @@ final class ReaderCoordinator: NSObject {
     }
 
     func clearHover() {
-        verifiedPhraseLookup?.clear()
         readingPhraseCache = nil
         guard hoverKey != "" || hoverEntry != nil else { return }
         hoverKey = ""
@@ -2336,10 +2326,8 @@ final class ReaderCoordinator: NSObject {
                 self.applyOCRSelection(page: page, range: expansion.range, src: "phrase-menu",
                                        verifiedPhraseGroupSpan: expansion.phrase.sourceSpan)
             }
-            if verifiedPhraseLookup == nil {
-                readingContext = contextual.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual,
-                                                                                   preferred: true) ?? contextual
-            }
+            readingContext = contextual.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual,
+                                                                               preferred: true) ?? contextual
         }
         readingSelection = readingContext
         onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm,
@@ -2663,9 +2651,7 @@ final class ReaderCoordinator: NSObject {
                 self?.applySelection(expansion.selection, src: "phrase-menu", contextRoute: true,
                                      geometryQuality: .word, contextualOverride: expansion.contextual)
             }
-            if verifiedPhraseLookup == nil {
-                contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual, preferred: true) ?? base
-            }
+            contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual, preferred: true) ?? base
         }
         readingSelection = contextual
         let isFractionGlyph: Bool = {
