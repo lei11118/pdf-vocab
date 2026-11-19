@@ -126,6 +126,7 @@ final class MathCircleTests: XCTestCase {
         let indices = Set(scan.glyphs.indices.filter { !scan.glyphs[$0].text.allSatisfy(\.isWhitespace) })
         let contents = "PDFKit=\(page.string ?? "") scan=\(scan.glyphs.map(\.text).joined(separator: "|")) "
             + "fraction rows=\(fractions.map { $0.orderedGlyphs.map(\.glyph.text).joined() })"
+            + " fraction LaTeX=\(fractions.map { NativeFractionReadingSelection.geometryResult(for: $0)?.latex ?? "?" })"
         if fractions.count != 3 {
             let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
             attachment.name = "schrodinger-native-vector-fixture.pdf"
@@ -138,25 +139,25 @@ final class MathCircleTests: XCTestCase {
         ))
         XCTAssertEqual(expected.status, .parsedText)
         let equation = try XCTUnwrap(NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
-                                                                         fractions: fractions, on: page), contents)
+                                                                         fractions: fractions), contents)
         XCTAssertEqual(equation.whole.readingResult?.latex, expected.latex)
         XCTAssertEqual(equation.whole.readingResult?.ast, expected.ast)
-        XCTAssertEqual(equation.whole.sourceRanges.count, indices.count)
+        XCTAssertTrue(indices.allSatisfy { equation.whole.region.contains(scan.glyphs[$0].rect) })
 
         for text in ["∂", "²"] {
             let glyph = try XCTUnwrap(fractions[1].denominator.glyphs.first { $0.glyph.text == text })
             let point = CGPoint(x: glyph.glyph.rect.midX, y: glyph.glyph.rect.midY)
-            let detail = try XCTUnwrap(equation.detail(at: point, on: page))
+            let detail = try XCTUnwrap(equation.detail(at: point))
             XCTAssertTrue(detail.isGlyph)
-            XCTAssertEqual(detail.fractionDetail?.sourceText, text)
-            XCTAssertEqual(detail.sourceRanges.count, 1)
+            XCTAssertEqual(detail.readingResult?.sourceText, text)
+            XCTAssertEqual(detail.region, glyph.glyph.rect)
         }
         let rule = fractions[1].rule
         let bar = CGPoint(x: (rule.start.x + rule.end.x) / 2, y: (rule.start.y + rule.end.y) / 2)
-        XCTAssertEqual(equation.detail(at: bar, on: page)?.fractionDetail?.sourceText, "(∂²Ψ(x,t))/(∂x²)")
+        XCTAssertEqual(equation.detail(at: bar)?.readingResult?.sourceText, "(∂²Ψ(x,t))/(∂x²)")
         let missing = indices.subtracting([fractions[1].denominator.glyphs[0].sourceIndex])
         XCTAssertNil(NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: missing,
-                                                          fractions: fractions, on: page))
+                                                          fractions: fractions))
     }
 
     @MainActor

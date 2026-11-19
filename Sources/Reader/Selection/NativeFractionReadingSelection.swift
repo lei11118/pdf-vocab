@@ -30,6 +30,39 @@ struct NativeFractionReadingSelection {
     private let glyphs: [GlyphDetail]
     private let subrows: [[Int]: Detail]
 
+    static func geometryResult(for fraction: NativeFractionLayout.Fraction) -> MathReadingResult? {
+        guard let numerator = parserInput(for: fraction.numerator),
+              let denominator = parserInput(for: fraction.denominator),
+              let parsed = MathReadingService.resolve("\\frac{\(numerator)}{\(denominator)}"),
+              parsed.status == .parsedText, isSingleCompleteFraction(parsed.ast) else { return nil }
+        return MathReadingResult(sourceText: "(\(surface(of: fraction.numerator)))/(\(surface(of: fraction.denominator)))",
+                                 latex: parsed.latex, unicode: parsed.unicode, explanation: parsed.explanation,
+                                 status: parsed.status, ast: parsed.ast)
+    }
+
+    static func geometryDetail(for hit: NativeFractionLayout.Hit,
+                               fraction: NativeFractionLayout.Fraction) -> FormulaCircleDetail? {
+        let row: NativeFractionLayout.Row
+        switch hit {
+        case .fraction, .rule:
+            guard let result = geometryResult(for: fraction) else { return nil }
+            return FormulaCircleDetail(region: fraction.region, result: result)
+        case .glyph(let sourceIndex, _):
+            guard let glyph = fraction.orderedGlyphs.first(where: { $0.sourceIndex == sourceIndex })?.glyph
+            else { return nil }
+            return FormulaCircleDetail(region: glyph.rect, result: MathSymbolReading.detail(glyph.text), isGlyph: true)
+        case .row(let position):
+            row = position == .numerator ? fraction.numerator : fraction.denominator
+        case .subrow(let indices):
+            guard let found = (descendants(of: fraction.numerator) + descendants(of: fraction.denominator))
+                .first(where: { $0.glyphs.map(\.sourceIndex) == indices }) else { return nil }
+            row = found
+        }
+        guard let parser = parserInput(for: row),
+              let result = rowResult(sourceText: surface(of: row), parserText: parser) else { return nil }
+        return FormulaCircleDetail(region: row.region, result: result)
+    }
+
     /// Maps all fraction glyphs from a verified glyph midpoint, then checks that
     /// both rows map back to exact source coverage before parsing the fraction.
     static func build(fraction: NativeFractionLayout.Fraction,
@@ -64,11 +97,7 @@ struct NativeFractionReadingSelection {
         guard let numeratorInput = parserInput(for: fraction.numerator),
               let denominatorInput = parserInput(for: fraction.denominator) else { return nil }
 
-        let formulaLatex = "\\frac{\(numeratorInput)}{\(denominatorInput)}"
-        guard let parsed = MathReadingService.resolve(formulaLatex),
-              parsed.status == .parsedText,
-              parsed.ast?.isComplete == true,
-              isSingleCompleteFraction(parsed.ast),
+        guard let result = geometryResult(for: fraction),
               let numeratorDetail = makeDetail(scope: .row(.numerator),
                                                entries: numeratorEntries,
                                                sourceText: numeratorText,
@@ -82,17 +111,10 @@ struct NativeFractionReadingSelection {
                                                                           parserText: denominatorInput),
                                                  on: page) else { return nil }
 
-        let displayText = "(\(numeratorText))/(\(denominatorText))"
-        let result = MathReadingResult(sourceText: displayText,
-                                       latex: parsed.latex,
-                                       unicode: parsed.unicode,
-                                       explanation: parsed.explanation,
-                                       status: parsed.status,
-                                       ast: parsed.ast)
         let whole = Detail(scope: .whole,
                            selection: mapping.mergedSelection,
                            sourceRanges: mapping.ranges,
-                           sourceText: displayText,
+                           sourceText: result.sourceText,
                            readingResult: result)
 
         var glyphDetails: [GlyphDetail] = []

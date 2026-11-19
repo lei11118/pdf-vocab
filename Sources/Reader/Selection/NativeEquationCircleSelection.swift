@@ -1,25 +1,28 @@
 import PDFKit
 
 struct FormulaCircleDetail {
-    let selection: PDFSelection
-    let sourceRanges: [NSRange]
+    let selection: PDFSelection?
     let region: CGRect
     let readingResult: MathReadingResult?
     let fractionDetail: NativeFractionReadingSelection.Detail?
     let isGlyph: Bool
 
-    init(selection: PDFSelection, sourceRanges: [NSRange], region: CGRect,
+    init(selection: PDFSelection?, region: CGRect,
          readingResult: MathReadingResult?, fractionDetail: NativeFractionReadingSelection.Detail?, isGlyph: Bool) {
         self.selection = selection
-        self.sourceRanges = sourceRanges
         self.region = region
         self.readingResult = readingResult
         self.fractionDetail = fractionDetail
         self.isGlyph = isGlyph
     }
 
+    init(region: CGRect, result: MathReadingResult, isGlyph: Bool = false) {
+        self.init(selection: nil, region: region,
+                  readingResult: result, fractionDetail: nil, isGlyph: isGlyph)
+    }
+
     init(fraction: NativeFractionReadingSelection.Detail, region: CGRect, isGlyph: Bool = false) {
-        self.init(selection: fraction.selection, sourceRanges: fraction.sourceRanges, region: region,
+        self.init(selection: fraction.selection, region: region,
                   readingResult: fraction.readingResult, fractionDetail: fraction, isGlyph: isGlyph)
     }
 
@@ -41,15 +44,15 @@ struct FormulaCircleDetail {
 struct NativeEquationCircleSelection {
     private struct FractionPart {
         let layout: NativeFractionLayout.Fraction
-        let reading: NativeFractionReadingSelection
+        let result: MathReadingResult
     }
 
     let whole: FormulaCircleDetail
     private let fractions: [FractionPart]
-    private let inlineGlyphs: [NativeMathGlyphSelection.Entry]
+    private let inlineGlyphs: [PDFTextLayout.Glyph]
 
     static func build(glyphs: [PDFTextLayout.Glyph], enclosedIndices: Set<Int>,
-                      fractions: [NativeFractionLayout.Fraction], on page: PDFPage) -> Self? {
+                      fractions: [NativeFractionLayout.Fraction]) -> Self? {
         guard !fractions.isEmpty, enclosedIndices.count <= 64 else { return nil }
         let fractionIndices = fractions.flatMap { $0.orderedGlyphs.map(\.sourceIndex) }
         let claimed = Set(fractionIndices)
@@ -64,8 +67,8 @@ struct NativeEquationCircleSelection {
               }) else { return nil }
 
         let parts = fractions.compactMap { fraction in
-            NativeFractionReadingSelection.build(fraction: fraction, on: page).map {
-                FractionPart(layout: fraction, reading: $0)
+            NativeFractionReadingSelection.geometryResult(for: fraction).map {
+                FractionPart(layout: fraction, result: $0)
             }
         }
         guard parts.count == fractions.count else { return nil }
@@ -88,8 +91,8 @@ struct NativeEquationCircleSelection {
                 latex += converted
                 fragment = ""
             }
-            guard let reading = parts[component.fraction].reading.whole.readingResult,
-                  let fractionLatex = reading.latex else { return nil }
+            let reading = parts[component.fraction].result
+            guard let fractionLatex = reading.latex else { return nil }
             surface += reading.sourceText
             latex += fractionLatex
         }
@@ -100,28 +103,19 @@ struct NativeEquationCircleSelection {
         }
         guard let result = MathReadingService.resolve(latex), result.status == .parsedText else { return nil }
 
-        let all = inline + fractions.flatMap { $0.orderedGlyphs.map(\.glyph) }
-        let anchor = page.characterIndex(at: CGPoint(x: equal.rect.midX, y: equal.rect.midY))
-        guard let mapped = NativeMathGlyphSelection.map(all, on: page, anchoredAt: anchor,
-                                                        allowingInterveningWhitespace: true) else { return nil }
         let region = inline.reduce(fractions.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
         let original = MathReadingResult(sourceText: surface, latex: result.latex, unicode: result.unicode,
                                          explanation: result.explanation, status: result.status, ast: result.ast)
-        let whole = FormulaCircleDetail(selection: mapped.mergedSelection, sourceRanges: mapped.ranges, region: region,
-                                        readingResult: original, fractionDetail: nil, isGlyph: false)
-        return Self(whole: whole, fractions: parts, inlineGlyphs: Array(mapped.entries.prefix(inline.count)))
+        return Self(whole: FormulaCircleDetail(region: region, result: original), fractions: parts, inlineGlyphs: inline)
     }
 
-    func detail(at point: CGPoint, on page: PDFPage) -> FormulaCircleDetail? {
-        let glyphs = inlineGlyphs.filter { $0.glyph.rect.contains(point) }
+    func detail(at point: CGPoint) -> FormulaCircleDetail? {
+        let glyphs = inlineGlyphs.filter { $0.rect.contains(point) }
         if let glyph = glyphs.first, glyphs.count == 1 {
-            return FormulaCircleDetail(selection: glyph.selection, sourceRanges: [glyph.sourceRange],
-                                       region: glyph.glyph.rect, readingResult: MathSymbolReading.detail(glyph.glyph.text),
-                                       fractionDetail: nil, isGlyph: true)
+            return FormulaCircleDetail(region: glyph.rect, result: MathSymbolReading.detail(glyph.text), isGlyph: true)
         }
         let candidates = fractions.filter { $0.layout.region.contains(point) }
-        guard candidates.count == 1, let part = candidates.first,
-              let hit = part.layout.hitTest(point), let detail = part.reading.detail(for: hit) else { return nil }
-        return FormulaCircleDetail(fraction: detail, layout: part.layout, on: page)
+        guard candidates.count == 1, let part = candidates.first, let hit = part.layout.hitTest(point) else { return nil }
+        return NativeFractionReadingSelection.geometryDetail(for: hit, fraction: part.layout)
     }
 }

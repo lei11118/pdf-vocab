@@ -191,7 +191,7 @@ final class ReaderCoordinator: NSObject {
         let page: PDFPage
         let whole: FormulaCircleDetail
         let detailAt: (CGPoint) -> FormulaCircleDetail?
-        var selectedRanges: [NSRange]
+        var selectedRegion: CGRect
     }
     private var activeNativeMathParent: ActiveNativeMathParent?
     private final class NativeFractionPageCache {
@@ -947,10 +947,9 @@ final class ReaderCoordinator: NSObject {
         let hasEquality = enclosedGlyphs.contains { $0.element.text == "=" }
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
-                                                                  fractions: fractions, on: page) {
-                beginFormulaSelection(equation.whole, on: page) { [weak page] point in
-                    guard let page else { return nil }
-                    return equation.detail(at: point, on: page)
+                                                                  fractions: fractions) {
+                beginFormulaSelection(equation.whole, on: page) { point in
+                    equation.detail(at: point)
                 }
                 finishFormulaCircle()
                 return
@@ -1041,13 +1040,13 @@ final class ReaderCoordinator: NSObject {
     private func beginFormulaSelection(_ whole: FormulaCircleDetail, on page: PDFPage,
                                        detailAt: @escaping (CGPoint) -> FormulaCircleDetail?) {
         activeNativeMathParent = ActiveNativeMathParent(page: page, whole: whole, detailAt: detailAt,
-                                                        selectedRanges: whole.sourceRanges)
+                                                        selectedRegion: whole.region)
         applyFormulaDetail(whole)
     }
 
     private func beginInlineFormula(selection: PDFSelection, range: NSRange, region: CGRect,
                                     result: MathReadingResult, on page: PDFPage) {
-        let whole = FormulaCircleDetail(selection: selection, sourceRanges: [range], region: region,
+        let whole = FormulaCircleDetail(selection: selection, region: region,
                                         readingResult: result, fractionDetail: nil, isGlyph: false)
         beginFormulaSelection(whole, on: page) { [weak page] point in
             guard region.contains(point), let page, let source = page.string,
@@ -1055,22 +1054,28 @@ final class ReaderCoordinator: NSObject {
                   let actual = SelectionGeometry.sourceRanges(of: glyph, on: page).first,
                   let surface = UTF16Span(range: actual, in: source)?.substring(in: source),
                   let symbol = surface.first(where: { !$0.isWhitespace }) else { return nil }
-            return FormulaCircleDetail(selection: glyph, sourceRanges: [actual], region: glyph.bounds(for: page),
+            return FormulaCircleDetail(selection: glyph, region: glyph.bounds(for: page),
                                        readingResult: MathSymbolReading.detail(String(symbol)),
                                        fractionDetail: nil, isGlyph: true)
         }
     }
 
     private func applyFormulaDetail(_ detail: FormulaCircleDetail) {
-        activeNativeMathParent?.selectedRanges = detail.sourceRanges
-        applySelection(detail.selection, src: detail.isGlyph ? "math-glyph" : "math-formula",
-                       preservesNativeMathParent: true, verifiedFractionDetail: detail.fractionDetail,
-                       explicitMathResult: detail.readingResult, mathHighlightRegion: detail.region)
+        activeNativeMathParent?.selectedRegion = detail.region
+        if let selection = detail.selection {
+            applySelection(selection, src: detail.isGlyph ? "math-glyph" : "math-formula",
+                           preservesNativeMathParent: true, verifiedFractionDetail: detail.fractionDetail,
+                           explicitMathResult: detail.readingResult, mathHighlightRegion: detail.region)
+        } else if let result = detail.readingResult, let page = activeNativeMathParent?.page {
+            let crop = detail.region.insetBy(dx: -2, dy: -2).intersection(page.bounds(for: .mediaBox))
+            updateFormulaWithCrop(result, image: renderMathCrop(on: page, crop: crop),
+                                  on: page, region: detail.region)
+        }
     }
 
     private func newFormulaDetail(on page: PDFPage, at point: CGPoint) -> FormulaCircleDetail? {
         guard let active = activeNativeMathParent, active.page === page,
-              let detail = active.detailAt(point), detail.sourceRanges != active.selectedRanges else { return nil }
+              let detail = active.detailAt(point), detail.region != active.selectedRegion else { return nil }
         return detail
     }
 
@@ -1086,11 +1091,17 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func presentFormulaCrop(_ result: MathReadingResult, image: UIImage, on page: PDFPage, region: CGRect) {
+        updateFormulaWithCrop(result, image: image, on: page, region: region)
+        finishFormulaCircle()
+    }
+
+    private func updateFormulaWithCrop(_ result: MathReadingResult, image: UIImage?, on page: PDFPage, region: CGRect) {
         applyHighlightDesired([annotationKey(page, region): (page, region)], rejected: 0, t0: CFAbsoluteTimeGetCurrent())
+        appliedKey = nil
+        appliedCharCount = result.sourceText.count
         selectionText = result.sourceText
         onSelectionInfo(SelectionInfo(text: result.sourceText, wordCount: 0, primaryTerm: "",
                                       mathReadingResult: result, mathSourceImage: image))
-        finishFormulaCircle()
     }
 
     private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
@@ -3500,7 +3511,7 @@ final class ReaderCoordinator: NSObject {
 
     var canSelectWholeFormula: Bool {
         guard let parent = activeNativeMathParent else { return false }
-        return parent.selectedRanges != parent.whole.sourceRanges
+        return parent.selectedRegion != parent.whole.region
     }
 
     func selectWholeFormula() {
