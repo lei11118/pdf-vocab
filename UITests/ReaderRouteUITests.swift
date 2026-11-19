@@ -740,6 +740,47 @@ extension ReaderRouteUITests {
         closeReaderPanel(in: app, title: "设置")
     }
 
+    @objc func testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",
+                               "--human-reading-audit-schrodinger", "-AppleLanguages", "(zh-Hans)",
+                               "-AppleLocale", "zh_CN"]
+        app.launch()
+        let document = app.buttons.containing(.staticText, identifier: "Schrodinger-audit-native").firstMatch
+        XCTAssertTrue(document.waitForExistence(timeout: 20))
+        document.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let initial = waitForAudit(observer, timeout: 20) {
+            self.point(in: $0, key: "mathGlyphPoints", text: "∂", source: "math-glyph") != nil
+        }
+        let leaf = try XCTUnwrap(point(in: initial, key: "mathGlyphPoints", text: "∂", source: "math-glyph"))
+        let tool = app.buttons["reader.formula-circle-tool"]
+        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        tool.tap()
+        let replay = app.buttons["reader.audit-replay-formula-circle"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 5))
+        replay.tap()
+        let source = app.staticTexts["math-card-source"].firstMatch
+        if !source.waitForExistence(timeout: 15) {
+            attachAuditScreenshot("schrodinger-circle-failure", app: app)
+            XCTFail(app.staticTexts["reader.formula-circle-instruction"].firstMatch.label)
+            return
+        }
+        XCTAssertEqual(source.label, "−(ℏ²)/(2m)(∂²Ψ(x,t))/(∂x²)+U(x,t)Ψ(x,t)=iℏ(∂Ψ(x,t))/(∂t)")
+        XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.exists)
+        let latex = app.staticTexts["math-card-latex"].firstMatch.label
+        XCTAssertEqual(latex.components(separatedBy: "\\frac").count - 1, 3)
+        XCTAssertEqual(latex.components(separatedBy: "\\partial").count - 1, 4)
+        attachAuditScreenshot("schrodinger-original-and-rendered", app: app)
+
+        coordinate(for: leaf, in: app).press(forDuration: 1)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "∂" })
+        XCTAssertEqual(source.label, "∂")
+        XCTAssertEqual(app.staticTexts["math-card-latex"].firstMatch.label.trimmingCharacters(in: .whitespaces),
+                       "\\partial")
+        attachAuditScreenshot("schrodinger-exact-partial-derivative", app: app)
+    }
+
     @objc func testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",

@@ -115,6 +115,41 @@ final class MathCircleTests: XCTestCase {
     }
 
     @MainActor
+    func testTimeDependentSchrodingerPreservesThreeFractionsAndSourceGlyphs() throws {
+        let document = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.schrodingerPDF(raster: false)))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let scan = PDFTextLayout.scan(on: page)
+        let fractions = NativeFractionLayout.detect(in: scan)
+        let indices = Set(scan.glyphs.indices.filter { !scan.glyphs[$0].text.allSatisfy(\.isWhitespace) })
+        let glyphs = scan.glyphs.map(\.text).joined(separator: "|")
+        XCTAssertEqual(fractions.count, 3, glyphs)
+        let expected = try XCTUnwrap(MathReadingService.resolve(
+            #"-\frac{\hbar^{2}}{2m}\frac{\partial^{2}\Psi(x,t)}{\partial x^{2}}+U(x,t)\Psi(x,t)=i\hbar\frac{\partial\Psi(x,t)}{\partial t}"#
+        ))
+        XCTAssertEqual(expected.status, .parsedText)
+        let equation = try XCTUnwrap(NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
+                                                                         fractions: fractions, on: page), glyphs)
+        XCTAssertEqual(equation.whole.readingResult?.latex, expected.latex)
+        XCTAssertEqual(equation.whole.readingResult?.ast, expected.ast)
+        XCTAssertEqual(equation.whole.sourceRanges.count, indices.count)
+
+        for text in ["∂", "²"] {
+            let glyph = try XCTUnwrap(fractions[1].denominator.glyphs.first { $0.glyph.text == text })
+            let point = CGPoint(x: glyph.glyph.rect.midX, y: glyph.glyph.rect.midY)
+            let detail = try XCTUnwrap(equation.detail(at: point, on: page))
+            XCTAssertTrue(detail.isGlyph)
+            XCTAssertEqual(detail.fractionDetail?.sourceText, text)
+            XCTAssertEqual(detail.sourceRanges.count, 1)
+        }
+        let rule = fractions[1].rule
+        let bar = CGPoint(x: (rule.start.x + rule.end.x) / 2, y: (rule.start.y + rule.end.y) / 2)
+        XCTAssertEqual(equation.detail(at: bar, on: page)?.fractionDetail?.sourceText, "(∂²Ψ(x,t))/(∂x²)")
+        let missing = indices.subtracting([fractions[1].denominator.glyphs[0].sourceIndex])
+        XCTAssertNil(NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: missing,
+                                                          fractions: fractions, on: page))
+    }
+
+    @MainActor
     func testReaderCircleRequiresCompleteFractionAndWorksWithContextDisabled() throws {
         let pdf = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.nativePDF()))
         let page = try XCTUnwrap(pdf.page(at: 0))

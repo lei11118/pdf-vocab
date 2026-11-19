@@ -197,6 +197,7 @@ final class ReaderCoordinator: NSObject {
                           layout: NativeFractionLayout.Fraction,
                           readingSelection: NativeFractionReadingSelection,
                           selectedDetail: NativeFractionReadingSelection.Detail)
+            case equation(NativeEquationCircleSelection, selectedRanges: [NSRange])
         }
     }
     struct NativeFractionGlyphIdentity: Equatable {
@@ -1040,10 +1041,16 @@ final class ReaderCoordinator: NSObject {
             fraction.orderedGlyphs.contains { indices.contains($0.sourceIndex) }
         }
         if !fractions.isEmpty {
+            if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
+                                                                  fractions: fractions, on: page) {
+                applyEquation(equation, detail: equation.whole, on: page)
+                finishFormulaCircle()
+                return
+            }
             guard fractions.count == 1, let fraction = fractions.first,
                   indices == Set(fraction.orderedGlyphs.map(\.sourceIndex)),
                   let reading = NativeFractionReadingSelection.build(fraction: fraction, on: page) else {
-                onFormulaCircleOutcome?("请只圈住一个完整分式，包含分子与分母。")
+                onFormulaCircleOutcome?("未能核对完整公式。请圈住等式两侧及全部分子和分母。")
                 return
             }
             let target = NativeFractionPressTarget(fraction: fraction,
@@ -1116,6 +1123,24 @@ final class ReaderCoordinator: NSObject {
     private func finishFormulaCircle() {
         setFormulaCircleActive(false)
         onFormulaCircleOutcome?(nil)
+    }
+
+    private func applyEquation(_ equation: NativeEquationCircleSelection,
+                               detail: NativeEquationCircleSelection.Detail, on page: PDFPage) {
+        activeNativeMathParent = ActiveNativeMathParent(
+            page: page, kind: .equation(equation, selectedRanges: detail.sourceRanges)
+        )
+        applySelection(detail.selection, src: detail.isGlyph ? "math-glyph" : "math-line",
+                       preservesNativeMathParent: true, verifiedFractionDetail: detail.fractionDetail,
+                       explicitMathResult: detail.readingResult, mathHighlightRegion: detail.region)
+    }
+
+    private func equationDetail(on page: PDFPage, at point: CGPoint)
+        -> (NativeEquationCircleSelection, NativeEquationCircleSelection.Detail)? {
+        guard let active = activeNativeMathParent, active.page === page,
+              case .equation(let equation, let ranges) = active.kind,
+              let detail = equation.detail(at: point, on: page), detail.sourceRanges != ranges else { return nil }
+        return (equation, detail)
     }
 
     private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
@@ -1258,6 +1283,13 @@ final class ReaderCoordinator: NSObject {
             suppressNativeSelection(in: pdfView)
             guard let hit = pageHit(viewPoint) else {
                 DiagLog.log("press.began(\(kind)): no page")
+                return
+            }
+            if let (equation, detail) = equationDetail(on: hit.page, at: hit.point) {
+                holdMenuWork?.cancel()
+                holdMenuWork = nil
+                menu.dismiss()
+                applyEquation(equation, detail: detail, on: hit.page)
                 return
             }
 
@@ -2128,7 +2160,9 @@ final class ReaderCoordinator: NSObject {
         guard let pdfView, let page = pdfView.currentPage else { return }
         let scan = PDFTextLayout.scan(on: page)
         let fraction = NativeFractionLayout.detect(in: scan).first
-        let bounds = fraction?.region ?? CGRect(x: 43, y: 245, width: 235, height: 59)
+        let isSchrodinger = ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger")
+        let bounds = isSchrodinger ? HumanReadingAuditFixture.schrodingerPageRegion.insetBy(dx: -24, dy: -24)
+            : fraction?.region ?? CGRect(x: 43, y: 245, width: 235, height: 59)
         let screen = pdfView.convert(bounds, from: page).insetBy(dx: -15, dy: -11)
         let points = (0...36).map { index in
             let angle = Double(index) * 2 * .pi / 36
@@ -2235,11 +2269,22 @@ final class ReaderCoordinator: NSObject {
             return pointEntry(text: nearest?.text ?? "", point: point, source: "link")
         }
 
+        let mathGlyphPoints: [[String: Any]]
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger") {
+            mathGlyphPoints = PDFTextLayout.scan(on: page).glyphs.compactMap { glyph in
+                guard !glyph.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let point = screenPoint(CGPoint(x: glyph.rect.midX, y: glyph.rect.midY)) else { return nil }
+                return pointEntry(text: glyph.text, point: point, source: "math-glyph")
+            }
+        } else {
+            mathGlyphPoints = []
+        }
         let snapshot: [String: Any] = [
             "page": pageIndex,
             "scale": Double(pdfView.scaleFactor),
             "selectedText": selectionText,
             "wordPoints": wordPoints,
+            "mathGlyphPoints": mathGlyphPoints,
             "linePoints": linePoints,
             "linkPoints": linkPoints,
             "handlePoints": [handleEntry(startHandle), handleEntry(endHandle)].compactMap { $0 }
@@ -3686,6 +3731,8 @@ final class ReaderCoordinator: NSObject {
                                                       readingSelection: readingSelection, selectedDetail: detail)
             applySelection(detail.selection, src: "math-fraction", preservesNativeMathParent: true,
                            verifiedFractionDetail: detail, mathHighlightRegion: layout.region)
+        case .equation(let equation, _):
+            applyEquation(equation, detail: equation.whole, on: parent.page)
         }
     }
 
@@ -4221,6 +4268,8 @@ final class ReaderCoordinator: NSObject {
         case .fraction(let identity, _, _, let detail):
             guard let fraction, fraction.identity == identity else { return false }
             return detail.sourceRanges != fraction.detail.sourceRanges
+        case .equation:
+            return false
         }
     }
 }
@@ -4252,9 +4301,11 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
             guard gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
                   activeNativeMathParent != nil,
                   let hit = pageHit(touch.location(in: pdfView)) else { return false }
-            let fraction = nativeFractionPressTarget(on: hit.page, at: hit.point)
-            let line = fraction == nil ? nativeMathPressTarget(on: hit.page, at: hit.point) : nil
-            guard mathDetailTakesPriority(on: hit.page, line: line, fraction: fraction) else { return false }
+            if equationDetail(on: hit.page, at: hit.point) == nil {
+                let fraction = nativeFractionPressTarget(on: hit.page, at: hit.point)
+                let line = fraction == nil ? nativeMathPressTarget(on: hit.page, at: hit.point) : nil
+                guard mathDetailTakesPriority(on: hit.page, line: line, fraction: fraction) else { return false }
+            }
         }
         if gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
            let pdfView {

@@ -112,6 +112,7 @@ jobs:
               -only-testing:PdfVocabTests/LayoutBlockContextBuilderTests
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testFormulaCircleToolRecognizesRasterAsCandidate
             )

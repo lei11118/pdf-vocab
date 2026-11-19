@@ -185,27 +185,11 @@ struct NativeFractionReadingSelection {
                       readingResult: readingResult)
     }
 
-    private static func safeParserText(_ displayText: String) -> String? {
-        var parserText = ""
-        parserText.reserveCapacity(displayText.utf16.count)
-        for scalar in displayText.unicodeScalars {
-            if scalar.value == 0x2212 { // U+2212 PDF minus; preserve it in sourceText.
-                parserText.append("-")
-                continue
-            }
-            guard scalar.value < 128 else { return nil }
-            let value = scalar.value
-            let isLetter = (65...90).contains(value) || (97...122).contains(value)
-            let isDigit = (48...57).contains(value)
-            let symbol = Character(scalar)
-            guard isLetter || isDigit || "+-*/().[]<>=".contains(symbol) else { return nil }
-            parserText.unicodeScalars.append(scalar)
-        }
-        guard !parserText.isEmpty,
-              !hasLongASCIIWord(parserText),
-              !hasSentencePunctuation(parserText),
-              hasBalancedGroups(parserText) else { return nil }
-        return parserText
+    static func safeParserText(_ displayText: String) -> String? {
+        guard !hasLongASCIIWord(displayText),
+              !hasSentencePunctuation(displayText),
+              hasBalancedGroups(displayText) else { return nil }
+        return MathReadingService.latexForLayoutFragment(displayText)
     }
 
     private static func rowResult(sourceText: String, parserText: String) -> MathReadingResult? {
@@ -241,7 +225,12 @@ struct NativeFractionReadingSelection {
 
     private static func hasSentencePunctuation(_ text: String) -> Bool {
         let characters = Array(text)
-        for index in characters.indices where ",;:!?".contains(characters[index]) { return true }
+        var depth = 0
+        for character in characters {
+            if "([".contains(character) { depth += 1 }
+            if ")]".contains(character) { depth -= 1 }
+            if character == ",", depth == 0 { return true }
+        }
         for index in characters.indices where characters[index] == "." {
             let beforeIsDigit = index > 0 && characters[index - 1].wholeNumberValue != nil
             let afterIsDigit = index + 1 < characters.count && characters[index + 1].wholeNumberValue != nil

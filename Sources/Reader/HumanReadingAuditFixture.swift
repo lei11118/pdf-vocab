@@ -18,6 +18,16 @@ enum HumanReadingAuditFixture {
         }
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger") {
+            for raster in [false, true] {
+                let url = temporaryDirectory.appendingPathComponent(
+                    raster ? "Schrodinger-audit-raster.pdf" : "Schrodinger-audit-native.pdf")
+                defer { try? FileManager.default.removeItem(at: url) }
+                try schrodingerPDF(raster: raster).write(to: url, options: .atomic)
+                _ = try store.importFile(from: url)
+            }
+            return
+        }
         let nativeURL = temporaryDirectory.appendingPathComponent("Human-reading-audit-text.pdf")
         let scanURL = temporaryDirectory.appendingPathComponent("Human-reading-audit-scan.pdf")
         defer {
@@ -94,6 +104,66 @@ enum HumanReadingAuditFixture {
             context.cgContext.scaleBy(x: 1, y: -1)
             context.cgContext.draw(bitmap, in: pageBounds)
             context.cgContext.restoreGState()
+        }
+    }
+
+    /// Redrawn from OpenStax University Physics Vol. 3, equation 7.23.
+    /// These are separate vector rule and text objects, independent of the recognition parser.
+    static let schrodingerPageRegion = CGRect(x: 54, y: 465, width: 465, height: 58)
+
+    static func schrodingerPDF(raster: Bool) -> Data {
+        let region = schrodingerPageRegion
+        let midline = pageBounds.maxY - region.midY
+        func draw(_ context: CGContext) {
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 23)]
+            var x = region.minX + 8
+            func inline(_ text: String) {
+                let string = text as NSString
+                string.draw(at: CGPoint(x: x, y: midline - 15), withAttributes: attributes)
+                x += string.size(withAttributes: attributes).width
+            }
+            func fraction(_ numerator: String, _ denominator: String) {
+                let top = numerator as NSString
+                let bottom = denominator as NSString
+                let topWidth = top.size(withAttributes: attributes).width
+                let bottomWidth = bottom.size(withAttributes: attributes).width
+                let barWidth = max(topWidth, bottomWidth) + 4
+                x += 3
+                top.draw(at: CGPoint(x: x + (barWidth - topWidth) / 2, y: midline - 30),
+                         withAttributes: attributes)
+                bottom.draw(at: CGPoint(x: x + (barWidth - bottomWidth) / 2, y: midline + 2),
+                            withAttributes: attributes)
+                context.setStrokeColor(UIColor.black.cgColor)
+                context.setLineWidth(1)
+                context.move(to: CGPoint(x: x, y: midline))
+                context.addLine(to: CGPoint(x: x + barWidth, y: midline))
+                context.strokePath()
+                x += barWidth + 3
+            }
+            inline("−")
+            fraction("ℏ²", "2m")
+            fraction("∂²Ψ(x,t)", "∂x²")
+            inline("+ U(x,t)Ψ(x,t) = iℏ")
+            fraction("∂Ψ(x,t)", "∂t")
+        }
+        let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
+        guard raster else {
+            return renderer.pdfData { context in
+                context.beginPage()
+                draw(context.cgContext)
+            }
+        }
+        let bitmap = UIGraphicsImageRenderer(size: pageBounds.size).image { context in
+            UIColor.white.setFill()
+            context.fill(pageBounds)
+            draw(context.cgContext)
+        }.cgImage
+        guard let bitmap else { return Data() }
+        return renderer.pdfData { context in
+            context.beginPage()
+            context.cgContext.translateBy(x: 0, y: pageBounds.height)
+            context.cgContext.scaleBy(x: 1, y: -1)
+            context.cgContext.draw(bitmap, in: pageBounds)
         }
     }
 }

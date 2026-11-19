@@ -98,7 +98,7 @@ struct NativeFractionLayout {
     private static let maximumGlyphsPerRow = 12
     private static let maximumNearbyGlyphsPerRule = 64
     private static let maximumHorizontalSliceGlyphs = 4_096
-    private static let allowedSymbols = Set("+-−×·÷=*/^_(),.[]{}<>≤≥≠≈±")
+    private static let allowedSymbols = Set("+-−×·÷=*/^_(),.[]{}<>≤≥≠≈±⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉")
 
     /// Narrow rules are resolved first so a verified child can occupy a parent row.
     static func detect(in scan: PDFTextLayout.PageScan) -> [Fraction] {
@@ -114,9 +114,19 @@ struct NativeFractionLayout {
             .sorted { $0.1.length < $1.1.length }
         for (rule, geometry) in rules {
             guard let localGlyphs = nearbyGlyphs(glyphs, rule: geometry) else { continue }
-            guard let top = resolveRow(localGlyphs, side: 1, rule: geometry, candidates: candidates),
-                  let bottom = resolveRow(localGlyphs, side: -1, rule: geometry, candidates: candidates)
-            else { continue }
+            // Co-baseline fraction bars can be much closer than the fallback
+            // search radius. Keep their neighbouring text outside each row.
+            let hasAdjacentBar = rules.contains { _, other in
+                guard other.rect != geometry.rect,
+                      abs(other.y - geometry.y) <= max(other.width, geometry.width),
+                      other.minX >= geometry.maxX || other.maxX <= geometry.minX else { return false }
+                return abs(other.x - geometry.x) <= (other.length + geometry.length) * 1.5
+            }
+            let rowGlyphs = hasAdjacentBar ? localGlyphs.filter {
+                $0.center.x >= geometry.minX && $0.center.x <= geometry.maxX
+            } : localGlyphs
+            guard let top = resolveRow(rowGlyphs, side: 1, rule: geometry, candidates: candidates),
+                  let bottom = resolveRow(rowGlyphs, side: -1, rule: geometry, candidates: candidates) else { continue }
             guard rowsArePlausiblySpaced(top, bottom, around: geometry) else { continue }
             let usedIndices = Set(top.glyphs.map(\.sourceIndex))
             guard bottom.glyphs.allSatisfy({ !usedIndices.contains($0.sourceIndex) }) else { continue }
@@ -367,6 +377,7 @@ struct NativeFractionLayout {
             CharacterSet.letters.contains(scalar)
                 || CharacterSet.decimalDigits.contains(scalar)
                 || allowedSymbols.contains(Character(scalar))
+                || MathSymbolLexicon.entry(for: String(scalar)) != nil
         }
     }
 
