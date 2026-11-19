@@ -937,6 +937,13 @@ final class ReaderCoordinator: NSObject {
         let fractions = cachedNativeFractions(on: page, scan: scan).filter { fraction in
             fraction.orderedGlyphs.contains { indices.contains($0.sourceIndex) }
         }
+        let hasRasterInCircle = scan.imageBounds.contains { image in
+            image.contains(circle.bounds) || circle.enclosesCenter(of: image)
+        }
+        if fractions.isEmpty && (hasRasterInCircle || docScanned) {
+            recognizeScannedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
+            return
+        }
         let hasEquality = enclosedGlyphs.contains { $0.element.text == "=" }
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
@@ -1019,11 +1026,7 @@ final class ReaderCoordinator: NSObject {
             return
         }
 
-        let hasRasterInCircle = scan.imageBounds.contains { image in
-            image.contains(CGPoint(x: circle.bounds.midX, y: circle.bounds.midY))
-                || circle.enclosesCenter(of: image)
-        }
-        if hasRasterInCircle || scan.glyphs.isEmpty || docScanned {
+        if scan.glyphs.isEmpty {
             recognizeScannedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
         } else {
             onFormulaCircleOutcome?("圈内没有可识别的公式。")

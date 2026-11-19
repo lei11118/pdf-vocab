@@ -14,6 +14,7 @@ final class PDFTextLayout {
     }
     private struct Font {
         var unicode: [Int: String] = [:]
+        var registeredUnicode: [Int: String] = [:]
         var lengths: [Int] = [1]
         var widths: [Int: CGFloat] = [:]
         var defaultWidth: CGFloat?
@@ -28,7 +29,7 @@ final class PDFTextLayout {
                 var found: (Int,String,Int)?
                 for length in lengths where i+length <= bytes.count {
                     let code = bytes[i..<i+length].reduce(0) { ($0 << 8) | Int($1) }
-                    if let text = unicode[code] { found = (code,text,length); break }
+                    if let text = unicode[code] ?? registeredUnicode[code] { found = (code,text,length); break }
                 }
                 if let (code,text,length) = found { result.append((code,text,length)); i += length }
                 else {
@@ -208,7 +209,7 @@ final class PDFTextLayout {
             var dictionary: CGPDFDictionaryRef?
             guard CGPDFObjectGetValue(object,.dictionary,&dictionary), let dictionary else { s.state.font = nil; return }
             let key = "\(s.streamID)|\(String(cString:name))"
-            let font = s.fonts[key] ?? PDFTextLayout.font(dictionary)
+            let font = s.fonts[key] ?? PDFTextLayout.font(dictionary, useRegisteredCIDMapping: s.collectsRules)
             s.fonts[key] = font; s.state.font = font
         }
         CGPDFOperatorTableSetCallback(table,"Tc") { scanner,p in PDFTextLayout.owner(p)?.state.charSpace = PDFTextLayout.number(scanner) }
@@ -361,7 +362,7 @@ final class PDFTextLayout {
     private static func real(_ array: CGPDFArrayRef, _ index: Int) -> CGFloat {
         var value: CGPDFReal = 0; CGPDFArrayGetNumber(array,index,&value); return CGFloat(value)
     }
-    private static func font(_ dict: CGPDFDictionaryRef) -> Font {
+    private static func font(_ dict: CGPDFDictionaryRef, useRegisteredCIDMapping: Bool) -> Font {
         var font = Font(), descriptor: CGPDFDictionaryRef?
         var first: CGPDFInteger = 0
         CGPDFDictionaryGetInteger(dict,"FirstChar",&first)
@@ -380,6 +381,13 @@ final class PDFTextLayout {
             var child: CGPDFDictionaryRef?
             if CGPDFArrayGetDictionary(descendants,0,&child), let child {
                 CGPDFDictionaryGetDictionary(child,"FontDescriptor",&descriptor)
+                var systemInfo: CGPDFDictionaryRef?
+                if useRegisteredCIDMapping, encoding == "Identity-H",
+                   CGPDFDictionaryGetDictionary(child, "CIDSystemInfo", &systemInfo), let systemInfo,
+                   dictionaryString(systemInfo, "Registry") == "Adobe",
+                   dictionaryString(systemInfo, "Ordering") == "Japan1" {
+                    font.registeredUnicode = japan1Unicode
+                }
                 var value: CGPDFReal = 1000
                 CGPDFDictionaryGetNumber(child,"DW",&value); font.defaultWidth = CGFloat(value)
                 if let widths = array(child,"W") {
@@ -428,6 +436,21 @@ final class PDFTextLayout {
             if base.contains("+"), font.unicode.isEmpty, name(dict,"Encoding") == nil { font.supported = false }
         }
         return font
+    }
+
+    private static let japan1Unicode: [Int: String] = {
+        guard let url = Bundle.main.url(forResource: "Adobe-Japan1-UCS2", withExtension: "cmap"),
+              let cmap = try? String(contentsOf: url, encoding: .isoLatin1) else { return [:] }
+        var decoded = Font()
+        readCMap(cmap, into: &decoded)
+        return decoded.unicode
+    }()
+
+    private static func dictionaryString(_ dictionary: CGPDFDictionaryRef, _ key: String) -> String? {
+        var value: CGPDFStringRef?
+        guard key.withCString({ CGPDFDictionaryGetString(dictionary, $0, &value) }), let value
+        else { return nil }
+        return CGPDFStringCopyTextString(value) as String?
     }
 
     /// Adobe Unicode glyph names can carry a scalar in a simple font's

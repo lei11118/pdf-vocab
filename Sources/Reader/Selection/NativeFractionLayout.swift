@@ -124,8 +124,10 @@ struct NativeFractionLayout {
             let rowGlyphs = hasAdjacentBar ? localGlyphs.filter {
                 $0.center.x >= geometry.minX && $0.center.x <= geometry.maxX
             } : localGlyphs
-            guard let top = resolveRow(rowGlyphs, side: 1, rule: geometry, candidates: candidates),
-                  let bottom = resolveRow(rowGlyphs, side: -1, rule: geometry, candidates: candidates) else { continue }
+            let widthRatio: CGFloat = hasAdjacentBar ? 4.25 : 3.5
+            guard let top = resolveRow(rowGlyphs, side: 1, rule: geometry, candidates: candidates, widthRatio: widthRatio),
+                  let bottom = resolveRow(rowGlyphs, side: -1, rule: geometry, candidates: candidates, widthRatio: widthRatio)
+            else { continue }
             guard rowsArePlausiblySpaced(top, bottom, around: geometry) else { continue }
             let usedIndices = Set(top.glyphs.map(\.sourceIndex))
             guard bottom.glyphs.allSatisfy({ !usedIndices.contains($0.sourceIndex) }) else { continue }
@@ -162,8 +164,8 @@ struct NativeFractionLayout {
     }
 
     private static func resolveRow(_ glyphs: [PositionedGlyph], side: CGFloat, rule: RuleGeometry,
-                                   candidates: [Fraction]) -> Row? {
-        guard let ordinary = rowCandidates(glyphs, side: side, rule: rule) else { return nil }
+                                   candidates: [Fraction], widthRatio: CGFloat) -> Row? {
+        guard let ordinary = rowCandidates(glyphs, side: side, rule: rule, widthRatio: widthRatio) else { return nil }
         let children = candidates.filter { child in
             let region = child.region
             let barWidth = child.ruleRegion.width
@@ -245,7 +247,7 @@ struct NativeFractionLayout {
 
     private static func rowCandidates(_ glyphs: [PositionedGlyph],
                                       side: CGFloat,
-                                      rule: RuleGeometry) -> [RowCandidate]? {
+                                      rule: RuleGeometry, widthRatio: CGFloat) -> [RowCandidate]? {
         var nearby: [PositionedGlyph] = []
         for glyph in glyphs {
             let height = glyph.rect.height
@@ -265,7 +267,7 @@ struct NativeFractionLayout {
         var rows: [RowCandidate] = []
         for cluster in clusters {
             for component in horizontalComponents(cluster, ruleLength: rule.length) {
-                if let row = makeRowCandidate(component, side: side, rule: rule) {
+                if let row = makeRowCandidate(component, side: side, rule: rule, widthRatio: widthRatio) {
                     rows.append(row)
                 }
             }
@@ -314,7 +316,7 @@ struct NativeFractionLayout {
 
     private static func makeRowCandidate(_ glyphs: [PositionedGlyph],
                                          side: CGFloat,
-                                         rule: RuleGeometry) -> RowCandidate? {
+                                         rule: RuleGeometry, widthRatio: CGFloat) -> RowCandidate? {
         guard !glyphs.isEmpty, glyphs.count <= maximumGlyphsPerRow else { return nil }
         let ordered = glyphs.sorted { $0.rect.minX < $1.rect.minX }
         guard let first = ordered.first else { return nil }
@@ -337,7 +339,7 @@ struct NativeFractionLayout {
         let rowWidth = rect.width
         guard rowWidth > 0,
               rowWidth / rule.length <= 2.5,
-              rule.length / rowWidth <= 3.5 else { return nil }
+              rule.length / rowWidth <= widthRatio else { return nil }
         let overlap = max(0, min(rect.maxX, rule.maxX) - max(rect.minX, rule.minX))
         guard overlap / min(rowWidth, rule.length) >= 0.55 else { return nil }
         let maximumCenterOffset = max(rule.length * 0.35, medianHeight * 0.35)

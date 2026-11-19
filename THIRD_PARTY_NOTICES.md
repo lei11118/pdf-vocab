@@ -1,5 +1,9 @@
 # 第三方组件与许可证
 
+## Adobe 字符映射
+
+`Resources/Reading/Adobe-Japan1-UCS2.cmap` 使用 Adobe 发布的字符映射。文件头保留完整的 BSD 3-Clause 许可证。 [Adobe 来源与许可](https://github.com/adobe-type-tools/mapping-resources-pdf/blob/2dd5e53fb74a01718b9dfd448a0d1cce6fff2aa5/pdf2unicode/Adobe-Japan1-UCS2)
+
 ## 0.50.0 离线知识图谱资源
 
 - Open English WordNet 2025：[来源](https://en-word.net/downloads)，CC BY 4.0 及 Princeton WordNet License。以共享英文义项建立同近义关系，保留词性及英文释义作为连线依据。转换生成 `Resources/LexicalSources/lexical.sqlite`，属于数据格式转换及子集抽取。
