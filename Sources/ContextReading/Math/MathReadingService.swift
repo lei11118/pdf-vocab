@@ -38,6 +38,14 @@ public enum MathReadingService {
     /// Parses only the mathematical syntax present in the supplied text. This does not inspect a PDF or
     /// verify the accuracy of text previously recognized by OCR.
     public static func resolve(_ sourceText: String) -> MathReadingResult? {
+        resolve(sourceText, verifiedFragment: false)
+    }
+
+    static func resolveVerifiedFragment(_ sourceText: String) -> MathReadingResult? {
+        resolve(sourceText, verifiedFragment: true)
+    }
+
+    private static func resolve(_ sourceText: String, verifiedFragment: Bool) -> MathReadingResult? {
         guard !sourceText.isEmpty else { return nil }
         guard sourceText.utf16.count <= maximumUTF16Length else {
             let prefix = prefixWithinUTF16Units(sourceText, maximumUTF16Units: maximumUTF16Length)
@@ -45,7 +53,7 @@ public enum MathReadingService {
             return needsReview(sourceText)
         }
         guard !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              hasStrongMathSignal(sourceText) else { return nil }
+              verifiedFragment || hasStrongMathSignal(sourceText) else { return nil }
         guard !sourceText.unicodeScalars.contains(where: { currencySymbols.contains(Character($0)) }) else {
             return nil
         }

@@ -202,7 +202,7 @@ struct NativeFractionReadingSelection {
                                      status: .parsedText,
                                      ast: .number(parserText))
         }
-        guard let parsed = MathReadingService.resolve(parserText),
+        guard let parsed = MathReadingService.resolveVerifiedFragment(parserText),
               parsed.status == .parsedText,
               parsed.ast?.isComplete == true else { return nil }
         return MathReadingResult(sourceText: sourceText,

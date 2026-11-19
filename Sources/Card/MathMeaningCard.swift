@@ -123,10 +123,12 @@ struct MathMeaningCard: View {
                         Text(result.status == .parsedOCR ? "候选排版" : "公式排版")
                             .font(DS.Fonts.caption)
                             .foregroundStyle(DS.foreground2)
-                        ScrollView(.horizontal) {
-                            MathFormulaLabel(latex: latex, fontSize: formulaFontSize)
-                                .fixedSize(horizontal: true, vertical: true)
-                                .padding(DS.Space.s)
+                        ViewThatFits(in: .horizontal) {
+                            formula(latex, fontSize: formulaFontSize)
+                            formula(latex, fontSize: formulaFontSize * 0.76)
+                            ScrollView(.horizontal) {
+                                formula(latex, fontSize: formulaFontSize)
+                            }
                         }
                         .background(DS.background1, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
                         .accessibilityIdentifier("math-card-rendered-formula")
@@ -224,6 +226,12 @@ struct MathMeaningCard: View {
             copied = false
             copiedLatex = false
         }
+    }
+
+    private func formula(_ latex: String, fontSize: CGFloat) -> some View {
+        MathFormulaLabel(latex: latex, fontSize: fontSize)
+            .fixedSize(horizontal: true, vertical: true)
+            .padding(DS.Space.s)
     }
 }
 

@@ -117,10 +117,9 @@ struct NativeFractionLayout {
             // Co-baseline fraction bars can be much closer than the fallback
             // search radius. Keep their neighbouring text outside each row.
             let hasAdjacentBar = rules.contains { _, other in
-                guard other.rect != geometry.rect,
-                      abs(other.y - geometry.y) <= max(other.width, geometry.width),
-                      other.minX >= geometry.maxX || other.maxX <= geometry.minX else { return false }
-                return abs(other.x - geometry.x) <= (other.length + geometry.length) * 1.5
+                other.rect != geometry.rect
+                    && abs(other.y - geometry.y) <= max(other.width, geometry.width)
+                    && (other.minX >= geometry.maxX || other.maxX <= geometry.minX)
             }
             let rowGlyphs = hasAdjacentBar ? localGlyphs.filter {
                 $0.center.x >= geometry.minX && $0.center.x <= geometry.maxX

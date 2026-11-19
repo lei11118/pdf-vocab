@@ -973,16 +973,14 @@ final class ReaderCoordinator: NSObject {
 
         if let first = enclosedGlyphs.first?.element {
             let seed = CGPoint(x: first.rect.midX, y: first.rect.midY)
-            if let line = SelectionGeometry.nativeMathPressTarget(on: page, at: seed),
-               let result = MathReadingService.resolve(line.lineSelection.string ?? ""),
-               result.status == .parsedText,
+            if let line = SelectionGeometry.nativeMathLine(on: page, at: seed),
                circle.enclosesCenter(of: line.lineBounds),
                scan.glyphs.filter({ !$0.text.allSatisfy(\.isWhitespace) &&
                     line.lineBounds.contains(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) })
                    .allSatisfy({ circle.enclosesCenter(of: $0.rect) }),
                enclosedGlyphs.allSatisfy({ line.lineBounds.intersects($0.element.rect) }) {
                 beginInlineFormula(selection: line.lineSelection, range: line.lineRange, region: line.lineBounds,
-                                   result: result, on: page)
+                                   result: line.readingResult, on: page)
                 finishFormulaCircle()
                 return
             }

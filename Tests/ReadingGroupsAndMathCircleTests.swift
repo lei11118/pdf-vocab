@@ -118,19 +118,27 @@ final class MathCircleTests: XCTestCase {
 
     @MainActor
     func testTimeDependentSchrodingerPreservesThreeFractionsAndSourceGlyphs() throws {
-        let document = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.schrodingerPDF(raster: false)))
+        let data = HumanReadingAuditFixture.schrodingerPDF(raster: false)
+        let document = try XCTUnwrap(PDFDocument(data: data))
         let page = try XCTUnwrap(document.page(at: 0))
         let scan = PDFTextLayout.scan(on: page)
         let fractions = NativeFractionLayout.detect(in: scan)
         let indices = Set(scan.glyphs.indices.filter { !scan.glyphs[$0].text.allSatisfy(\.isWhitespace) })
-        let glyphs = scan.glyphs.map(\.text).joined(separator: "|")
-        XCTAssertEqual(fractions.count, 3, glyphs)
+        let contents = "PDFKit=\(page.string ?? "") scan=\(scan.glyphs.map(\.text).joined(separator: "|")) "
+            + "fraction rows=\(fractions.map { $0.orderedGlyphs.map(\.glyph.text).joined() })"
+        if fractions.count != 3 {
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+            attachment.name = "schrodinger-native-vector-fixture.pdf"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(fractions.count, 3, contents)
         let expected = try XCTUnwrap(MathReadingService.resolve(
             #"-\frac{\hbar^{2}}{2m}\frac{\partial^{2}\Psi(x,t)}{\partial x^{2}}+U(x,t)\Psi(x,t)=i\hbar\frac{\partial\Psi(x,t)}{\partial t}"#
         ))
         XCTAssertEqual(expected.status, .parsedText)
         let equation = try XCTUnwrap(NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
-                                                                         fractions: fractions, on: page), glyphs)
+                                                                         fractions: fractions, on: page), contents)
         XCTAssertEqual(equation.whole.readingResult?.latex, expected.latex)
         XCTAssertEqual(equation.whole.readingResult?.ast, expected.ast)
         XCTAssertEqual(equation.whole.sourceRanges.count, indices.count)

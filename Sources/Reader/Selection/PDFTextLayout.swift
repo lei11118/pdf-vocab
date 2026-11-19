@@ -100,7 +100,33 @@ final class PDFTextLayout {
         let stream = CGPDFContentStreamCreateWithPage(ref)
         defer { CGPDFContentStreamRelease(stream) }
         layout.scan(stream)
-        return PageScan(glyphs: layout.glyphs, horizontalRules: layout.horizontalRules, imageBounds: layout.imageBounds)
+        let glyphs = collectingRules ? recoverUnmappedMathGlyphs(layout.glyphs, on: page) : layout.glyphs
+        return PageScan(glyphs: glyphs, horizontalRules: layout.horizontalRules, imageBounds: layout.imageBounds)
+    }
+
+    private static func recoverUnmappedMathGlyphs(_ glyphs: [Glyph], on page: PDFPage) -> [Glyph] {
+        let unresolved = glyphs.indices.filter { glyphs[$0].text == "\u{FFFD}" }
+        guard !unresolved.isEmpty, unresolved.count <= 256,
+              let text = page.string.map({ $0 as NSString }) else { return glyphs }
+        var result = glyphs
+        for index in unresolved {
+            let glyph = glyphs[index]
+            let point = CGPoint(x: glyph.rect.midX, y: glyph.rect.midY)
+            let characterIndex = page.characterIndex(at: point)
+            guard characterIndex >= 0, characterIndex < text.length else { continue }
+            let range = text.rangeOfComposedCharacterSequence(at: characterIndex)
+            let symbol = text.substring(with: range)
+            guard MathSymbolLexicon.entry(for: symbol) != nil,
+                  let selection = page.selection(for: range),
+                  selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) == symbol else { continue }
+            let bounds = selection.bounds(for: page)
+            let overlap = bounds.intersection(glyph.rect)
+            guard !overlap.isNull, bounds.contains(point),
+                  overlap.width >= glyph.rect.width * 0.65, overlap.height >= glyph.rect.height * 0.55
+            else { continue }
+            result[index] = Glyph(text: symbol, rect: glyph.rect, baseline: glyph.baseline)
+        }
+        return result
     }
     private static func owner(_ info: UnsafeMutableRawPointer?) -> PDFTextLayout? {
         info.map { Unmanaged<PDFTextLayout>.fromOpaque($0).takeUnretainedValue() }
@@ -342,7 +368,10 @@ final class PDFTextLayout {
         if let widths = array(dict,"Widths"), (0...65_535).contains(first) {
             for i in 0..<min(CGPDFArrayGetCount(widths),65_536) { font.widths[first+i] = real(widths,i) }
         }
-        if let encoding = name(dict,"Encoding") {
+        var differences: CGPDFDictionaryRef?
+        CGPDFDictionaryGetDictionary(dict, "Encoding", &differences)
+        let encoding = name(dict, "Encoding") ?? differences.flatMap { name($0, "BaseEncoding") }
+        if let encoding {
             if encoding == "MacRomanEncoding" { font.encoding = .macOSRoman }
             if encoding.hasPrefix("Identity-") { font.lengths = [2] }
             if encoding == "Identity-V" { font.supported = false }
@@ -388,6 +417,9 @@ final class PDFTextLayout {
             if let data = CGPDFStreamCopyData(stream,&format) as Data?, data.count < 4_000_000,
                let text = String(data:data,encoding:.isoLatin1) { readCMap(text,into:&font) }
         }
+        if let differences, let entries = array(differences, "Differences") {
+            readUnicodeGlyphNames(entries, into: &font)
+        }
         // Standard, non-embedded fonts may omit Widths. Use their declared font,
         // never PDFKit's substituted attributed-string font.
         if let base = name(dict,"BaseFont") {
@@ -396,6 +428,29 @@ final class PDFTextLayout {
             if base.contains("+"), font.unicode.isEmpty, name(dict,"Encoding") == nil { font.supported = false }
         }
         return font
+    }
+
+    /// Adobe Unicode glyph names can carry a scalar in a simple font's
+    /// Differences table even when ToUnicode is missing.
+    private static func readUnicodeGlyphNames(_ entries: CGPDFArrayRef, into font: inout Font) {
+        var code: Int?
+        for index in 0..<min(2_048, CGPDFArrayGetCount(entries)) {
+            var next: CGPDFInteger = 0
+            if CGPDFArrayGetInteger(entries, index, &next) {
+                code = (0...255).contains(next) ? next : nil
+                continue
+            }
+            var glyphName: UnsafePointer<CChar>?
+            guard let current = code, current <= 255,
+                  CGPDFArrayGetName(entries, index, &glyphName), let glyphName else { continue }
+            code = current + 1
+            guard font.unicode[current] == nil || font.unicode[current] == "\u{FFFD}" else { continue }
+            let name = String(cString: glyphName).split(separator: ".", maxSplits: 1).first ?? ""
+            let digits = name.hasPrefix("uni") && name.count == 7 ? name.dropFirst(3)
+                : name.hasPrefix("u") && (5...7).contains(name.count) ? name.dropFirst() : ""
+            guard let value = UInt32(digits, radix: 16), let scalar = UnicodeScalar(value) else { continue }
+            font.unicode[current] = String(scalar)
+        }
     }
     private static func readCMap(_ text: String, into font: inout Font) {
         let regex = try? NSRegularExpression(pattern:#"<[0-9a-fA-F]+>|\[|\]|[^\s<>\[\]]+"#)

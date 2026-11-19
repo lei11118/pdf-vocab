@@ -4,8 +4,8 @@ import XCTest
 @testable import PdfVocab
 
 @MainActor
-final class NativeMathPressSelectionTests: XCTestCase {
-    func testNativeMathPressTargetExpandsSpacedLineFromRightmostGlyph() throws {
+final class NativeMathLineTests: XCTestCase {
+    func testNativeMathLineExpandsSpacedLineFromRightmostGlyph() throws {
         let bounds = CGRect(x: 0, y: 0, width: 360, height: 240)
         let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
             context.beginPage()
@@ -22,7 +22,7 @@ final class NativeMathPressSelectionTests: XCTestCase {
         let glyph = try XCTUnwrap(page.selection(for: aRange))
         let rect = glyph.bounds(for: page)
 
-        let target = try XCTUnwrap(SelectionGeometry.nativeMathPressTarget(
+        let target = try XCTUnwrap(SelectionGeometry.nativeMathLine(
             on: page, at: CGPoint(x: rect.midX, y: rect.midY)),
             "A right-edge hit must recover the complete spaced formula from verified neighboring glyph geometry")
         XCTAssertEqual(target.lineRange, formulaRange,
@@ -30,7 +30,7 @@ final class NativeMathPressSelectionTests: XCTestCase {
         XCTAssertEqual(source.substring(with: target.lineRange), "F = ma")
     }
 
-    func testNativeMathPressTargetRejectsProseLongWordsAndStackedText() throws {
+    func testNativeMathLineRejectsProseLongWordsAndStackedText() throws {
         let bounds = CGRect(x: 0, y: 0, width: 400, height: 360)
         let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
             context.beginPage()
@@ -55,10 +55,10 @@ final class NativeMathPressSelectionTests: XCTestCase {
             XCTAssertNotEqual(range.location, NSNotFound, "Synthetic fixture includes \(token)")
             let selection = try XCTUnwrap(page.selection(for: range))
             let rect = selection.bounds(for: page)
-            let target = SelectionGeometry.nativeMathPressTarget(
+            let target = SelectionGeometry.nativeMathLine(
                 on: page, at: CGPoint(x: rect.midX, y: rect.midY))
             let details = target.map {
-                "line=\(NSStringFromRange($0.lineRange)) glyph=\(NSStringFromRange($0.glyphRange))"
+                "line=\(NSStringFromRange($0.lineRange))"
             } ?? "nil"
             XCTAssertNil(target,
                          "Prose, long variable names, and stacked text do not qualify as one native formula line: \(token); target=\(details)")
@@ -68,10 +68,10 @@ final class NativeMathPressSelectionTests: XCTestCase {
         XCTAssertNotEqual(stackedLine.location, NSNotFound)
         let xGlyph = try XCTUnwrap(page.selection(for: NSRange(location: stackedLine.location, length: 1)))
         let xRect = xGlyph.bounds(for: page)
-        let xTarget = SelectionGeometry.nativeMathPressTarget(
+        let xTarget = SelectionGeometry.nativeMathLine(
             on: page, at: CGPoint(x: xRect.midX, y: xRect.midY))
         XCTAssertNil(xTarget,
-                     "A press on the equation's x must also reject the nearby stacked fraction; got \(xTarget.map { NSStringFromRange($0.lineRange) } ?? "nil")")
+                     "Starting from the equation's x must also reject the nearby stacked fraction; got \(xTarget.map { NSStringFromRange($0.lineRange) } ?? "nil")")
     }
 
     func testNativeMathTargetHandlesLongTextPagesAndDecimalFormulaLine() throws {
@@ -95,7 +95,7 @@ final class NativeMathPressSelectionTests: XCTestCase {
         let formula = try XCTUnwrap(page.selection(for: formulaRange))
         let rect = formula.bounds(for: page)
 
-        let target = SelectionGeometry.nativeMathPressTarget(
+        let target = SelectionGeometry.nativeMathLine(
             on: page, at: CGPoint(x: rect.midX, y: rect.midY))
         let targetDetails = target.map {
             "line=\(NSStringFromRange($0.lineRange)) text=\($0.lineSelection.string ?? "nil")"
