@@ -2,21 +2,8 @@ import SwiftUI
 import SwiftMath
 import UIKit
 
-enum MathCardRouting {
-    static func resolve(sourceText: String,
-                        contextReadingEnabled: Bool,
-                        mathEnabled: Bool,
-                        contextualSelectionIsCurrent: Bool = true,
-                        isMathDetail: Bool = false) -> MathReadingResult? {
-        guard contextReadingEnabled, mathEnabled, contextualSelectionIsCurrent else { return nil }
-        // ReaderCoordinator caps display text at 400 characters and appends an ellipsis.
-        // A truncated display value is not safe input for a parsed math result.
-        guard !(sourceText.count > 400 && sourceText.hasSuffix("…")) else { return nil }
-        if isMathDetail { return singleGlyphDetail(sourceText) }
-        return MathReadingService.resolve(sourceText)
-    }
-
-    private static func singleGlyphDetail(_ sourceText: String) -> MathReadingResult {
+enum MathSymbolReading {
+    static func detail(_ sourceText: String) -> MathReadingResult {
         let glyph = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         if glyph == sourceText, glyph.unicodeScalars.count == 1, let scalar = glyph.unicodeScalars.first,
            (48...57).contains(scalar.value) {
@@ -228,12 +215,6 @@ struct MathMeaningCard: View {
                     }
                 }
 
-                if !isParsed {
-                    Text("当前版本只解析选中的公式文字，不识别页面中的公式图片。")
-                        .font(.caption)
-                        .foregroundStyle(DS.foreground2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             .padding(DS.Space.m)
         }

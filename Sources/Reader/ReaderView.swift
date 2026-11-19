@@ -28,7 +28,6 @@ struct ReaderView: View {
     @State private var suppressSave = false
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
-    @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
     @AppStorage(TranslationModel.preferenceKey) private var translationModelID = TranslationModel.systemID
     @AppStorage(TranslationModel.labBackendKey) private var translationBackend = TranslationModel.Backend.metal
     @State private var translationPrefetch: Task<Void, Never>?
@@ -126,16 +125,9 @@ struct ReaderView: View {
                     self.cardContent = nil
                     translationRequest = nil
                 } else if let cardContent, case .math = cardContent {
-                    readerHandle.coordinator?.dismissSelection()
                     self.cardContent = nil
                     translationRequest = nil
                 }
-            }
-            .onChange(of: mathReadingEnabled) { _, enabled in
-                guard !enabled, let cardContent, case .math = cardContent else { return }
-                readerHandle.coordinator?.dismissSelection()
-                self.cardContent = nil
-                translationRequest = nil
             }
             .task(id: contextReadingEnabled) {
                 guard contextReadingEnabled else { return }
@@ -1354,16 +1346,6 @@ struct ReaderView: View {
             cardContent = .math(math)
             return
         }
-        let mathSourceText = contextual?.displaySurface ?? info.text
-        if let math = MathCardRouting.resolve(
-            sourceText: mathSourceText,
-            contextReadingEnabled: contextReadingEnabled,
-            mathEnabled: mathReadingEnabled,
-            isMathDetail: info.mathDetail) {
-            translationRequest = nil
-            cardContent = .math(math)
-            return
-        }
         if let contextual, shouldShowContextualCard(contextual) {
             translationRequest = nil
             cardContent = .contextual(contextual)
@@ -1388,14 +1370,6 @@ struct ReaderView: View {
            (info.contextual == nil
                 || info.contextual?.generation == contextReadingGeneration),
            let math = info.mathReadingResult {
-            translationRequest = nil
-            cardContent = .math(math)
-            return
-        }
-        if let math = MathCardRouting.resolve(
-            sourceText: text,
-            contextReadingEnabled: contextReadingEnabled,
-            mathEnabled: mathReadingEnabled) {
             translationRequest = nil
             cardContent = .math(math)
             return

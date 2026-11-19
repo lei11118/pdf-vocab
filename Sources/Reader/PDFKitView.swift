@@ -8,9 +8,7 @@ struct SelectionInfo: Equatable {
     var primaryTerm: String
     /// Present only when the local context-reading mode routed native PDF text.
     var contextual: ContextualSelection? = nil
-    /// An exact glyph selected inside an active native math expression.
-    var mathDetail = false
-    /// A parser-verified result for a structured native math selection.
+    /// A result produced by the formula circle tool.
     var mathReadingResult: MathReadingResult? = nil
     var mathSourceImage: UIImage? = nil
 }

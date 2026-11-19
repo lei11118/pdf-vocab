@@ -77,21 +77,16 @@ final class ContextReadingModelTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         XCTAssertFalse(FeatureFlags.contextReadingEnabled(in: defaults))
-        XCTAssertFalse(FeatureFlags.mathEnabled(in: defaults))
         XCTAssertFalse(FeatureFlags.prefetchEnabled(in: defaults))
 
         defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
         XCTAssertTrue(FeatureFlags.contextReadingEnabled(in: defaults))
-        XCTAssertFalse(FeatureFlags.mathEnabled(in: defaults))
         XCTAssertFalse(FeatureFlags.prefetchEnabled(in: defaults))
 
-        defaults.set(true, forKey: FeatureFlags.mathEnabledKey)
         defaults.set(true, forKey: FeatureFlags.prefetchEnabledKey)
         defaults.set(false, forKey: FeatureFlags.contextReadingEnabledKey)
-        XCTAssertFalse(FeatureFlags.mathEnabled(in: defaults), "Subfeatures stay ineffective when the master switch is off")
         XCTAssertFalse(FeatureFlags.prefetchEnabled(in: defaults), "Subfeatures stay ineffective when the master switch is off")
         defaults.set(true, forKey: FeatureFlags.contextReadingEnabledKey)
-        XCTAssertTrue(FeatureFlags.mathEnabled(in: defaults))
         XCTAssertTrue(FeatureFlags.prefetchEnabled(in: defaults))
     }
 

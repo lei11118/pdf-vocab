@@ -123,11 +123,12 @@ enum ReadingPhraseGrouper {
         }
 
         let target = selectedIndex - first
+        let hasPredicate = words.contains { $0.tag == .verb }
         var totals = [Int](repeating: 0, count: words.count + 1)
         var ends = Array(words.indices)
         for start in words.indices.reversed() {
             totals[start] = totals[start + 1]
-            for chunk in candidates(startingAt: start, in: words) {
+            for chunk in candidates(startingAt: start, in: words, hasPredicate: hasPredicate) {
                 let score = chunk.score + totals[chunk.end + 1]
                 if score > totals[start] || (score == totals[start] && chunk.end > ends[start]) {
                     totals[start] = score
@@ -152,7 +153,7 @@ enum ReadingPhraseGrouper {
     static let maximumCharacters = 80
     static let maximumWords = 7
 
-    private static func candidates(startingAt start: Int, in words: [Word]) -> [Chunk] {
+    private static func candidates(startingAt start: Int, in words: [Word], hasPredicate: Bool) -> [Chunk] {
         var result: [Chunk] = []
         let limit = min(words.count - 1, start + maximumWords - 1)
         guard start < limit else { return result }
@@ -193,6 +194,9 @@ enum ReadingPhraseGrouper {
         while noun <= limit {
             let word = words[noun]
             if word.tag == .noun {
+                // Unpunctuated OCR labels and repeated occurrences can look
+                // like nominal compounds to a tagger. Keep their anchors separate.
+                if hasHead && (!hasPredicate || word.text == words[noun - 1].text) { break }
                 hasHead = true
                 if noun > start {
                     result.append(Chunk(end: noun, score: 6 * (noun - start) + 2))

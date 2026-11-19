@@ -1,22 +1,50 @@
 import PDFKit
 
-/// A single visual equation assembled from exact PDF glyphs and stacked fraction bars.
-struct NativeEquationCircleSelection {
-    struct Detail {
-        let selection: PDFSelection
-        let sourceRanges: [NSRange]
-        let region: CGRect
-        let readingResult: MathReadingResult?
-        let fractionDetail: NativeFractionReadingSelection.Detail?
-        let isGlyph: Bool
+struct FormulaCircleDetail {
+    let selection: PDFSelection
+    let sourceRanges: [NSRange]
+    let region: CGRect
+    let readingResult: MathReadingResult?
+    let fractionDetail: NativeFractionReadingSelection.Detail?
+    let isGlyph: Bool
+
+    init(selection: PDFSelection, sourceRanges: [NSRange], region: CGRect,
+         readingResult: MathReadingResult?, fractionDetail: NativeFractionReadingSelection.Detail?, isGlyph: Bool) {
+        self.selection = selection
+        self.sourceRanges = sourceRanges
+        self.region = region
+        self.readingResult = readingResult
+        self.fractionDetail = fractionDetail
+        self.isGlyph = isGlyph
     }
 
+    init(fraction: NativeFractionReadingSelection.Detail, region: CGRect, isGlyph: Bool = false) {
+        self.init(selection: fraction.selection, sourceRanges: fraction.sourceRanges, region: region,
+                  readingResult: fraction.readingResult, fractionDetail: fraction, isGlyph: isGlyph)
+    }
+
+    init(fraction: NativeFractionReadingSelection.Detail, layout: NativeFractionLayout.Fraction, on page: PDFPage) {
+        switch fraction.scope {
+        case .whole:
+            self.init(fraction: fraction, region: layout.region)
+        case .row:
+            self.init(fraction: fraction, region: SelectionGeometry.placedBounds(of: fraction.selection, on: page))
+        case .glyph(_, let sourceIndex):
+            let region = layout.orderedGlyphs.first { $0.sourceIndex == sourceIndex }?.glyph.rect
+                ?? fraction.selection.bounds(for: page)
+            self.init(fraction: fraction, region: region, isGlyph: true)
+        }
+    }
+}
+
+/// A single visual equation assembled from exact PDF glyphs and stacked fraction bars.
+struct NativeEquationCircleSelection {
     private struct FractionPart {
         let layout: NativeFractionLayout.Fraction
         let reading: NativeFractionReadingSelection
     }
 
-    let whole: Detail
+    let whole: FormulaCircleDetail
     private let fractions: [FractionPart]
     private let inlineGlyphs: [NativeMathGlyphSelection.Entry]
 
@@ -79,37 +107,21 @@ struct NativeEquationCircleSelection {
         let region = inline.reduce(fractions.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
         let original = MathReadingResult(sourceText: surface, latex: result.latex, unicode: result.unicode,
                                          explanation: result.explanation, status: result.status, ast: result.ast)
-        let whole = Detail(selection: mapped.mergedSelection, sourceRanges: mapped.ranges, region: region,
-                           readingResult: original, fractionDetail: nil, isGlyph: false)
+        let whole = FormulaCircleDetail(selection: mapped.mergedSelection, sourceRanges: mapped.ranges, region: region,
+                                        readingResult: original, fractionDetail: nil, isGlyph: false)
         return Self(whole: whole, fractions: parts, inlineGlyphs: Array(mapped.entries.prefix(inline.count)))
     }
 
-    func detail(at point: CGPoint, on page: PDFPage) -> Detail? {
+    func detail(at point: CGPoint, on page: PDFPage) -> FormulaCircleDetail? {
         let glyphs = inlineGlyphs.filter { $0.glyph.rect.contains(point) }
         if let glyph = glyphs.first, glyphs.count == 1 {
-            let result = MathCardRouting.resolve(sourceText: glyph.glyph.text, contextReadingEnabled: true,
-                                                 mathEnabled: true, isMathDetail: true)
-            return Detail(selection: glyph.selection, sourceRanges: [glyph.sourceRange], region: glyph.glyph.rect,
-                          readingResult: result, fractionDetail: nil, isGlyph: true)
+            return FormulaCircleDetail(selection: glyph.selection, sourceRanges: [glyph.sourceRange],
+                                       region: glyph.glyph.rect, readingResult: MathSymbolReading.detail(glyph.glyph.text),
+                                       fractionDetail: nil, isGlyph: true)
         }
         let candidates = fractions.filter { $0.layout.region.contains(point) }
         guard candidates.count == 1, let part = candidates.first,
               let hit = part.layout.hitTest(point), let detail = part.reading.detail(for: hit) else { return nil }
-        let region: CGRect
-        let isGlyph: Bool
-        switch detail.scope {
-        case .whole:
-            region = part.layout.region
-            isGlyph = false
-        case .row:
-            region = SelectionGeometry.placedBounds(of: detail.selection, on: page)
-            isGlyph = false
-        case .glyph(_, let sourceIndex):
-            region = part.layout.orderedGlyphs.first { $0.sourceIndex == sourceIndex }?.glyph.rect
-                ?? detail.selection.bounds(for: page)
-            isGlyph = true
-        }
-        return Detail(selection: detail.selection, sourceRanges: detail.sourceRanges, region: region,
-                      readingResult: detail.readingResult, fractionDetail: detail, isGlyph: isGlyph)
+        return FormulaCircleDetail(fraction: detail, layout: part.layout, on: page)
     }
 }

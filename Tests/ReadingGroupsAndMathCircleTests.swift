@@ -32,6 +32,8 @@ final class ReadingPhraseGrouperTests: XCTestCase {
             ("The bank financed the path along the river bank.", "river", "river bank"),
             ("The result, based on three trials, was published.", "result", nil),
             ("Wait, for once, before answering.", "Wait", nil),
+            ("charge charge 3.2 +", "charge", nil),
+            ("omega delta", "omega", nil),
         ]
         for (sentence, selected, expected) in examples {
             XCTAssertEqual(try group(in: sentence, selected: selected)?.sourceSurface, expected,

@@ -124,8 +124,7 @@ jobs:
               exit 1
             fi
             TEST_ARGS=(
-              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryAndMath
-              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditNativeFractionPressSelectsWholeThenExactLeaf
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveReaderDictionaryAndLinks
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testFormulaCircleToolRecognizesRasterAsCandidate
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR

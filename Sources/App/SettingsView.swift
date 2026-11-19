@@ -8,7 +8,6 @@ struct SettingsView: View {
 
     @AppStorage("autoSpeakOnSelect") private var autoSpeakOnSelect = false
     @AppStorage(FeatureFlags.contextReadingEnabledKey) private var contextReadingEnabled = false
-    @AppStorage(FeatureFlags.mathEnabledKey) private var mathReadingEnabled = false
     @AppStorage("autoCollectOnSelect") private var autoCollectOnSelect = false
     @AppStorage("autoHighlightCollected") private var autoHighlightCollected = false
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
@@ -59,9 +58,6 @@ struct SettingsView: View {
                 Section {
                     Toggle("语境阅读", isOn: $contextReadingEnabled)
                         .accessibilityIdentifier("context-reading-toggle")
-                    Toggle("长按识别公式（兼容操作）", isOn: $mathReadingEnabled)
-                        .disabled(!contextReadingEnabled)
-                        .accessibilityIdentifier("math-reading-toggle")
                     NavigationLink("翻译模型") { TranslationModelsView() }
                     Button {
                         clearingContextTranslationCache = true
@@ -92,7 +88,7 @@ struct SettingsView: View {
                 } header: {
                     Text("语境阅读")
                 } footer: {
-                    Text("开启后，在 PDF 中查看词与词组的语境译义。公式选区支持带可验证文字层的公式。")
+                    Text("开启后，在 PDF 中查看词与词组的语境译义。")
                 }
                 Section {
                     Toggle("选中即自动收录并永久加亮", isOn: $autoCollectOnSelect)

@@ -189,27 +189,9 @@ final class ReaderCoordinator: NSObject {
     }
     private struct ActiveNativeMathParent {
         let page: PDFPage
-        var kind: Kind
-
-        enum Kind {
-            case line(sourceRange: NSRange, identity: String, selectedRange: NSRange)
-            case fraction(identity: NativeFractionIdentity,
-                          layout: NativeFractionLayout.Fraction,
-                          readingSelection: NativeFractionReadingSelection,
-                          selectedDetail: NativeFractionReadingSelection.Detail)
-            case equation(NativeEquationCircleSelection, selectedRanges: [NSRange])
-        }
-    }
-    struct NativeFractionGlyphIdentity: Equatable {
-        let sourceIndex: Int
-        let text: String
-    }
-    struct NativeFractionIdentity: Equatable {
-        let glyphs: [NativeFractionGlyphIdentity]
-        let region: CGRect
-        let ruleStart: CGPoint
-        let ruleEnd: CGPoint
-        let ruleWidth: CGFloat
+        let whole: FormulaCircleDetail
+        let detailAt: (CGPoint) -> FormulaCircleDetail?
+        var selectedRanges: [NSRange]
     }
     private var activeNativeMathParent: ActiveNativeMathParent?
     private final class NativeFractionPageCache {
@@ -225,17 +207,6 @@ final class ReaderCoordinator: NSObject {
     }
     private var nativeFractionPageCache: NativeFractionPageCache?
 
-    struct NativeFractionPressTarget {
-        let fraction: NativeFractionLayout.Fraction
-        let identity: NativeFractionIdentity
-        let readingSelection: NativeFractionReadingSelection
-        let detail: NativeFractionReadingSelection.Detail
-        let isActive: Bool
-    }
-
-    private struct NativeFractionHitContext {
-        let candidates: [NativeFractionLayout.Fraction]
-    }
     private struct PendingContextFingerAnchor {
         let viewPoint: CGPoint
         let page: PDFPage
@@ -888,80 +859,6 @@ final class ReaderCoordinator: NSObject {
         freezeScrolling(true)
     }
 
-    func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
-        guard activeNativeMathParent?.page === page || (!docScanned && contextReadingEnabled && FeatureFlags.mathEnabled()),
-              let target = activeScopedMathGlyph(on: page, at: point)
-                ?? SelectionGeometry.nativeMathPressTarget(on: page, at: point),
-              !page.annotations.contains(where: {
-                  VocabPDFView.hasTapAction($0)
-                      && $0.type != "Widget"
-                      && $0.bounds.intersects(target.lineBounds)
-              }) else { return nil }
-        return target
-    }
-
-    private func activeScopedMathGlyph(on page: PDFPage, at point: CGPoint)
-        -> SelectionGeometry.NativeMathPressTarget? {
-        guard let active = activeNativeMathParent, active.page === page,
-              case .line(let range, let identity, _) = active.kind,
-              let source = page.string,
-              let selection = page.selection(for: range),
-              let glyph = SelectionGeometry.initialCharacter(on: page, at: point, tolerance: 0, within: range),
-              let actual = SelectionGeometry.sourceRanges(of: glyph, on: page).first,
-              let surface = UTF16Span(range: actual, in: source)?.substring(in: source),
-              let symbolStart = surface.firstIndex(where: { !$0.isWhitespace }) else { return nil }
-        let symbol = surface[symbolStart]
-        let glyphRange = NSRange(location: actual.location + surface[..<symbolStart].utf16.count,
-                                 length: String(symbol).utf16.count)
-        guard NSIntersectionRange(glyphRange, range) == glyphRange else { return nil }
-        return SelectionGeometry.NativeMathPressTarget(lineSelection: selection, lineRange: range, lineIdentity: identity,
-            glyphSelection: glyph, glyphRange: glyphRange, lineBounds: SelectionGeometry.placedBounds(of: selection, on: page))
-    }
-
-    func nativeFractionPressTarget(on page: PDFPage, at point: CGPoint) -> NativeFractionPressTarget? {
-        guard let hitContext = nativeFractionHitContext(on: page, at: point),
-              !hitContext.candidates.isEmpty else { return nil }
-        return nativeFractionPressTarget(on: page, at: point, hitContext: hitContext)
-    }
-
-    private func nativeFractionHitContext(on page: PDFPage, at point: CGPoint) -> NativeFractionHitContext? {
-        guard activeNativeMathParent?.page === page || (!docScanned && contextReadingEnabled && FeatureFlags.mathEnabled()) else { return nil }
-        let all = cachedNativeFractions(on: page)
-        return NativeFractionHitContext(candidates: all.filter { $0.region.contains(point) })
-    }
-
-    private func nativeFractionPressTarget(on page: PDFPage,
-                                           at point: CGPoint,
-                                           hitContext: NativeFractionHitContext) -> NativeFractionPressTarget? {
-        guard hitContext.candidates.count == 1,
-              let fraction = hitContext.candidates.first else { return nil }
-        let identity = nativeFractionIdentity(fraction)
-        guard !page.annotations.contains(where: {
-            VocabPDFView.hasTapAction($0)
-                && $0.type != "Widget"
-                && $0.bounds.intersects(fraction.region)
-        }),
-        let hit = fraction.hitTest(point) else { return nil }
-
-        let activeReadingSelection: NativeFractionReadingSelection? = {
-            guard let active = activeNativeMathParent,
-                  active.page === page,
-                  case .fraction(let activeIdentity, _, let readingSelection, _) = active.kind,
-                  activeIdentity == identity else { return nil }
-            return readingSelection
-        }()
-        let isActive = activeReadingSelection != nil
-        guard let readingSelection = activeReadingSelection
-                ?? NativeFractionReadingSelection.build(fraction: fraction, on: page) else { return nil }
-        let detail = isActive ? (readingSelection.detail(for: hit) ?? readingSelection.whole)
-            : readingSelection.whole
-        return NativeFractionPressTarget(fraction: fraction,
-                                         identity: identity,
-                                         readingSelection: readingSelection,
-                                         detail: detail,
-                                         isActive: isActive)
-    }
-
     private func cachedNativeFractions(on page: PDFPage,
                                        scan: PDFTextLayout.PageScan? = nil) -> [NativeFractionLayout.Fraction] {
         let revision = SelectionGeometry.contextGeometryRevision(for: page)
@@ -1043,7 +940,10 @@ final class ReaderCoordinator: NSObject {
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
                                                                   fractions: fractions, on: page) {
-                applyEquation(equation, detail: equation.whole, on: page)
+                beginFormulaSelection(equation.whole, on: page) { [weak page] point in
+                    guard let page else { return nil }
+                    return equation.detail(at: point, on: page)
+                }
                 finishFormulaCircle()
                 return
             }
@@ -1053,12 +953,12 @@ final class ReaderCoordinator: NSObject {
                 onFormulaCircleOutcome?("未能核对完整公式。请圈住等式两侧及全部分子和分母。")
                 return
             }
-            let target = NativeFractionPressTarget(fraction: fraction,
-                                                   identity: nativeFractionIdentity(fraction),
-                                                   readingSelection: reading,
-                                                   detail: reading.whole, isActive: false)
-            activateNativeFraction(target, on: page)
-            applyNativeFraction(target)
+            beginFormulaSelection(FormulaCircleDetail(fraction: reading.whole, region: fraction.region),
+                                  on: page) { [weak page] point in
+                guard let page, let hit = fraction.hitTest(point), let detail = reading.detail(for: hit)
+                else { return nil }
+                return FormulaCircleDetail(fraction: detail, layout: fraction, on: page)
+            }
             finishFormulaCircle()
             return
         }
@@ -1071,9 +971,8 @@ final class ReaderCoordinator: NSObject {
                     line.lineBounds.contains(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) })
                    .allSatisfy({ circle.enclosesCenter(of: $0.rect) }),
                enclosedGlyphs.allSatisfy({ line.lineBounds.intersects($0.element.rect) }) {
-                activeNativeMathParent = ActiveNativeMathParent(page: page,
-                    kind: .line(sourceRange: line.lineRange, identity: line.lineIdentity, selectedRange: line.lineRange))
-                applySelection(line.lineSelection, src: "math-line", preservesNativeMathParent: true)
+                beginInlineFormula(selection: line.lineSelection, range: line.lineRange, region: line.lineBounds,
+                                   result: MathReadingService.resolve(line.lineSelection.string ?? ""), on: page)
                 finishFormulaCircle()
                 return
             }
@@ -1097,10 +996,7 @@ final class ReaderCoordinator: NSObject {
                 if (coverage == .exact || coverage == .whitespaceOnly),
                    let result = MathReadingService.resolve(surface), result.status == .parsedText,
                    let selection = page.selection(for: range) {
-                    activeNativeMathParent = ActiveNativeMathParent(page: page,
-                        kind: .line(sourceRange: range, identity: SelectionGeometry.identity(for: selection), selectedRange: range))
-                    applySelection(selection, src: "math-line", preservesNativeMathParent: true,
-                                   explicitMathResult: result, mathHighlightRegion: bounds)
+                    beginInlineFormula(selection: selection, range: range, region: bounds, result: result, on: page)
                     finishFormulaCircle()
                     return
                 }
@@ -1125,22 +1021,40 @@ final class ReaderCoordinator: NSObject {
         onFormulaCircleOutcome?(nil)
     }
 
-    private func applyEquation(_ equation: NativeEquationCircleSelection,
-                               detail: NativeEquationCircleSelection.Detail, on page: PDFPage) {
-        activeNativeMathParent = ActiveNativeMathParent(
-            page: page, kind: .equation(equation, selectedRanges: detail.sourceRanges)
-        )
-        applySelection(detail.selection, src: detail.isGlyph ? "math-glyph" : "math-line",
+    private func beginFormulaSelection(_ whole: FormulaCircleDetail, on page: PDFPage,
+                                       detailAt: @escaping (CGPoint) -> FormulaCircleDetail?) {
+        activeNativeMathParent = ActiveNativeMathParent(page: page, whole: whole, detailAt: detailAt,
+                                                        selectedRanges: whole.sourceRanges)
+        applyFormulaDetail(whole)
+    }
+
+    private func beginInlineFormula(selection: PDFSelection, range: NSRange, region: CGRect,
+                                    result: MathReadingResult?, on page: PDFPage) {
+        let whole = FormulaCircleDetail(selection: selection, sourceRanges: [range], region: region,
+                                        readingResult: result, fractionDetail: nil, isGlyph: false)
+        beginFormulaSelection(whole, on: page) { [weak page] point in
+            guard region.contains(point), let page, let source = page.string,
+                  let glyph = SelectionGeometry.initialCharacter(on: page, at: point, tolerance: 0, within: range),
+                  let actual = SelectionGeometry.sourceRanges(of: glyph, on: page).first,
+                  let surface = UTF16Span(range: actual, in: source)?.substring(in: source),
+                  let symbol = surface.first(where: { !$0.isWhitespace }) else { return nil }
+            return FormulaCircleDetail(selection: glyph, sourceRanges: [actual], region: glyph.bounds(for: page),
+                                       readingResult: MathSymbolReading.detail(String(symbol)),
+                                       fractionDetail: nil, isGlyph: true)
+        }
+    }
+
+    private func applyFormulaDetail(_ detail: FormulaCircleDetail) {
+        activeNativeMathParent?.selectedRanges = detail.sourceRanges
+        applySelection(detail.selection, src: detail.isGlyph ? "math-glyph" : "math-formula",
                        preservesNativeMathParent: true, verifiedFractionDetail: detail.fractionDetail,
                        explicitMathResult: detail.readingResult, mathHighlightRegion: detail.region)
     }
 
-    private func equationDetail(on page: PDFPage, at point: CGPoint)
-        -> (NativeEquationCircleSelection, NativeEquationCircleSelection.Detail)? {
+    private func newFormulaDetail(on page: PDFPage, at point: CGPoint) -> FormulaCircleDetail? {
         guard let active = activeNativeMathParent, active.page === page,
-              case .equation(let equation, let ranges) = active.kind,
-              let detail = equation.detail(at: point, on: page), detail.sourceRanges != ranges else { return nil }
-        return (equation, detail)
+              let detail = active.detailAt(point), detail.sourceRanges != active.selectedRanges else { return nil }
+        return detail
     }
 
     private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
@@ -1174,68 +1088,6 @@ final class ReaderCoordinator: NSObject {
 
     private func releaseNativeFractionPageCache() {
         nativeFractionPageCache = nil
-    }
-
-    private func nativeFractionIdentity(_ fraction: NativeFractionLayout.Fraction) -> NativeFractionIdentity {
-        NativeFractionIdentity(glyphs: fraction.orderedGlyphs.map {
-            NativeFractionGlyphIdentity(sourceIndex: $0.sourceIndex, text: $0.glyph.text)
-        },
-        region: fraction.region,
-        ruleStart: fraction.rule.start,
-        ruleEnd: fraction.rule.end,
-        ruleWidth: fraction.rule.lineWidth)
-    }
-
-    private func activateNativeFraction(_ target: NativeFractionPressTarget, on page: PDFPage) {
-        activeNativeMathParent = ActiveNativeMathParent(
-            page: page,
-            kind: .fraction(identity: target.identity,
-                            layout: target.fraction,
-                            readingSelection: target.readingSelection,
-                            selectedDetail: target.detail))
-    }
-
-    private func applyNativeFraction(_ target: NativeFractionPressTarget) {
-        let source: String
-        let highlightRegion: CGRect?
-        switch target.detail.scope {
-        case .whole:
-            source = "math-fraction"
-            highlightRegion = target.fraction.region
-        case .row:
-            source = "math-fraction-row"
-            highlightRegion = nil
-        case .glyph:
-            source = "math-fraction-glyph"
-            highlightRegion = nil
-        }
-        applySelection(target.detail.selection,
-                       src: source,
-                       contextRoute: false,
-                       geometryQuality: .approximate,
-                       preservesNativeMathParent: true,
-                       verifiedFractionDetail: target.detail,
-                       mathHighlightRegion: highlightRegion)
-    }
-
-    private func selectNativeFraction(_ target: NativeFractionPressTarget,
-                                      on page: PDFPage,
-                                      at pagePoint: CGPoint,
-                                      viewPoint: CGPoint,
-                                      kind: String,
-                                      pdfView: PDFView) {
-        holdMenuWork?.cancel()
-        holdMenuWork = nil
-        menu.dismiss()
-        activateNativeFraction(target, on: page)
-        beginDrag(kind: .word, page: page, anchorPoint: pagePoint,
-                  anchorWord: target.detail.selection,
-                  touchPoint: pagePoint, viewPoint: viewPoint,
-                  contextRoute: false)
-        applyNativeFraction(target)
-        if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
-        scheduleHoldMenu()
-        DiagLog.log("press.began(\(kind)): native fraction \(target.detail.sourceText)")
     }
 
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
@@ -1285,40 +1137,15 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log("press.began(\(kind)): no page")
                 return
             }
-            if let (equation, detail) = equationDetail(on: hit.page, at: hit.point) {
+            if let detail = newFormulaDetail(on: hit.page, at: hit.point) {
                 holdMenuWork?.cancel()
                 holdMenuWork = nil
                 menu.dismiss()
-                applyEquation(equation, detail: detail, on: hit.page)
+                applyFormulaDetail(detail)
                 return
             }
-
-            let fractionHitContext = nativeFractionHitContext(on: hit.page, at: hit.point)
-            let hasFractionCandidate = fractionHitContext?.candidates.isEmpty == false
-            let fractionTarget = fractionHitContext.flatMap { context in
-                context.candidates.isEmpty
-                    ? nil
-                    : nativeFractionPressTarget(on: hit.page, at: hit.point, hitContext: context)
-            }
-            // A geometry candidate gets first refusal so a stacked fraction
-            // cannot be flattened into one of its visual rows.
-            let nativeMathTarget = hasFractionCandidate
-                ? nil
-                : nativeMathPressTarget(on: hit.page, at: hit.point)
-            // A sibling glyph inside the active formula may fall within the
-            // 44×44 handle hot zone of a very short selection. Let that exact
-            // glyph press proceed; repeated presses on the current glyph still
-            // yield to the normal handle drag.
-            if handleHitTest(viewPoint) {
-                guard mathDetailTakesPriority(on: hit.page, line: nativeMathTarget, fraction: fractionTarget) else {
-                    DiagLog.log("press.began(\(kind)): on handle → yield")
-                    return
-                }
-            }
-
-            if nativeMathTarget == nil && fractionTarget == nil {
-                requestOCRCharacterRefinement(page: hit.page, at: hit.point)
-            }
+            if handleHitTest(viewPoint) { return }
+            requestOCRCharacterRefinement(page: hit.page, at: hit.point)
 
             if let pendingContextAnchor,
                beginRecoveredContextDrag(from: pendingContextAnchor,
@@ -1326,43 +1153,6 @@ final class ReaderCoordinator: NSObject {
                                          viewPoint: viewPoint,
                                          gesture: gesture) {
                 activeNativeMathParent = nil
-                return
-            }
-
-            if let target = fractionTarget, target.isActive {
-                selectNativeFraction(target,
-                                     on: hit.page,
-                                     at: hit.point,
-                                     viewPoint: viewPoint,
-                                     kind: kind,
-                                     pdfView: pdfView)
-                return
-            }
-
-            if let active = activeNativeMathParent,
-               active.page === hit.page,
-               let target = nativeMathTarget,
-               case .line(let sourceRange, let identity, _) = active.kind,
-               NSEqualRanges(sourceRange, target.lineRange),
-               identity == target.lineIdentity {
-                holdMenuWork?.cancel()
-                holdMenuWork = nil
-                menu.dismiss()
-                activeNativeMathParent?.kind = .line(sourceRange: target.lineRange,
-                                                     identity: target.lineIdentity,
-                                                     selectedRange: target.glyphRange)
-                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point,
-                          anchorWord: target.glyphSelection,
-                          touchPoint: hit.point, viewPoint: viewPoint,
-                          contextRoute: false)
-                applySelection(target.glyphSelection,
-                               src: "math-glyph",
-                               contextRoute: false,
-                               geometryQuality: .approximate,
-                               preservesNativeMathParent: true)
-                if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
-                scheduleHoldMenu()
-                DiagLog.log("press.began(\(kind)): native math glyph \(target.glyphRange.location):\(target.glyphRange.length)")
                 return
             }
 
@@ -1404,38 +1194,6 @@ final class ReaderCoordinator: NSObject {
                 return
             }
 
-            if let target = fractionTarget {
-                selectNativeFraction(target,
-                                     on: hit.page,
-                                     at: hit.point,
-                                     viewPoint: viewPoint,
-                                     kind: kind,
-                                     pdfView: pdfView)
-                return
-            }
-
-            if let target = nativeMathTarget {
-                holdMenuWork?.cancel()
-                holdMenuWork = nil
-                menu.dismiss()
-                activeNativeMathParent = ActiveNativeMathParent(page: hit.page,
-                                                               kind: .line(sourceRange: target.lineRange,
-                                                                           identity: target.lineIdentity,
-                                                                           selectedRange: target.lineRange))
-                beginDrag(kind: .word, page: hit.page, anchorPoint: hit.point,
-                          anchorWord: target.lineSelection,
-                          touchPoint: hit.point, viewPoint: viewPoint,
-                          contextRoute: false)
-                applySelection(target.lineSelection,
-                               src: "math-line",
-                               contextRoute: false,
-                               geometryQuality: .approximate,
-                               preservesNativeMathParent: true)
-                if kind == "finger" { loupe.begin(at: viewPoint, widget: nil, in: pdfView) }
-                scheduleHoldMenu()
-                DiagLog.log("press.began(\(kind)): native math line \(target.lineRange.location):\(target.lineRange.length)")
-                return
-            }
             activeNativeMathParent = nil
 
             // ② 新选词:文字层优先;无文字层(扫描版)走 OCR 词框(v0.11.0,M6)
@@ -2703,25 +2461,17 @@ final class ReaderCoordinator: NSObject {
             contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual, preferred: true) ?? base
         }
         readingSelection = contextual
-        let isFractionGlyph: Bool = {
-            guard let verifiedFractionDetail,
-                  case .glyph = verifiedFractionDetail.scope else { return false }
-            return true
-        }()
+        let mathResult = explicitMathResult ?? verifiedFractionDetail?.readingResult
+            ?? (src == "math-glyph" ? MathSymbolReading.detail(text) : nil)
         onSelectionInfo(SelectionInfo(
             text: display,
             wordCount: wordCount,
             primaryTerm: primaryTerm,
             contextual: contextual,
-            mathDetail: isFractionGlyph || src == "math-glyph" || src == "math-fraction-glyph",
-            mathReadingResult: verifiedFractionDetail?.readingResult ?? explicitMathResult
-                ?? (preservesNativeMathParent
-                    ? MathCardRouting.resolve(sourceText: text, contextReadingEnabled: true, mathEnabled: true,
-                                              isMathDetail: src == "math-glyph" || src == "math-fraction-glyph")
-                    : nil),
+            mathReadingResult: mathResult,
             mathSourceImage: preservesNativeMathParent ? sourceMathImage(selection, region: mathHighlightRegion) : nil
         ))
-        let isMathSelection = src == "math-line" || src == "math-glyph" || src.hasPrefix("math-fraction")
+        let isMathSelection = preservesNativeMathParent
         if !isMathSelection, wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
         }
@@ -3720,20 +3470,7 @@ final class ReaderCoordinator: NSObject {
     private func selectWholeFormula() {
         guard let parent = activeNativeMathParent else { return }
         menu.dismiss()
-        switch parent.kind {
-        case .line(let range, let identity, _):
-            guard let selection = parent.page.selection(for: range) else { return }
-            activeNativeMathParent?.kind = .line(sourceRange: range, identity: identity, selectedRange: range)
-            applySelection(selection, src: "math-line", preservesNativeMathParent: true)
-        case .fraction(let identity, let layout, let readingSelection, _):
-            let detail = readingSelection.whole
-            activeNativeMathParent?.kind = .fraction(identity: identity, layout: layout,
-                                                      readingSelection: readingSelection, selectedDetail: detail)
-            applySelection(detail.selection, src: "math-fraction", preservesNativeMathParent: true,
-                           verifiedFractionDetail: detail, mathHighlightRegion: layout.region)
-        case .equation(let equation, _):
-            applyEquation(equation, detail: equation.whole, on: parent.page)
-        }
+        applyFormulaDetail(parent.whole)
     }
 
     private func sourceMathImage(_ selection: PDFSelection, region: CGRect?) -> UIImage? {
@@ -4256,22 +3993,6 @@ final class ReaderCoordinator: NSObject {
         return "finger"
     }
 
-    private func mathDetailTakesPriority(on page: PDFPage,
-                                         line: SelectionGeometry.NativeMathPressTarget?,
-                                         fraction: NativeFractionPressTarget?) -> Bool {
-        guard let active = activeNativeMathParent, active.page === page else { return false }
-        switch active.kind {
-        case .line(let range, let identity, let selectedRange):
-            guard let line else { return false }
-            return NSEqualRanges(range, line.lineRange) && identity == line.lineIdentity
-                && !NSEqualRanges(selectedRange, line.glyphRange)
-        case .fraction(let identity, _, _, let detail):
-            guard let fraction, fraction.identity == identity else { return false }
-            return detail.sourceRanges != fraction.detail.sourceRanges
-        case .equation:
-            return false
-        }
-    }
 }
 
 extension ReaderCoordinator: UIGestureRecognizerDelegate {
@@ -4301,11 +4022,7 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
             guard gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
                   activeNativeMathParent != nil,
                   let hit = pageHit(touch.location(in: pdfView)) else { return false }
-            if equationDetail(on: hit.page, at: hit.point) == nil {
-                let fraction = nativeFractionPressTarget(on: hit.page, at: hit.point)
-                let line = fraction == nil ? nativeMathPressTarget(on: hit.page, at: hit.point) : nil
-                guard mathDetailTakesPriority(on: hit.page, line: line, fraction: fraction) else { return false }
-            }
+            guard newFormulaDetail(on: hit.page, at: hit.point) != nil else { return false }
         }
         if gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
            let pdfView {
