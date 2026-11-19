@@ -1121,19 +1121,24 @@ final class ReaderCoordinator: NSObject {
 
     private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
         let crop = circle.bounds.intersection(page.bounds(for: displayBox))
-        guard let image = renderMathCrop(on: page, crop: crop), let bitmap = image.cgImage else {
+        guard let image = renderMathCrop(on: page, crop: crop, clippingTo: circle.path),
+              let bitmap = image.cgImage else {
             onFormulaCircleOutcome?("请缩小圈选范围到单个公式。")
             return
         }
         formulaScanTask?.cancel()
         onFormulaCircleOutcome?("正在识别扫描公式…")
-        let outline = circle.path
         formulaScanTask = Task { [weak self, weak page] in
-            let result = await Task.detached(priority: .userInitiated) {
-                ScannedFormulaReading.recognize(in: bitmap, outline: outline, pageCrop: crop)
+            let candidate = await Task.detached(priority: .userInitiated) {
+                ScannedFormulaReading.recognize(in: bitmap)
             }.value
             guard !Task.isCancelled, let self, let page, self.formulaCircleActive else { return }
             self.formulaScanTask = nil
+            guard let candidate else {
+                self.onFormulaCircleOutcome?("圈内没有可识别的公式。")
+                return
+            }
+            let result = ScannedFormulaReading.readingResult(for: candidate)
             self.applyHighlightDesired([self.annotationKey(page, crop): (page, crop)],
                                        rejected: 0, t0: CFAbsoluteTimeGetCurrent())
             self.selectionText = result.sourceText
@@ -2125,6 +2130,20 @@ final class ReaderCoordinator: NSObject {
     #if DEBUG
     /// Read-only geometry snapshot for the DEBUG-only human-reading UI fixture.
     /// It reports PDF text/OCR data already owned by this reader and never selects text.
+    func replayFormulaCircleAudit() {
+        guard let pdfView, let page = pdfView.currentPage else { return }
+        let scan = PDFTextLayout.scan(on: page)
+        let fraction = NativeFractionLayout.detect(in: scan).first
+        let bounds = fraction?.region ?? CGRect(x: 43, y: 245, width: 235, height: 59)
+        let screen = pdfView.convert(bounds, from: page).insetBy(dx: -15, dy: -11)
+        let points = (0...36).map { index in
+            let angle = Double(index) * 2 * .pi / 36
+            return CGPoint(x: screen.midX + screen.width / 2 * cos(angle),
+                           y: screen.midY + screen.height / 2 * sin(angle))
+        }
+        completeFormulaCircle(points)
+    }
+
     func humanReadingAuditSnapshotJSON() -> String {
         guard let pdfView, let page = pdfView.currentPage else { return "{}" }
         let pageIndex = currentPageIndexFor(page: page)
@@ -3688,7 +3707,7 @@ final class ReaderCoordinator: NSObject {
         return renderMathCrop(on: page, crop: crop)
     }
 
-    private func renderMathCrop(on page: PDFPage, crop: CGRect) -> UIImage? {
+    private func renderMathCrop(on page: PDFPage, crop: CGRect, clippingTo outline: CGPath? = nil) -> UIImage? {
         guard let pageRef = page.pageRef, SelectionGeometry.isValid(crop), crop.width <= 1_200, crop.height <= 600 else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.opaque = true
@@ -3699,6 +3718,10 @@ final class ReaderCoordinator: NSObject {
             context.fill(CGRect(origin: .zero, size: crop.size).insetBy(dx: -1, dy: -1))
             context.translateBy(x: -crop.minX, y: crop.maxY)
             context.scaleBy(x: 1, y: -1)
+            if let outline {
+                context.addPath(outline)
+                context.clip(using: .evenOdd)
+            }
             context.drawPDFPage(pageRef)
         }
     }

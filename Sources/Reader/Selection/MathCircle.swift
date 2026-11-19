@@ -100,7 +100,12 @@ final class MathCircleGesture: UIGestureRecognizer {
 /// is presented as OCR to check against the original raster; an ambiguous
 /// stacked layout never gets reconstructed as a linear expression.
 enum ScannedFormulaReading {
-    static func recognize(in image: CGImage, outline: CGPath, pageCrop: CGRect) -> MathReadingResult {
+    enum Candidate: Sendable {
+        case oneLine(String)
+        case uncertain
+    }
+
+    static func recognize(in image: CGImage) -> Candidate? {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
@@ -108,29 +113,45 @@ enum ScannedFormulaReading {
         do {
             try VNImageRequestHandler(cgImage: image).perform([request])
         } catch {
-            return review()
+            return .uncertain
         }
-        let lines = (request.results ?? []).filter { line in
-            let box = line.boundingBox
-            let center = CGPoint(x: pageCrop.minX + box.midX * pageCrop.width,
-                                 y: pageCrop.minY + box.midY * pageCrop.height)
-            return outline.contains(center, using: .evenOdd)
-        }
-        guard lines.count == 1, let line = lines.first,
-              let best = line.topCandidates(1).first, best.confidence >= 0.5 else {
-            return review()
-        }
+        let lines = request.results ?? []
+        guard lines.count == 1, let line = lines.first, let best = line.topCandidates(1).first,
+              best.confidence >= 0.5 else { return containsVisibleInk(image) ? .uncertain : nil }
         let text = best.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return review() }
-        return review(text)
+        guard !text.isEmpty else { return .uncertain }
+        return .oneLine(text)
     }
 
-    private static func review(_ text: String? = nil) -> MathReadingResult {
+    static func readingResult(for candidate: Candidate) -> MathReadingResult {
+        let text: String?
+        switch candidate {
+        case .uncertain: text = nil
+        case .oneLine(let line):
+            text = line
+            if let parsed = MathReadingService.resolve(line), parsed.status == .parsedText {
+                return MathReadingResult(sourceText: line, latex: parsed.latex, unicode: parsed.unicode,
+                    explanation: "这是扫描识别的候选排版。请对照原图核对字母大小写、上下标和符号。",
+                    status: .parsedOCR, ast: parsed.ast)
+            }
+        }
         let explanation = text == nil
             ? "扫描图中的符号或结构仍待确认。可对照圈内原图。"
             : "这是扫描图的候选文字，大小写、上下标和分式结构请以原图为准。"
         return MathReadingResult(sourceText: text ?? "圈选的扫描公式", latex: nil, unicode: nil,
                                  explanation: explanation, status: .needsReview, ast: nil)
+    }
+
+    private static func containsVisibleInk(_ image: CGImage) -> Bool {
+        let size = 64
+        var gray = [UInt8](repeating: 255, count: size * size)
+        return gray.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: size, height: size,
+                bitsPerComponent: 8, bytesPerRow: size, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return true }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+            return bytes.lazy.filter { $0 < 180 }.prefix(5).count == 5
+        }
     }
 }
 

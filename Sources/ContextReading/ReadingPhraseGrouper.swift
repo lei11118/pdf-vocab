@@ -38,7 +38,7 @@ enum ReadingPhraseGrouper {
         "with respect to", "per unit", "out of phase", "in phase"
     ]
     private static let verbFrames: Set<String> = [
-        "account for", "break down", "bring about", "carry out", "come across", "figure out",
+        "account for", "break down", "bring about", "carry out", "come across", "do work", "figure out",
         "find out", "give up", "look after", "look for", "look into", "look up",
         "make up", "point out", "put off", "put up with", "rule out", "run into", "run out of",
         "set up", "shut down", "take off", "take into account", "take place", "turn down",
@@ -77,7 +77,8 @@ enum ReadingPhraseGrouper {
             let length = matches[right].range.location - start
             guard length > 0 else { return false }
             let gap = text.substring(with: NSRange(location: start, length: length))
-            if !allowsLineWrap && gap.contains(where: \.isNewline) { return false }
+            let lineBreaks = gap.filter(\.isNewline).count
+            if lineBreaks > (allowsLineWrap ? 1 : 0) { return false }
             return gap.allSatisfy(\.isWhitespace)
         }
         var first = selectedIndex

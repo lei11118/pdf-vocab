@@ -56,7 +56,7 @@ struct LocalTranslationInput: Hashable, Sendable {
         """
     }
 
-    func qwenPrompt() throws -> String {
+    func qwenPrompt(recheck: Bool = false) throws -> String {
         guard let end = span.endExclusive,
               let prefix = UTF16Span(location: 0, length: span.location).substring(in: text),
               let suffix = UTF16Span(location: end, length: text.utf16.count - end).substring(in: text)
@@ -68,15 +68,20 @@ struct LocalTranslationInput: Hashable, Sendable {
                 .replacingOccurrences(of: "】", with: "］")
         }
         let marked = "\(escape(prefix))【\(escape(source))】\(escape(suffix))"
+        let correction = recheck
+            ? "复核：译出框内整个片段，包含实义动词、否定和程度，禁止只给出一个‘没有’或‘不’。\n"
+            : ""
         return """
-        任务：根据上下文，只译【】中的词或词组。省略句中其他字词。使用最短的自然简体中文释义。没有独立译义填“无”。
+        任务：根据上下文，只译【】中的词或词组。省略句中其他字词。给出自然简明的简体中文，保留否定、程度和限制。逐字核对【】范围；中文表达可调整语序，但不能翻译框外的实词。选中成分在原句中确实没有独立译义才填“无”。
         原文：The 【pitch】 of the note was unusually high.
         输出：{"meaning":"音高"}
-        原文：They 【pitched】 their tent next to the lake.
-        输出：{"meaning":"搭建"}
+        原文：This does 【not quite match】 the estimate.
+        输出：{"meaning":"不太吻合"}
+        原文：He decided 【to】 leave.
+        输出：{"meaning":"无"}
         原文：This is the device 【which】 we ordered yesterday.
         输出：{"meaning":"无"}
-        原文：\(marked)
+        \(correction)原文：\(marked)
         输出：
         """
     }
@@ -103,6 +108,33 @@ struct LocalTranslationInput: Hashable, Sendable {
             throw LocalContextTranslation.Failure.output
         }
         return .candidate(ContextualTranslationCandidate(sourcePhrase: source, translatedPhrase: meaning))
+    }
+
+    /// These isolated English forms carry a lexical negative meaning even
+    /// when the predicate is outside the selected source range. Full phrases
+    /// still go through the model so it can account for logical scope.
+    var lexicalNegativeGloss: ContextualTranslationCacheHit? {
+        let meaning: String
+        switch source.lowercased().replacingOccurrences(of: "’", with: "'") {
+        case "don't", "doesn't": meaning = "不"
+        case "didn't": meaning = "没有"
+        case "hardly", "scarcely": meaning = "几乎不"
+        default: return nil
+        }
+        return .candidate(ContextualTranslationCandidate(sourcePhrase: source, translatedPhrase: meaning))
+    }
+
+    func needsNegativePhraseRecheck(_ result: ContextualTranslationCacheHit) -> Bool {
+        let words = source.lowercased().replacingOccurrences(of: "’", with: "'")
+            .split(whereSeparator: \.isWhitespace)
+        guard words.count >= 2,
+              words.dropLast().contains(where: { $0 == "not" || $0.hasSuffix("n't") }) else { return false }
+        switch result {
+        case .noAlignedResult:
+            return true
+        case .candidate(let gloss):
+            return ["不", "没有", "没", "未", "并不", "无"].contains(gloss.translatedPhrase)
+        }
     }
 }
 
@@ -141,6 +173,7 @@ actor LocalContextTranslation {
     func cached(_ input: LocalTranslationInput, modelID: String,
                 backend: TranslationModel.Backend = .metal) -> ContextualTranslationCacheHit? {
         guard let model = TranslationModel.available.first(where: { $0.id == modelID }) else { return nil }
+        if let gloss = input.lexicalNegativeGloss { return gloss }
         return cache[CacheKey(model: model.sha256, backend: model.runtimeBackend(backend), input: input,
                               dictionaryRevision: DictionaryStore.shared.exactPhraseLookupRevision)]
     }
@@ -151,6 +184,7 @@ actor LocalContextTranslation {
         guard let model = TranslationModel.available.first(where: { $0.id == modelID }) else {
             throw Failure.unavailable
         }
+        if let gloss = input.lexicalNegativeGloss { return gloss }
         let runtime = model.runtimeBackend(backend)
         let key = CacheKey(model: model.sha256, backend: runtime, input: input,
                            dictionaryRevision: DictionaryStore.shared.exactPhraseLookupRevision)
@@ -168,16 +202,24 @@ actor LocalContextTranslation {
         } else {
             prompt = try input.qwenPrompt()
         }
-        let output: String
-        do {
-            output = try session.generate(prompt, maximumOutput: 96)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw Failure.inference
+        func translatePrompt(_ prompt: String) throws -> ContextualTranslationCacheHit {
+            let output: String
+            do {
+                output = try session.generate(prompt, maximumOutput: 96)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw Failure.inference
+            }
+            try Task.checkCancellation()
+            return try input.decode(output, requiresSourceOffsets: requiresSourceOffsets)
         }
-        try Task.checkCancellation()
-        let result = try input.decode(output, requiresSourceOffsets: requiresSourceOffsets)
+
+        var result = try translatePrompt(prompt)
+        if !requiresSourceOffsets && input.needsNegativePhraseRecheck(result) {
+            result = try translatePrompt(input.qwenPrompt(recheck: true))
+            if input.needsNegativePhraseRecheck(result) { result = .noAlignedResult }
+        }
         if order.count == 384 { cache.removeValue(forKey: order.removeFirst()) }
         order.append(key)
         cache[key] = result

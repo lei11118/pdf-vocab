@@ -92,7 +92,7 @@ struct MathMeaningCard: View {
                         Text("数学释义")
                             .font(DS.Fonts.title2)
                             .foregroundStyle(DS.foreground1)
-                        Text(isParsed ? "文字结构已解析" : "结构待核对")
+                        Text(result.status == .parsedOCR ? "扫描候选 · 待核对" : isParsed ? "文字结构已解析" : "结构待核对")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(isParsed ? DS.accent : DS.caution)
                             .accessibilityIdentifier("math-card-status")
@@ -131,9 +131,9 @@ struct MathMeaningCard: View {
                         .accessibilityIdentifier("math-card-source")
                 }
 
-                if isParsed, let latex = result.latex, !latex.isEmpty {
+                if let latex = result.latex, !latex.isEmpty, isParsed || result.status == .parsedOCR {
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
-                        Text("公式排版")
+                        Text(result.status == .parsedOCR ? "候选排版" : "公式排版")
                             .font(DS.Fonts.caption)
                             .foregroundStyle(DS.foreground2)
                         ScrollView(.horizontal) {
@@ -187,7 +187,7 @@ struct MathMeaningCard: View {
                         .font(.caption)
                         .foregroundStyle(DS.accent)
                 } else {
-                    Label("请对照原文核对符号结构；此结果不代表数学证明或图像识别。",
+                    Label("请对照原图核对符号与结构。",
                           systemImage: "exclamationmark.circle")
                         .font(.caption)
                         .foregroundStyle(DS.caution)

@@ -84,6 +84,7 @@ enum HumanReadingAuditFixture {
             ("OCR classroom marker" as NSString).draw(at: CGPoint(x: 120, y: 420), withAttributes: attributes)
             ("scan function" as NSString).draw(at: CGPoint(x: 120, y: 640), withAttributes: attributes)
             ("This page is raster" as NSString).draw(at: CGPoint(x: 120, y: 860), withAttributes: attributes)
+            ("17 + 9 = 26" as NSString).draw(at: CGPoint(x: 120, y: 1250), withAttributes: attributes)
         }
         return UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
             context.beginPage()

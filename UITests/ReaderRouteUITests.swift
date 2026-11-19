@@ -740,6 +740,81 @@ extension ReaderRouteUITests {
         closeReaderPanel(in: app, title: "设置")
     }
 
+    @objc func testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+
+        let native = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
+        XCTAssertTrue(native.waitForExistence(timeout: 20))
+        native.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let initial = waitForAudit(observer, timeout: 20) {
+            self.point(in: $0, key: "wordPoints", text: "91", source: "text", edge: .end) != nil
+        }
+        let leaf = try XCTUnwrap(point(in: initial, key: "wordPoints", text: "91", source: "text", edge: .end))
+        let tool = app.buttons["reader.formula-circle-tool"]
+        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        tool.tap()
+        let instruction = app.staticTexts["reader.formula-circle-instruction"]
+        XCTAssertTrue(instruction.waitForExistence(timeout: 5))
+        attachAuditScreenshot("formula-circle-tool-active", app: app)
+
+        // XCTest exposes a single straight drag. Check that a straight finger
+        // gesture takes the circle path and is rejected without moving the page.
+        let start = coordinate(for: leaf, in: app).withOffset(CGVector(dx: -38, dy: -18))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 70, dy: 12)),
+                    withVelocity: .slow, thenHoldForDuration: 0)
+        XCTAssertTrue(instruction.label.contains("接近闭合"))
+        XCTAssertFalse(app.staticTexts["math-card-source"].exists)
+
+        // Feed a sampled closed contour through the production completion path.
+        let replay = app.buttons["reader.audit-replay-formula-circle"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 5))
+        replay.tap()
+        let source = app.staticTexts["math-card-source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 15))
+        XCTAssertEqual(source.label, "(73)/(91)")
+        XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.exists)
+        XCTAssertEqual(app.staticTexts["math-card-latex"].firstMatch.label, "\\frac{73}{91}")
+        XCTAssertFalse(instruction.exists)
+        attachAuditScreenshot("formula-circle-original-and-rendered-fraction", app: app)
+
+        coordinate(for: leaf, in: app).press(forDuration: 1)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 15) {
+            ($0["selectedText"] as? String) == "1"
+        })
+        XCTAssertEqual(source.label, "1")
+        attachAuditScreenshot("formula-circle-follow-up-exact-digit", app: app)
+    }
+
+    @objc func testFormulaCircleToolRecognizesRasterAsCandidate() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+
+        let scan = app.buttons.containing(.staticText, identifier: "Human-reading-audit-scan").firstMatch
+        XCTAssertTrue(scan.waitForExistence(timeout: 20))
+        scan.tap()
+        let tool = app.buttons["reader.formula-circle-tool"]
+        XCTAssertTrue(tool.waitForExistence(timeout: 15))
+        tool.tap()
+        let replay = app.buttons["reader.audit-replay-formula-circle"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 5))
+        replay.tap()
+        let source = app.staticTexts["math-card-source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 25))
+        XCTAssertEqual(source.label.filter { !$0.isWhitespace }, "17+9=26")
+        XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["math-card-status"].firstMatch.label.contains("待核对"))
+        XCTAssertTrue(app.staticTexts["math-card-latex"].firstMatch.exists)
+        attachAuditScreenshot("formula-circle-raster-candidate-and-original", app: app)
+    }
+
+
+
     @objc func testHumanReadingAuditNativeFractionPressSelectsWholeThenExactLeaf() throws {
         let app = XCUIApplication()
         app.launchArguments = [

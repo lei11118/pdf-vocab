@@ -374,6 +374,7 @@ struct ContextualTranslationTaskView: View {
     @Environment(\.readerWindowSurfaceActive) private var readerWindowSurfaceActive
     @StateObject private var preparationModel = OfflineTranslationPreparationModel()
     @State private var retryGeneration = 0
+    @State private var wordOnlySelection: ContextualSelection?
     @AppStorage(TranslationModel.preferenceKey) private var modelID = TranslationModel.systemID
     @AppStorage(TranslationModel.labBackendKey) private var backend = TranslationModel.Backend.metal
 
@@ -388,7 +389,9 @@ struct ContextualTranslationTaskView: View {
     }
 
     private var identity: ContextualTranslationDriver.Identity {
-        ContextualTranslationDriver.Identity(selection: selection,
+        var scope = selection
+        if wordOnlySelection == selection { scope.verifiedPhraseTranslationScope = nil }
+        return ContextualTranslationDriver.Identity(selection: scope,
                                              isEnabled: isEnabled,
                                              presentation: presentation,
                                              retryGeneration: retryGeneration,
@@ -436,6 +439,17 @@ struct ContextualTranslationTaskView: View {
     @ViewBuilder
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
+            if selection.verifiedPhraseTranslationScope?.preferred == true, selection.sentenceContext != nil {
+                let wordOnly = wordOnlySelection == selection
+                Button(wordOnly ? "翻译阅读词组" : "仅译所选词") {
+                    wordOnlySelection = wordOnly ? nil : selection
+                }
+                .font(DS.Fonts.caption.weight(.medium))
+                .frame(minHeight: 44)
+                .buttonStyle(.plain)
+                .foregroundStyle(DS.accent)
+                .accessibilityIdentifier("contextual-translation-scope")
+            }
             switch driver.state {
             case .disabled:
                 Text("在阅读设置开启语境阅读后可查看译义。")

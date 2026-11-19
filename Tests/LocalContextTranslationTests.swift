@@ -53,6 +53,31 @@ final class LocalContextTranslationTests: XCTestCase {
         }
     }
 
+    func testStandaloneNegativeWordsRetainPolarityAndExcludeOtherWords() throws {
+        let text = "I could hardly hear it and I didn’t speak."
+        for (word, expected) in [("hardly", "几乎不"), ("didn’t", "没有")] {
+            let input = try XCTUnwrap(LocalTranslationInput(context: context(text, selected: (text as NSString).range(of: word))))
+            guard case .candidate(let candidate) = input.lexicalNegativeGloss else {
+                return XCTFail("Expected a lexical meaning for \(word)")
+            }
+            XCTAssertEqual(candidate.sourcePhrase, word)
+            XCTAssertEqual(candidate.translatedPhrase, expected)
+        }
+        let phrase = "hardly hear"
+        let grouped = try XCTUnwrap(LocalTranslationInput(context: context(text, selected: (text as NSString).range(of: phrase))))
+        XCTAssertNil(grouped.lexicalNegativeGloss)
+    }
+
+    func testBareNegationTriggersRecheckOnlyForAnEntirePhrase() throws {
+        let text = "The results didn’t differ by much."
+        let phrase = "didn’t differ"
+        let input = try XCTUnwrap(LocalTranslationInput(context: context(text, selected: (text as NSString).range(of: phrase))))
+        XCTAssertTrue(input.needsNegativePhraseRecheck(.noAlignedResult))
+        XCTAssertTrue(input.needsNegativePhraseRecheck(try input.decode(#"{"meaning":"没有"}"#, requiresSourceOffsets: false)))
+        XCTAssertFalse(input.needsNegativePhraseRecheck(try input.decode(#"{"meaning":"没有差异"}"#, requiresSourceOffsets: false)))
+        XCTAssertTrue(try input.qwenPrompt(recheck: true).contains("复核"))
+    }
+
     private func context(_ text: String, selected: NSRange) -> SentenceContext {
         let selection = UTF16Span(location: selected.location, length: selected.length)
         let whole = UTF16Span(location: 0, length: text.utf16.count)

@@ -2,6 +2,7 @@ import Foundation
 
 public enum MathReadingStatus: String, Codable, Sendable {
     case parsedText
+    case parsedOCR
     case needsReview
 }
 

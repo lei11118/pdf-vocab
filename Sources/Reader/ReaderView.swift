@@ -870,6 +870,16 @@ struct ReaderView: View {
                     HumanReadingAuditSnapshotView(handle: readerHandle)
                 }
             }
+            .overlay(alignment: .bottomTrailing) {
+                if formulaCircleActive && ProcessInfo.processInfo.arguments.contains("--human-reading-audit-circle") {
+                    Button("回放测试圈") {
+                        readerHandle.coordinator?.replayFormulaCircleAudit()
+                    }
+                    .accessibilityIdentifier("reader.audit-replay-formula-circle")
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 120)
+                }
+            }
 #endif
             // PDFKit and every coordinate-based overlay share this full-bleed root;
             // the reader chrome remains composed by chromeContent in the safe area.
