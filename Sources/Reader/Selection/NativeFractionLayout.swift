@@ -65,7 +65,7 @@ struct NativeFractionLayout {
                 return .fraction
             }
 
-            guard row.region.contains(pagePoint) else { return .fraction }
+            guard row.region.contains(pagePoint) else { return .row(row: position) }
             if let child = row.nestedFraction, let childHit = child.hitTest(pagePoint) {
                 switch childHit {
                 case .rule, .fraction: return .row(row: position)

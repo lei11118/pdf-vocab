@@ -27,6 +27,7 @@ struct WordCardPanel: View {
     var vocab: CardVocabBridge? = nil
     var contextReadingEnabled = false
     var mathSourceImage: UIImage? = nil
+    var selectWholeFormula: (() -> Void)? = nil
     var selectPhrase: (() -> Void)? = nil
     var speakSelection: ((Bool) -> Void)? = nil
     var pauseSpeech: (() -> Void)? = nil
@@ -63,7 +64,8 @@ struct WordCardPanel: View {
             case .contextual(let selection):
                 ContextualCardView(selection: selection, onClose: onClose, vocab: vocab)
             case .math(let result):
-                MathMeaningCard(result: result, onClose: onClose, sourceImage: mathSourceImage)
+                MathMeaningCard(result: result, onClose: onClose, sourceImage: mathSourceImage,
+                                selectWholeFormula: selectWholeFormula)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

@@ -65,6 +65,7 @@ struct MathMeaningCard: View {
     let result: MathReadingResult
     let onClose: () -> Void
     var sourceImage: UIImage? = nil
+    var selectWholeFormula: (() -> Void)? = nil
     @State private var copied = false
     @State private var copiedLatex = false
     @ScaledMetric(relativeTo: .title2) private var formulaFontSize: CGFloat = 24
@@ -97,6 +98,11 @@ struct MathMeaningCard: View {
                     }
                 }
                 .padding(.trailing, panelClose == nil ? 0 : 44)
+
+                if let selectWholeFormula {
+                    Button("返回整式", systemImage: "arrow.uturn.backward", action: selectWholeFormula)
+                        .accessibilityIdentifier("math-card-select-whole")
+                }
 
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Text("原文")

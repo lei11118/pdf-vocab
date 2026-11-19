@@ -913,6 +913,8 @@ struct ReaderView: View {
                 contextReadingEnabled:contextReadingEnabled,
                 reserveTop: reserveTop,
                 mathSourceImage: currentSelectionInfo?.mathSourceImage,
+                selectWholeFormula: readerHandle.coordinator?.canSelectWholeFormula == true
+                    ? { readerHandle.coordinator?.selectWholeFormula() } : nil,
                 selectPhrase: readerHandle.coordinator?.canExpandReadingPhrase == true
                     ? { readerHandle.coordinator?.selectReadingPhrase() } : nil,
                 speakSelection: readerHandle.coordinator?.canSpeakReadingSelection == true

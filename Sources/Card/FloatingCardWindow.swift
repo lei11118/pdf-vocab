@@ -35,6 +35,7 @@ struct FloatingCardWindow: View {
     var contextReadingEnabled = false
     var reserveTop: CGFloat = 0
     var mathSourceImage: UIImage? = nil
+    var selectWholeFormula: (() -> Void)? = nil
     var selectPhrase: (() -> Void)? = nil
     var speakSelection: ((Bool) -> Void)? = nil
     var pauseSpeech: (() -> Void)? = nil
@@ -43,6 +44,7 @@ struct FloatingCardWindow: View {
         ReaderWindowSurface(bounds:bounds,onClose:onClose,reserveTop:reserveTop) {
             WordCardPanel(content:content,onClose:onClose,onSelectWord:onSelectWord,vocab:vocab,
                           contextReadingEnabled:contextReadingEnabled, mathSourceImage: mathSourceImage,
+                          selectWholeFormula: selectWholeFormula,
                           selectPhrase: selectPhrase, speakSelection: speakSelection, pauseSpeech: pauseSpeech)
                 .environment(\.readerPanelClose, onClose)
                 .environmentObject(sentenceTranslation)

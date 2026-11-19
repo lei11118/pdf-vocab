@@ -3495,7 +3495,12 @@ final class ReaderCoordinator: NSObject {
         readingSelection != nil
     }
 
-    private func selectWholeFormula() {
+    var canSelectWholeFormula: Bool {
+        guard let parent = activeNativeMathParent else { return false }
+        return parent.selectedRanges != parent.whole.sourceRanges
+    }
+
+    func selectWholeFormula() {
         guard let parent = activeNativeMathParent else { return }
         menu.dismiss()
         applyFormulaDetail(parent.whole)

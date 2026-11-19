@@ -494,6 +494,11 @@ extension ReaderRouteUITests {
         XCTAssertEqual(app.staticTexts["math-card-latex"].firstMatch.label.trimmingCharacters(in: .whitespaces),
                        "\\partial")
         attachAuditScreenshot("schrodinger-exact-partial-derivative", app: app)
+
+        let whole = app.buttons["math-card-select-whole"]
+        XCTAssertTrue(whole.waitForExistence(timeout: 5))
+        whole.tap()
+        XCTAssertEqual(app.staticTexts["math-card-latex"].firstMatch.label, latex)
     }
 
     @objc func testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail() throws {
