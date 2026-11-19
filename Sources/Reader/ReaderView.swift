@@ -137,6 +137,10 @@ struct ReaderView: View {
                 self.cardContent = nil
                 translationRequest = nil
             }
+            .task(id: contextReadingEnabled) {
+                guard contextReadingEnabled else { return }
+                _ = await Task.detached(priority: .utility) { EnglishReadingTagger.bundled != nil }.value
+            }
             .onChange(of: pencilHoverPreview) { _, enabled in
                 if !enabled { readerHandle.coordinator?.clearHover() }
             }

@@ -5,6 +5,7 @@ import XCTest
 
 final class ReadingPhraseGrouperTests: XCTestCase {
     func testReadingGroupsFromProseAndAcademicSentences() throws {
+        XCTAssertNotNil(EnglishReadingTagger.bundled, "The reading group tagger must work with packaged assets and no system downloads.")
         let examples: [(String, String, String?)] = [
             ("She looked up the unfamiliar word before class.", "looked", "looked up"),
             ("She looked up the unfamiliar word before class.", "up", "looked up"),

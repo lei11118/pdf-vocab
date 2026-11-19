@@ -32,7 +32,7 @@ enum ReadingPhraseGrouper {
     ]
     private static let negativeModifiers: Set<String> = ["hardly", "barely", "scarcely", "never", "rarely", "seldom"]
     private static let degreeModifiers: Set<String> = ["very", "quite", "too", "highly", "strongly", "statistically",
-        "significantly", "substantially", "completely", "entirely"]
+        "significantly", "substantially", "completely", "entirely", "reliably"]
     private static let termHeads: Set<String> = [
         "coefficient", "rate", "moment", "center", "centre", "conservation", "degree", "order",
         "law", "point", "axis", "radius", "standard", "power"
@@ -45,14 +45,22 @@ enum ReadingPhraseGrouper {
     ]
     private static let verbFrames: Set<String> = [
         "account for", "break down", "bring about", "carry out", "come across", "differ by much", "do no work", "do work", "figure out",
-        "find out", "give up", "look after", "look for", "look into", "look up",
+        "find out", "give up", "hold back", "look after", "look for", "look into", "look up",
         "make up", "point out", "put off", "put up with", "rule out", "run into", "run out of",
         "set up", "shut down", "take off", "take into account", "take place", "turn down",
         "turn into", "turn off", "work out"
     ]
     private static let separableFrames: Set<String> = [
-        "bring up", "hand in", "look up", "pick up", "put away", "put out",
+        "bring up", "hand in", "hold back", "look up", "pick up", "put away", "put out",
         "rule out", "switch off", "take off", "turn down", "turn off"
+    ]
+    private static let knownHeads = termHeads.union(verbFrames.union(separableFrames).compactMap {
+        $0.split(separator: " ").first.map(String.init)
+    })
+    private static let irregularHeads = [
+        "brought": "bring", "broke": "break", "broken": "break", "came": "come", "did": "do",
+        "does": "do", "done": "do", "found": "find", "gave": "give", "given": "give", "held": "hold",
+        "made": "make", "ran": "run", "took": "take", "taken": "take"
     ]
     private static let upwardDirections: Set<String> = [
         "at", "toward", "towards", "to", "into", "through", "above"
@@ -96,15 +104,22 @@ enum ReadingPhraseGrouper {
         while first > 0, isJoinable(first - 1, first) { first -= 1 }
         while last + 1 < matches.count, isJoinable(last, last + 1) { last += 1 }
         guard last > first else { return nil }
-        let tagger = NLTagger(tagSchemes: [.lexicalClass, .lemma])
-        tagger.string = source
-        tagger.setLanguage(.english, range: source.startIndex..<source.endIndex)
-        let words = matches[first...last].map { match -> Word in
-            let spelling = normalized(text.substring(with: match.range))
-            let index = Range(match.range, in: source)?.lowerBound ?? source.startIndex
-            let lexical = tagger.tag(at: index, unit: .word, scheme: .lexicalClass).0
-            let lemma = tagger.tag(at: index, unit: .word, scheme: .lemma).0?.rawValue
-            return Word(text: spelling, lemma: lemma.map(normalized) ?? spelling, tag: lexical, range: match.range)
+        let clause = Array(matches[first...last])
+        let spellings = clause.map { text.substring(with: $0.range) }
+        let tags = EnglishReadingTagger.bundled?.tags(for: spellings)
+        let fallback: NLTagger? = tags == nil ? NLTagger(tagSchemes: [.lexicalClass]) : nil
+        fallback?.string = source
+        let words = clause.enumerated().map { offset, match -> Word in
+            let spelling = normalized(spellings[offset])
+            let tag: NLTag?
+            if let tags {
+                tag = lexicalTag(for: tags[offset])
+            } else if let index = Range(match.range, in: source)?.lowerBound {
+                tag = fallback?.tag(at: index, unit: .word, scheme: .lexicalClass).0
+            } else {
+                tag = nil
+            }
+            return Word(text: spelling, lemma: frameHead(spelling), tag: tag, range: match.range)
         }
 
         let target = selectedIndex - first
@@ -245,6 +260,33 @@ enum ReadingPhraseGrouper {
             return end
         }
         return nil
+    }
+
+    private static func lexicalTag(for tag: String) -> NLTag? {
+        if tag.hasPrefix("NN") { return .noun }
+        if tag.hasPrefix("VB") || tag == "MD" { return .verb }
+        if tag.hasPrefix("JJ") { return .adjective }
+        if tag.hasPrefix("RB") { return .adverb }
+        switch tag {
+        case "DT", "PDT", "WDT": return .determiner
+        case "PRP", "PRP$", "WP", "WP$": return .pronoun
+        case "IN", "TO": return .preposition
+        case "RP": return .particle
+        case "CD": return .number
+        default: return nil
+        }
+    }
+
+    private static func frameHead(_ word: String) -> String {
+        if knownHeads.contains(word) { return word }
+        if let irregular = irregularHeads[word] { return irregular }
+        for suffix in ["ies", "ied", "ing", "ed", "es", "s"] where word.hasSuffix(suffix) {
+            let stem = String(word.dropLast(suffix.count))
+            let possibilities = suffix == "ies" || suffix == "ied"
+                ? [stem + "y"] : [stem, stem + "e", String(stem.dropLast())]
+            if let match = possibilities.first(where: knownHeads.contains) { return match }
+        }
+        return word
     }
 
     private static func normalized(_ text: String) -> String {

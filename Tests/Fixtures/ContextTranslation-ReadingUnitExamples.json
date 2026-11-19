@@ -1,0 +1,121 @@
+[
+  {
+    "id": "grouped-near-difference",
+    "text": "The two estimates didn't differ by much.",
+    "selection": "didn't differ by much",
+    "accepted": [
+      "相差无几",
+      "差别不大",
+      "没有太大差异",
+      "没有太大区别",
+      "差异不大",
+      "没有相差太多",
+      "并没有太大差异",
+      "并无太大差异"
+    ]
+  },
+  {
+    "id": "grouped-offer",
+    "text": "The board turned the offer down after the vote.",
+    "selection": "turned the offer down",
+    "accepted": [
+      "拒绝了这个提议",
+      "拒绝了该提议",
+      "拒绝了这一提议",
+      "否决了该提议",
+      "拒绝了该报价",
+      "拒绝了报价",
+      "拒绝了提议",
+      "拒绝了这项提议"
+    ]
+  },
+  {
+    "id": "grouped-fire",
+    "text": "After the engines stopped, the crew finally put the fire out.",
+    "selection": "put the fire out",
+    "accepted": [
+      "把火扑灭了",
+      "扑灭了火",
+      "扑灭了大火",
+      "把火扑灭",
+      "扑灭火",
+      "灭火",
+      "扑灭大火",
+      "扑灭火灾"
+    ]
+  },
+  {
+    "id": "grouped-hardly",
+    "text": "Despite testing twice, we could hardly hear the alarm.",
+    "selection": "could hardly hear",
+    "accepted": [
+      "几乎听不见",
+      "几乎听不到",
+      "几乎无法听到",
+      "几乎不能听见"
+    ]
+  },
+  {
+    "id": "grouped-delay",
+    "text": "Management held the report back until Friday.",
+    "selection": "held the report back",
+    "accepted": [
+      "扣下了报告",
+      "暂扣报告",
+      "暂缓发布报告",
+      "压下了报告",
+      "扣留了报告",
+      "暂缓公布报告"
+    ]
+  },
+  {
+    "id": "grouped-statistics",
+    "text": "At this setting the measurement does not reliably distinguish two signals.",
+    "selection": "does not reliably distinguish",
+    "accepted": [
+      "无法可靠地区分",
+      "不能可靠区分",
+      "无法可靠区分",
+      "不能可靠地区分",
+      "无法可靠辨别",
+      "不能可靠辨别"
+    ]
+  },
+  {
+    "id": "grouped-work",
+    "text": "The applied force does work across the full length of the ramp.",
+    "selection": "does work",
+    "accepted": [
+      "做功",
+      "做了功"
+    ]
+  },
+  {
+    "id": "grouped-uncertainty",
+    "text": "Take into account the uncertainty in the voltage reading.",
+    "selection": "Take into account",
+    "accepted": [
+      "考虑",
+      "考虑到",
+      "顾及",
+      "计入"
+    ]
+  },
+  {
+    "id": "grouped-complement",
+    "text": "The figure shows how the rate\nof change depends on temperature.",
+    "selection": "rate\nof change",
+    "accepted": [
+      "变化率",
+      "变化速率"
+    ]
+  },
+  {
+    "id": "grouped-composition",
+    "text": "The significant digit changes as the radius of curvature increases.",
+    "selection": "radius of curvature",
+    "accepted": [
+      "曲率半径"
+    ]
+  }
+]

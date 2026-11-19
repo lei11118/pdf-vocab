@@ -141,7 +141,8 @@ enum ContextSelectionRouter {
                                                                      trustedSourceBlock: validatedBlock,
                                                                      selectedSourceSpans: sourceSpans,
                                                                      documentSHA256: documentSHA256,
-                                                                     pageIndex: pageIndex) {
+                                                                     pageIndex: pageIndex,
+                                                                     permitsWrappedPhrase: wrapsPhrase) {
             contextual.sentenceContext = layoutContext
             usesValidatedLayoutBlock = true
         }

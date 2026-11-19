@@ -179,7 +179,8 @@ enum NativeLayoutBlockContextBuilder {
                       trustedSourceBlock: TrustedSourceBlock,
                       selectedSourceSpans: [UTF16Span],
                       documentSHA256: String,
-                      pageIndex: Int) -> SentenceContext? {
+                      pageIndex: Int,
+                      permitsWrappedPhrase: Bool = false) -> SentenceContext? {
         guard !selectedSourceSpans.isEmpty,
               let trustedRange = trustedSourceBlock.sourceSpan.nsRange(in: sourceText),
               trustedRange.length > 0,
@@ -194,6 +195,9 @@ enum NativeLayoutBlockContextBuilder {
             guard let rowEnd = rows[index].endExclusive else { return false }
             return rows[index].location <= selectionStart && selectionStart < rowEnd
         }) else { return nil }
+
+        if selectionEnd > (rows[selectedRow].endExclusive ?? 0),
+           (!permitsWrappedPhrase || selectedSourceSpans.count != 1) { return nil }
 
         let seedKind = rows[selectedRow].substring(in: sourceText).flatMap {
             LayoutBlockContextBuilder.boundaryKind(for: $0)

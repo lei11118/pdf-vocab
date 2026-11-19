@@ -32,3 +32,8 @@ Hy-MT2 的权重由腾讯发布。Qwen3.5 的原始权重由阿里云发布，�
 ## 系统框架
 
 PDFKit、PencilKit、Vision、NaturalLanguage、AVFoundation、Translation(可选)均为 Apple 系统框架,无需额外许可。
+
+### English reading POS tagger
+
+- The bundled English averaged-perceptron POS model comes from NLTK Data under MIT. Archive SHA-256: \`6025f530624335c67d6547d44757b357b4e79bae030a0383e9887a92c1718f0b\`.
+- The native feature representation follows Matthew Honnibal's tagger and the NLTK port. The applicable MIT notice ships in \`Resources/ThirdPartyNotices/NLTK-Perceptron-MIT.txt\`. [Dataset license](https://github.com/nltk/nltk_data/blob/gh-pages/DATASET-LICENSES.md) · [Tagger source](https://www.nltk.org/_modules/nltk/tag/perceptron.html)

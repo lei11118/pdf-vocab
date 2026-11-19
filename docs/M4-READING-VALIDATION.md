@@ -67,3 +67,12 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 `d2abadc` 的 3 项阅读器 UI 专项全部通过。实际查看了分式整体与单数字选区截图。全量任务中先通过 344 项单元测试与 3 项 UI，随后达到 30 分钟的作业上限。全量作业上限调整到 45 分钟后已重新运行。 [截图与专项结果](https://github.com/lei11118/pdf-vocab/actions/runs/44311569350) [延长时限后的全量回归](https://github.com/lei11118/pdf-vocab/actions/runs/44317275153)
 
 提交 `3098163` 的全量回归通过了 344 项单元测试和 10 项 UI 测试。最新候选 `3336259` 的 346 项单元测试全部通过，包括 4B 提示的重复词定位与控制标记转义。 [全量回归](https://github.com/lei11118/pdf-vocab/actions/runs/44317275153) [最新单元测试](https://github.com/lei11118/pdf-vocab/actions/runs/44321308601)
+
+## 圈选公式与阅读分组
+
+- 阅读工具栏的「圈识公式」接收手指或 Apple Pencil 的单笔轮廓。一次成功圈选会回到阅读模式。带文字层的分式保留原页裁剪和 LaTeX，选择整式后可继续长按分式行或符号。用旧版长按直接开启识别的设置仍可选，圈识工具独立于语境阅读设置。
+- 扫描页只在圈内栅格运行 Vision。单行可解析结果显示候选排版和原图，多行或识别不确定时保留原图待核对。复杂扫描公式的结构和单字选区仍需公式 OCR 模型通过验收。
+- 英语分组先分析同一句或可信版面段落里的词性，再选择完整、互不重叠的阅读单元。覆盖复合名词、介词连接术语、短语动词、穿插短宾语和否定范围。双栏、空行、标点、几何不可信时缩回局部。扫描阅读分组目前限同一 OCR 行。
+- 本地 Qwen 桌面回归用固定权重、相同的 JSON 约束和原文选区。28 条扩展样本按预先确定的严格参考，从旧提示 19 条提升到应用当前路径 23 条。原 32 条基准为 29 条，新增 20 条独立样本为 18 条，总计 70/80。`hardly` 和 "don’t" 独立选中时由明确的词汇含义处理。`didn't differ` 的机器复核保留了否定，但参考原句还要求处理 "by much"，因此新分组有意包含该程度补语。仍发现统计语境的 "mode" 被误译为「模式」，未据这个单一例子定制提示。桌面结果不代表 iPad M4 性能或 Apple Translation 的成绩。
+- 可用 `scripts/audit_reading_translation.py` 复跑，给出固定版本 llama-server、GGUF 和样本 JSON。词性分组参考 [Apple NLTagger](https://developer.apple.com/documentation/naturallanguage/nltagger) 与 [Ramshaw 与 Marcus 的英语短语分块论文](https://aclanthology.org/W95-0107/)，规则和样本在本项目实现。
+
