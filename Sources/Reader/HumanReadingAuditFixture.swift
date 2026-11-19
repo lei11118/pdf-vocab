@@ -74,7 +74,7 @@ enum HumanReadingAuditFixture {
         return document.dataRepresentation() ?? text
     }
 
-    private static func scanPDF() -> Data {
+    static func scanPDF() -> Data {
         let imageSize = CGSize(width: 1500, height: 2000)
         let image = UIGraphicsImageRenderer(size: imageSize).image { context in
             UIColor.white.setFill()
@@ -86,9 +86,14 @@ enum HumanReadingAuditFixture {
             ("This page is raster" as NSString).draw(at: CGPoint(x: 120, y: 860), withAttributes: attributes)
             ("17 + 9 = 26" as NSString).draw(at: CGPoint(x: 120, y: 1250), withAttributes: attributes)
         }
+        guard let bitmap = image.cgImage else { return Data() }
         return UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
             context.beginPage()
-            image.draw(in: pageBounds)
+            context.cgContext.saveGState()
+            context.cgContext.translateBy(x: 0, y: pageBounds.height)
+            context.cgContext.scaleBy(x: 1, y: -1)
+            context.cgContext.draw(bitmap, in: pageBounds)
+            context.cgContext.restoreGState()
         }
     }
 }

@@ -106,6 +106,15 @@ final class MathCircleTests: XCTestCase {
     }
 
     @MainActor
+    func testRasterFixtureHasAnImageAndNoVisibleNativeGlyphs() throws {
+        let document = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.scanPDF()))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let scan = PDFTextLayout.scan(on: page)
+        XCTAssertTrue(scan.glyphs.isEmpty)
+        XCTAssertTrue(scan.imageBounds.contains { $0.contains(CGPoint(x: 85, y: 278)) })
+    }
+
+    @MainActor
     func testReaderCircleRequiresCompleteFractionAndWorksWithContextDisabled() throws {
         let pdf = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.nativePDF()))
         let page = try XCTUnwrap(pdf.page(at: 0))

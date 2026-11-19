@@ -1102,7 +1102,11 @@ final class ReaderCoordinator: NSObject {
             return
         }
 
-        if (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || docScanned {
+        let hasRasterInCircle = scan.imageBounds.contains { image in
+            image.contains(CGPoint(x: circle.bounds.midX, y: circle.bounds.midY))
+                || circle.enclosesCenter(of: image)
+        }
+        if hasRasterInCircle || scan.glyphs.isEmpty || docScanned {
             recognizeScannedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
         } else {
             onFormulaCircleOutcome?("圈内没有可识别的公式。")

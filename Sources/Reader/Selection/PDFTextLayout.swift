@@ -7,7 +7,11 @@ final class PDFTextLayout {
     struct Glyph { let text: String; let rect: CGRect; let baseline: CGPoint }
     /// A stroke-geometry candidate only; it does not identify a math relation.
     struct HorizontalRule { let start: CGPoint; let end: CGPoint; let lineWidth: CGFloat }
-    struct PageScan { let glyphs: [Glyph]; let horizontalRules: [HorizontalRule] }
+    struct PageScan {
+        let glyphs: [Glyph]
+        let horizontalRules: [HorizontalRule]
+        var imageBounds: [CGRect] = []
+    }
     private struct Font {
         var unicode: [Int: String] = [:]
         var lengths: [Int] = [1]
@@ -55,6 +59,7 @@ final class PDFTextLayout {
         var leading: CGFloat = 0
         var rise: CGFloat = 0
         var textPositionKnown = true
+        var textRenderingMode: CGFloat = 0
         var strokeWidth: CGFloat = 1
     }
     private struct RulePath { let start: CGPoint; var end: CGPoint? }
@@ -68,6 +73,7 @@ final class PDFTextLayout {
     private var resources: CGPDFDictionaryRef?
     private var glyphs: [Glyph] = []
     private var horizontalRules: [HorizontalRule] = []
+    private var imageBounds: [CGRect] = []
     private var pathState = PathState()
     private let collectsRules: Bool
     private var depth = 0
@@ -94,7 +100,7 @@ final class PDFTextLayout {
         let stream = CGPDFContentStreamCreateWithPage(ref)
         defer { CGPDFContentStreamRelease(stream) }
         layout.scan(stream)
-        return PageScan(glyphs:layout.glyphs,horizontalRules:layout.horizontalRules)
+        return PageScan(glyphs: layout.glyphs, horizontalRules: layout.horizontalRules, imageBounds: layout.imageBounds)
     }
     private static func owner(_ info: UnsafeMutableRawPointer?) -> PDFTextLayout? {
         info.map { Unmanaged<PDFTextLayout>.fromOpaque($0).takeUnretainedValue() }
@@ -183,6 +189,9 @@ final class PDFTextLayout {
         CGPDFOperatorTableSetCallback(table,"Tw") { scanner,p in PDFTextLayout.owner(p)?.state.wordSpace = PDFTextLayout.number(scanner) }
         CGPDFOperatorTableSetCallback(table,"Tz") { scanner,p in PDFTextLayout.owner(p)?.state.horizontal = PDFTextLayout.number(scanner)/100 }
         CGPDFOperatorTableSetCallback(table,"TL") { scanner,p in PDFTextLayout.owner(p)?.state.leading = PDFTextLayout.number(scanner) }
+        CGPDFOperatorTableSetCallback(table,"Tr") { scanner,p in
+            PDFTextLayout.owner(p)?.state.textRenderingMode = PDFTextLayout.number(scanner)
+        }
         CGPDFOperatorTableSetCallback(table,"Ts") { scanner,p in PDFTextLayout.owner(p)?.state.rise = PDFTextLayout.number(scanner) }
         CGPDFOperatorTableSetCallback(table,"Tj") { scanner,p in PDFTextLayout.owner(p)?.showString(scanner) }
         CGPDFOperatorTableSetCallback(table,"'") { scanner,p in
@@ -274,7 +283,12 @@ final class PDFTextLayout {
             // PDFKit distributes that spacing over neighbouring ranges.
             let rect = CGRect(x:0,y:state.rise+state.size*font.descent,width:advance,height:state.size)
                 .applying(state.text.concatenating(state.ctm)).standardized
-            if state.textPositionKnown, glyphs.count < 100_000, rect.width > 0, rect.height > 0 { glyphs.append(Glyph(text:text,rect:rect,baseline:CGPoint(x:0,y:state.rise).applying(state.text.concatenating(state.ctm)))) }
+            let paintsGlyph = state.textRenderingMode != 3 && state.textRenderingMode != 7
+            if state.textPositionKnown, (!collectsRules || paintsGlyph), glyphs.count < 100_000,
+               rect.width > 0, rect.height > 0 {
+                let baseline = CGPoint(x: 0, y: state.rise).applying(state.text.concatenating(state.ctm))
+                glyphs.append(Glyph(text: text, rect: rect, baseline: baseline))
+            }
             self.advance(advance+(code == 32 && length == 1 ? state.wordSpace*state.horizontal : 0))
         }
     }
@@ -284,7 +298,13 @@ final class PDFTextLayout {
         guard CGPDFScannerPopName(scanner,&name), let name,
               let object = CGPDFContentStreamGetResource(parent,"XObject",name),
               CGPDFObjectGetValue(object,.stream,&form), let form,
-              let dictionary = CGPDFStreamGetDictionary(form), Self.name(dictionary,"Subtype") == "Form" else { return }
+              let dictionary = CGPDFStreamGetDictionary(form) else { return }
+        let subtype = Self.name(dictionary,"Subtype")
+        if subtype == "Image", collectsRules, imageBounds.count < 512 {
+            let bounds = CGRect(x: 0, y: 0, width: 1, height: 1).applying(state.ctm).standardized
+            if !bounds.isEmpty && !bounds.isInfinite { imageBounds.append(bounds) }
+        }
+        guard subtype == "Form" else { return }
         let saved = state, savedStack = stack, savedResources = resources, savedPath = pathState
         pathState = PathState()
         defer { state = saved; stack = savedStack; resources = savedResources; pathState = savedPath }
