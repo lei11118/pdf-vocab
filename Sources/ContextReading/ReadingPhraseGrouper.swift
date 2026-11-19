@@ -199,7 +199,11 @@ enum ReadingPhraseGrouper {
                 if hasHead && (!hasPredicate || word.text == words[noun - 1].text) { break }
                 hasHead = true
                 if noun > start {
-                    result.append(Chunk(end: noun, score: 6 * (noun - start) + 2))
+                    let hasModifierEvidence = hasPredicate || words.count > 2
+                        || words[start].text == "no" || words[start].text.contains("-")
+                    if hasModifierEvidence {
+                        result.append(Chunk(end: noun, score: 6 * (noun - start) + 2))
+                    }
                 }
             } else if !hasHead && (word.tag == .adjective ||
                 (degreeModifiers.contains(word.text) && noun < limit && words[noun + 1].tag == .adjective)) {

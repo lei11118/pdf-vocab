@@ -70,9 +70,11 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 
 ## 圈选公式与阅读分组
 
-- 阅读工具栏的「圈识公式」接收手指或 Apple Pencil 的单笔轮廓。一次成功圈选会回到阅读模式。带文字层的分式保留原页裁剪和 LaTeX，选择整式后可继续长按分式行或符号。用旧版长按直接开启识别的设置仍可选，圈识工具独立于语境阅读设置。
+- 在阅读工具栏点「圈识公式」，用手指或 Apple Pencil 沿公式外缘画一笔。圈选后回到阅读模式，结果卡显示原页裁剪。可验证的文字层公式支持 LaTeX，选中整式后可长按分式行或符号。普通触摸、长按和拖选使用原有的文本选择路径。圈识工具可在关闭语境阅读时使用。
 - 扫描页只在圈内栅格运行 Vision。单行可解析结果显示候选排版和原图，多行或识别不确定时保留原图待核对。复杂扫描公式的结构和单字选区仍需公式 OCR 模型通过验收。
+- 复杂文字层回归按 OpenStax 7.23 独立重绘含时薛定谔方程，逐项检查三个堆叠分式、四个偏导符号、平方上标、LaTeX、整式选区和单字符选区。 [OpenStax 原式](https://openstax.org/books/university-physics-volume-3/pages/7-3-the-schrodinger-equation)
+- 另取 MIT 22.101 讲义第 6 页式 (2.14) 原 PDF 裁剪进行扫描模型实测。PP-FormulaNet_plus-S 三种输入都漏了分子里的偏导命令与势能项变量。PP-FormulaNet_plus-M 在两种 4 倍输入下保留全部结构，2 倍输入多出句点。该结果来自桌面 CPU，模型及其扫描字符定位还未通过 iPad 验收。 [MIT 讲义原页](https://ocw.mit.edu/courses/22-101-applied-nuclear-physics-fall-2006/ae440bab1e9454baad28e34caa2c3c71_lec02.pdf)
 - 英语分组先分析同一句或可信版面段落里的词性，再选择完整、互不重叠的阅读单元。覆盖复合名词、介词连接术语、短语动词、穿插短宾语和否定范围。双栏、空行、标点、几何不可信时缩回局部。扫描阅读分组目前限同一 OCR 行。
 - 本地 Qwen 桌面回归用固定权重、相同的 JSON 约束和原文选区。28 条扩展样本按预先确定的严格参考，从旧提示 19 条提升到应用当前路径 23 条。原 32 条基准为 29 条，新增 20 条独立样本为 18 条，总计 70/80。`hardly` 和 "don’t" 独立选中时由明确的词汇含义处理。`didn't differ` 的机器复核保留了否定，但参考原句还要求处理 "by much"，因此新分组有意包含该程度补语。仍发现统计语境的 "mode" 被误译为「模式」，未据这个单一例子定制提示。桌面结果不代表 iPad M4 性能或 Apple Translation 的成绩。
-- 可用 `scripts/audit_reading_translation.py` 复跑，给出固定版本 llama-server、GGUF 和样本 JSON。词性分组参考 [Apple NLTagger](https://developer.apple.com/documentation/naturallanguage/nltagger) 与 [Ramshaw 与 Marcus 的英语短语分块论文](https://aclanthology.org/W95-0107/)，规则和样本在本项目实现。
+- 可用 `scripts/audit_reading_translation.py` 复跑，给出固定版本 llama-server、GGUF 和样本 JSON。词性分析使用 MIT 许可的 NLTK 英语词性模型，Swift 分组规则和样本在本项目实现。 [NLTK 模型许可](https://github.com/nltk/nltk_data/blob/gh-pages/DATASET-LICENSES.md) [Ramshaw 与 Marcus 的英语短语分块论文](https://aclanthology.org/W95-0107/)
 

@@ -117,7 +117,13 @@ enum ScannedFormulaReading {
         }
         let lines = request.results ?? []
         guard lines.count == 1, let line = lines.first, let best = line.topCandidates(1).first,
-              best.confidence >= 0.5 else { return containsVisibleInk(image) ? .uncertain : nil }
+              best.confidence >= 0.5 else { return visibleInkHeight(image) > 0 ? .uncertain : nil }
+        // Vision can return just the easier middle row of a stacked formula.
+        // Require the observation to account for the vertical ink extent.
+        let inkHeight = visibleInkHeight(image)
+        guard inkHeight > 0 else { return nil }
+        guard inkHeight <= max(1.45 * line.boundingBox.height, line.boundingBox.height + 0.12)
+        else { return .uncertain }
         let text = best.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .uncertain }
         return .oneLine(text)
@@ -142,15 +148,26 @@ enum ScannedFormulaReading {
                                  explanation: explanation, status: .needsReview, ast: nil)
     }
 
-    private static func containsVisibleInk(_ image: CGImage) -> Bool {
-        let size = 64
-        var gray = [UInt8](repeating: 255, count: size * size)
+    private static func visibleInkHeight(_ image: CGImage) -> CGFloat {
+        let width = min(384, image.width)
+        let height = min(160, image.height)
+        guard width > 0, height > 0 else { return 0 }
+        var gray = [UInt8](repeating: 255, count: width * height)
         return gray.withUnsafeMutableBytes { bytes in
-            guard let context = CGContext(data: bytes.baseAddress, width: size, height: size,
-                bitsPerComponent: 8, bytesPerRow: size, space: CGColorSpaceCreateDeviceGray(),
-                bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return true }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
-            return bytes.lazy.filter { $0 < 180 }.prefix(5).count == 5
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 1 }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var first: Int?
+            var last = 0
+            for row in 0..<height {
+                let start = row * width
+                guard bytes[start..<(start + width)].lazy.filter({ $0 < 180 }).prefix(3).count == 3 else { continue }
+                first = first ?? row
+                last = row
+            }
+            guard let first else { return 0 }
+            return CGFloat(last - first + 1) / CGFloat(height)
         }
     }
 }

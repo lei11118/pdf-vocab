@@ -76,7 +76,7 @@ struct MathMeaningCard: View {
             VStack(alignment: .leading, spacing: DS.Space.m) {
                 HStack(alignment: .top, spacing: DS.Space.s) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("数学释义")
+                        Text("公式识别")
                             .font(DS.Fonts.title2)
                             .foregroundStyle(DS.foreground1)
                         Text(result.status == .parsedOCR ? "扫描候选 · 待核对" : isParsed ? "文字结构已解析" : "结构待核对")

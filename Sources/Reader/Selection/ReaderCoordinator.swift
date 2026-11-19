@@ -937,6 +937,7 @@ final class ReaderCoordinator: NSObject {
         let fractions = cachedNativeFractions(on: page, scan: scan).filter { fraction in
             fraction.orderedGlyphs.contains { indices.contains($0.sourceIndex) }
         }
+        let hasEquality = enclosedGlyphs.contains { $0.element.text == "=" }
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
                                                                   fractions: fractions, on: page) {
@@ -945,6 +946,13 @@ final class ReaderCoordinator: NSObject {
                     return equation.detail(at: point, on: page)
                 }
                 finishFormulaCircle()
+                return
+            }
+            let allFractionGlyphsInside = fractions.allSatisfy {
+                $0.orderedGlyphs.allSatisfy { indices.contains($0.sourceIndex) }
+            }
+            if hasEquality, allFractionGlyphsInside,
+               presentUnverifiedFormula(on: page, circle: circle, displayBox: pdfView.displayBox) {
                 return
             }
             guard fractions.count == 1, let fraction = fractions.first,
@@ -966,13 +974,15 @@ final class ReaderCoordinator: NSObject {
         if let first = enclosedGlyphs.first?.element {
             let seed = CGPoint(x: first.rect.midX, y: first.rect.midY)
             if let line = SelectionGeometry.nativeMathPressTarget(on: page, at: seed),
+               let result = MathReadingService.resolve(line.lineSelection.string ?? ""),
+               result.status == .parsedText,
                circle.enclosesCenter(of: line.lineBounds),
                scan.glyphs.filter({ !$0.text.allSatisfy(\.isWhitespace) &&
                     line.lineBounds.contains(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) })
                    .allSatisfy({ circle.enclosesCenter(of: $0.rect) }),
                enclosedGlyphs.allSatisfy({ line.lineBounds.intersects($0.element.rect) }) {
                 beginInlineFormula(selection: line.lineSelection, range: line.lineRange, region: line.lineBounds,
-                                   result: MathReadingService.resolve(line.lineSelection.string ?? ""), on: page)
+                                   result: result, on: page)
                 finishFormulaCircle()
                 return
             }
@@ -1000,6 +1010,12 @@ final class ReaderCoordinator: NSObject {
                     finishFormulaCircle()
                     return
                 }
+            }
+            if hasEquality, scan.horizontalRules.contains(where: { rule in
+                hypot(rule.end.x - rule.start.x, rule.end.y - rule.start.y) >= 8
+                    && circle.contains(rule.start) && circle.contains(rule.end)
+            }), presentUnverifiedFormula(on: page, circle: circle, displayBox: pdfView.displayBox) {
+                return
             }
             onFormulaCircleOutcome?("未找到完整公式。请沿公式外缘重圈，避开旁边的文字。")
             return
@@ -1029,7 +1045,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func beginInlineFormula(selection: PDFSelection, range: NSRange, region: CGRect,
-                                    result: MathReadingResult?, on page: PDFPage) {
+                                    result: MathReadingResult, on page: PDFPage) {
         let whole = FormulaCircleDetail(selection: selection, sourceRanges: [range], region: region,
                                         readingResult: result, fractionDetail: nil, isGlyph: false)
         beginFormulaSelection(whole, on: page) { [weak page] point in
@@ -1057,6 +1073,25 @@ final class ReaderCoordinator: NSObject {
         return detail
     }
 
+    @discardableResult
+    private func presentUnverifiedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) -> Bool {
+        let crop = circle.bounds.intersection(page.bounds(for: displayBox))
+        guard let image = renderMathCrop(on: page, crop: crop, clippingTo: circle.path) else { return false }
+        let result = MathReadingResult(sourceText: "圈选公式", latex: nil, unicode: nil,
+                                       explanation: "已保留原页。当前无法核对这个公式的完整结构与各符号位置。",
+                                       status: .needsReview, ast: nil)
+        presentFormulaCrop(result, image: image, on: page, region: crop)
+        return true
+    }
+
+    private func presentFormulaCrop(_ result: MathReadingResult, image: UIImage, on page: PDFPage, region: CGRect) {
+        applyHighlightDesired([annotationKey(page, region): (page, region)], rejected: 0, t0: CFAbsoluteTimeGetCurrent())
+        selectionText = result.sourceText
+        onSelectionInfo(SelectionInfo(text: result.sourceText, wordCount: 0, primaryTerm: "",
+                                      mathReadingResult: result, mathSourceImage: image))
+        finishFormulaCircle()
+    }
+
     private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
         let crop = circle.bounds.intersection(page.bounds(for: displayBox))
         guard let image = renderMathCrop(on: page, crop: crop, clippingTo: circle.path),
@@ -1077,12 +1112,7 @@ final class ReaderCoordinator: NSObject {
                 return
             }
             let result = ScannedFormulaReading.readingResult(for: candidate)
-            self.applyHighlightDesired([self.annotationKey(page, crop): (page, crop)],
-                                       rejected: 0, t0: CFAbsoluteTimeGetCurrent())
-            self.selectionText = result.sourceText
-            self.onSelectionInfo(SelectionInfo(text: result.sourceText, wordCount: 0, primaryTerm: "",
-                                               mathReadingResult: result, mathSourceImage: image))
-            self.finishFormulaCircle()
+            self.presentFormulaCrop(result, image: image, on: page, region: crop)
         }
     }
 
@@ -1137,7 +1167,7 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log("press.began(\(kind)): no page")
                 return
             }
-            if let detail = newFormulaDetail(on: hit.page, at: hit.point) {
+            if let active = activeNativeMathParent, active.page === hit.page, let detail = active.detailAt(hit.point) {
                 holdMenuWork?.cancel()
                 holdMenuWork = nil
                 menu.dismiss()

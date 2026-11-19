@@ -545,13 +545,14 @@ extension ReaderRouteUITests {
         attachAuditScreenshot("formula-circle-follow-up-exact-digit", app: app)
     }
 
-    @objc func testFormulaCircleToolRecognizesRasterAsCandidate() throws {
+    @objc func testSchrodingerCirclePreservesRasterWithoutFlatteningFractions() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",
+                               "--human-reading-audit-schrodinger",
                                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
 
-        let scan = app.buttons.containing(.staticText, identifier: "Human-reading-audit-scan").firstMatch
+        let scan = app.buttons.containing(.staticText, identifier: "Schrodinger-audit-raster").firstMatch
         XCTAssertTrue(scan.waitForExistence(timeout: 20))
         scan.tap()
         let tool = app.buttons["reader.formula-circle-tool"]
@@ -561,12 +562,15 @@ extension ReaderRouteUITests {
         XCTAssertTrue(replay.waitForExistence(timeout: 5))
         replay.tap()
         let source = app.staticTexts["math-card-source"].firstMatch
-        XCTAssertTrue(source.waitForExistence(timeout: 25))
-        XCTAssertEqual(source.label.filter { !$0.isWhitespace }, "17+9=26")
+        if !source.waitForExistence(timeout: 25) {
+            attachAuditScreenshot("schrodinger-raster-failure", app: app)
+            XCTFail("Expected the original raster coverage: \(app.staticTexts["reader.formula-circle-instruction"].firstMatch.label)")
+            return
+        }
         XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["math-card-status"].firstMatch.label.contains("待核对"))
-        XCTAssertTrue(app.staticTexts["math-card-latex"].firstMatch.exists)
-        attachAuditScreenshot("formula-circle-raster-candidate-and-original", app: app)
+        XCTAssertEqual(app.staticTexts["math-card-status"].firstMatch.label, "结构待核对")
+        XCTAssertFalse(app.staticTexts["math-card-latex"].firstMatch.exists)
+        attachAuditScreenshot("schrodinger-raster-original-for-review", app: app)
     }
 
 
