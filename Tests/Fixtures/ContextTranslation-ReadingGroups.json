@@ -1,0 +1,286 @@
+[
+  {
+    "id": "modal-negation",
+    "text": "The shear load could not explain the observed failure.",
+    "selection": "could not explain",
+    "accepted": [
+      "无法解释",
+      "不能解释"
+    ]
+  },
+  {
+    "id": "negative-auxiliary",
+    "text": "The two estimates didn't differ by much.",
+    "selection": "didn't differ",
+    "accepted": [
+      "没有差异",
+      "并无差异",
+      "没有不同",
+      "没有相差",
+      "并不相差",
+      "没有相差太多",
+      "差别不大",
+      "没有差多少"
+    ]
+  },
+  {
+    "id": "verbal-negative",
+    "text": "The researchers did not rule out a sampling error.",
+    "selection": "did not rule out",
+    "accepted": [
+      "没有排除",
+      "未排除",
+      "并未排除"
+    ]
+  },
+  {
+    "id": "barely-word",
+    "text": "The signal barely rose above the background noise.",
+    "selection": "barely",
+    "accepted": [
+      "勉强",
+      "仅勉强",
+      "几乎没有",
+      "刚刚"
+    ]
+  },
+  {
+    "id": "scarcely-word",
+    "text": "At dawn we could scarcely see the opposite shore.",
+    "selection": "scarcely",
+    "accepted": [
+      "几乎不能",
+      "几乎看不见",
+      "几乎无法",
+      "几乎不"
+    ]
+  },
+  {
+    "id": "never-word",
+    "text": "The reservoir has never frozen before October.",
+    "selection": "never",
+    "accepted": [
+      "从未",
+      "从来没有"
+    ]
+  },
+  {
+    "id": "aux-negative-word",
+    "text": "He wasn't aware of the change until Tuesday.",
+    "selection": "wasn't",
+    "accepted": [
+      "不",
+      "并不",
+      "没有",
+      "并未"
+    ]
+  },
+  {
+    "id": "logical-scope",
+    "text": "A statistically significant result is not necessarily useful.",
+    "selection": "not necessarily",
+    "accepted": [
+      "不一定",
+      "未必",
+      "并不一定"
+    ]
+  },
+  {
+    "id": "double-negative",
+    "text": "The response was not uncommon among beginners.",
+    "selection": "not uncommon",
+    "accepted": [
+      "并不少见",
+      "并不罕见",
+      "并非罕见",
+      "并非不常见",
+      "相当常见",
+      "常见"
+    ]
+  },
+  {
+    "id": "whether-word",
+    "text": "We still do not know whether the bridge will reopen.",
+    "selection": "whether",
+    "accepted": [
+      "是否",
+      "会不会"
+    ]
+  },
+  {
+    "id": "relative-word",
+    "text": "The sample that failed was tested again.",
+    "selection": "that",
+    "accepted": []
+  },
+  {
+    "id": "empty-infinitive",
+    "text": "She agreed to wait outside.",
+    "selection": "to",
+    "accepted": []
+  },
+  {
+    "id": "literal-direction",
+    "text": "He looked up at the stars from the valley.",
+    "selection": "looked",
+    "accepted": [
+      "看",
+      "望",
+      "看了",
+      "望了",
+      "望向",
+      "看向"
+    ]
+  },
+  {
+    "id": "look-transitive",
+    "text": "He looked up the reference before the meeting.",
+    "selection": "looked up",
+    "accepted": [
+      "查阅",
+      "查询",
+      "查找"
+    ]
+  },
+  {
+    "id": "separable-verb",
+    "text": "The board turned the offer down after the vote.",
+    "selection": "turned",
+    "accepted": [
+      "拒绝",
+      "回绝"
+    ]
+  },
+  {
+    "id": "science-compound",
+    "text": "The coefficient of friction changed after polishing.",
+    "selection": "coefficient of friction",
+    "accepted": [
+      "摩擦系数",
+      "摩擦因数"
+    ]
+  },
+  {
+    "id": "science-wrapped",
+    "text": "She measured the radius\nof curvature at the midpoint.",
+    "selection": "radius\nof curvature",
+    "accepted": [
+      "曲率半径"
+    ]
+  },
+  {
+    "id": "science-degree",
+    "text": "The small trial found no statistically significant difference.",
+    "selection": "no statistically significant difference",
+    "accepted": [
+      "无统计学显著差异",
+      "无统计学意义的差异",
+      "没有统计学显著差异",
+      "没有统计学意义的差异",
+      "没有统计显著差异",
+      "差异无统计学意义",
+      "没有统计上显著的差异",
+      "没有统计显著性的差异",
+      "无统计学上的显著差异",
+      "没有统计学上的显著差异"
+    ]
+  },
+  {
+    "id": "hyphen-compound",
+    "text": "A high-frequency signal is more sensitive to interference.",
+    "selection": "high-frequency signal",
+    "accepted": [
+      "高频信号"
+    ]
+  },
+  {
+    "id": "medical-register",
+    "text": "The confidence interval widened after adjustment.",
+    "selection": "confidence interval",
+    "accepted": [
+      "置信区间",
+      "可信区间"
+    ]
+  },
+  {
+    "id": "physics-work",
+    "text": "The force does work on the model as it moves.",
+    "selection": "work",
+    "accepted": [
+      "功",
+      "机械功"
+    ]
+  },
+  {
+    "id": "legal-domain",
+    "text": "The court stayed the proceedings pending appeal.",
+    "selection": "stayed",
+    "accepted": [
+      "中止",
+      "暂停"
+    ]
+  },
+  {
+    "id": "repeated-lead",
+    "text": "The lead engineer found lead in the sample.",
+    "selection": "lead",
+    "accepted": [
+      "铅"
+    ],
+    "occurrence": 2
+  },
+  {
+    "id": "repeated-interest",
+    "text": "The committee's interest shifted when interest rates rose.",
+    "selection": "interest",
+    "accepted": [
+      "利息",
+      "利率"
+    ],
+    "occurrence": 2
+  },
+  {
+    "id": "different-clause",
+    "text": "The panel did not approve it, but it did endorse the review.",
+    "selection": "endorse",
+    "accepted": [
+      "支持",
+      "认可",
+      "赞同",
+      "批准"
+    ]
+  },
+  {
+    "id": "case-sensitive",
+    "text": "The solution contains dissolved iron and a trace of lead.",
+    "selection": "trace",
+    "accepted": [
+      "微量",
+      "痕量",
+      "少量"
+    ]
+  },
+  {
+    "id": "degree-scope",
+    "text": "A reading below ten does not always indicate failure.",
+    "selection": "not always",
+    "accepted": [
+      "并不总是",
+      "不总是",
+      "不一定",
+      "未必",
+      "并非总是"
+    ]
+  },
+  {
+    "id": "bounded-use",
+    "text": "She ran out of patience after the third delay.",
+    "selection": "ran out of",
+    "accepted": [
+      "耗尽",
+      "用尽",
+      "失去",
+      "没有了"
+    ]
+  }
+]

@@ -34,17 +34,36 @@ enum ContextSelectionRouter {
                       displaySurface: String,
                       geometryQuality: SourceGeometryQuality,
                       generation: Int,
-                      verifiedPhraseGroupSpan: UTF16Span? = nil) -> ContextualSelection? {
+                      verifiedPhraseGroupSpan: UTF16Span? = nil,
+                      verifiedPhraseAnchorSpan: UTF16Span? = nil) -> ContextualSelection? {
         guard selection.pages.count == 1,
               selection.pages.first === page,
               let sourceText = page.string else { return nil }
         let ranges = SelectionGeometry.sourceRanges(of: selection, on: page)
         guard !ranges.isEmpty else { return nil }
-        let sourceSpans = ranges.compactMap { UTF16Span(range: $0, in: sourceText) }
-        guard sourceSpans.count == ranges.count else { return nil }
+        let exactSpans = ranges.compactMap { UTF16Span(range: $0, in: sourceText) }
+        guard exactSpans.count == ranges.count else { return nil }
+        let sourceSpans: [UTF16Span]
+        var wrapsPhrase = false
+        if let verifiedPhraseGroupSpan, let range = verifiedPhraseGroupSpan.nsRange(in: sourceText),
+           let surface = verifiedPhraseGroupSpan.substring(in: sourceText) {
+            let coverage = classifySourceRowRanges(requested: range, returned: ranges, sourceText: sourceText)
+            guard coverage == .exact || coverage == .whitespaceOnly else { return nil }
+            wrapsPhrase = containsLineBreak(surface)
+            sourceSpans = [verifiedPhraseGroupSpan]
+        } else {
+            sourceSpans = exactSpans
+        }
+        let anchorSpans: [UTF16Span]
+        if wrapsPhrase, let verifiedPhraseGroupSpan, let verifiedPhraseAnchorSpan,
+           contains(verifiedPhraseGroupSpan, verifiedPhraseAnchorSpan) {
+            anchorSpans = [verifiedPhraseAnchorSpan]
+        } else {
+            anchorSpans = sourceSpans
+        }
 
         let sourceRows = NativeSentenceContextBuilder.physicalLineSpans(in: sourceText)
-        let selectedRowIndices = sourceSpans.compactMap { selected -> Int? in
+        let selectedRowIndices = anchorSpans.compactMap { selected -> Int? in
             guard let selectedEnd = selected.endExclusive else { return nil }
             return sourceRows.firstIndex { row in
                 guard let rowEnd = row.endExclusive else { return false }
@@ -52,7 +71,7 @@ enum ContextSelectionRouter {
             }
         }
         let seedRowIndex: Int?
-        if selectedRowIndices.count == sourceSpans.count,
+        if selectedRowIndices.count == anchorSpans.count,
            let first = selectedRowIndices.first,
            selectedRowIndices.allSatisfy({ $0 == first }) {
             seedRowIndex = first
@@ -79,7 +98,7 @@ enum ContextSelectionRouter {
                 nearbyBounds[rowIndex] = boundsForRow(rowIndex)
             }
             return NativeSentenceContextBuilder.trustedSourceBlock(sourceText: sourceText,
-                                                                    selectedSourceSpans: sourceSpans,
+                                                                    selectedSourceSpans: anchorSpans,
                                                                     lineBounds: nearbyBounds)
         }
 
@@ -105,6 +124,9 @@ enum ContextSelectionRouter {
                                         pageIndex: pageIndex,
                                         geometryRevision: SelectionGeometry.contextGeometryRevision(for: page))
         let validatedBlock = trustedSourceBlock()
+        if wrapsPhrase, let phrase = verifiedPhraseGroupSpan {
+            guard let validatedBlock, contains(validatedBlock.sourceSpan, phrase) else { return nil }
+        }
         guard var contextual = resolve(canonical: canonical,
                                        sourceSpans: sourceSpans,
                                        displaySurface: displaySurface,
@@ -147,6 +169,7 @@ enum ContextSelectionRouter {
                 contextual = fallback
             }
         }
+        if wrapsPhrase && !usesValidatedLayoutBlock { return nil }
         if let verifiedPhraseGroupSpan {
             guard let sentenceContext = contextual.sentenceContext,
                   contextual.sourceSpans == [verifiedPhraseGroupSpan],
@@ -491,7 +514,7 @@ enum ContextSelectionRouter {
                                           length: pair.1.span.location - leftEnd).substring(in: sourceText),
                   !gapText.isEmpty,
                   gapText.unicodeScalars.allSatisfy({
-                      CharacterSet.whitespaces.contains($0) && !CharacterSet.newlines.contains($0)
+                      CharacterSet.whitespacesAndNewlines.contains($0)
                   }) else { return false }
         }
         return true

@@ -160,11 +160,12 @@ struct CanonicalContent: Equatable, Sendable {
     let tokens: [SourceToken]
 }
 
-/// Translation context borrowed from an exact dictionary-verified phrase,
+/// Translation context borrowed from a source-verified reading phrase,
 /// kept separate from the user's current single-word selection.
 struct VerifiedPhraseTranslationScope: Equatable, Sendable {
     let context: SentenceContext
     let span: UTF16Span
+    var preferred = false
 }
 
 /// Selection passed to the contextual card. Source spans and display text are
@@ -174,8 +175,7 @@ struct ContextualSelection: Equatable, Sendable {
     let pageIndex: Int
     let sourceSpans: [UTF16Span]
     let tokens: [SourceToken]
-    /// Present only when an exact, enabled-dictionary phrase entry verified
-    /// this selected group. Coordinates stay page-relative UTF-16 like sourceSpans.
+    /// The source-verified phrase. Coordinates use the same UTF-16 space as sourceSpans.
     var verifiedPhraseGroupSpan: UTF16Span? = nil
     /// The original single-line OCR context used only for exact dictionary
     /// phrase lookup when `sentenceContext` is a mapped layout block.
@@ -183,8 +183,7 @@ struct ContextualSelection: Equatable, Sendable {
     let displaySurface: String
     let generation: Int
     var sentenceContext: SentenceContext? = nil
-    /// Optional phrase context for translating a word within an exact,
-    /// dictionary-verified phrase. The selection's own text/tokens stay intact.
+    /// Optional phrase context for a selected word. The selection's source stays intact.
     var verifiedPhraseTranslationScope: VerifiedPhraseTranslationScope? = nil
 
     var primaryToken: SourceToken? { tokens.first }
@@ -193,7 +192,7 @@ struct ContextualSelection: Equatable, Sendable {
     /// contained in the same verified phrase occurrence. Comparing stable token
     /// identity (which includes OCR block identity) prevents cross-line matches
     /// when OCR spans happen to reuse the same line-local offsets.
-    func borrowingVerifiedPhraseTranslationScope(from phrase: ContextualSelection)
+    func borrowingVerifiedPhraseTranslationScope(from phrase: ContextualSelection, preferred: Bool = false)
         -> ContextualSelection? {
         guard verifiedPhraseTranslationScope == nil,
               documentSHA256 == phrase.documentSHA256,
@@ -222,7 +221,8 @@ struct ContextualSelection: Equatable, Sendable {
 
         var scoped = self
         scoped.verifiedPhraseTranslationScope = VerifiedPhraseTranslationScope(context: context,
-                                                                              span: phraseSpan)
+                                                                              span: phraseSpan,
+                                                                              preferred: preferred)
         return scoped
     }
 }

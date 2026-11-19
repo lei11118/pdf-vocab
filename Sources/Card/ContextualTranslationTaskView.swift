@@ -118,7 +118,7 @@ final class ContextualTranslationDriver: ObservableObject {
         }
         let translationScope = identity.selection.verifiedPhraseTranslationScope
         let request: ContextualTranslationRequest
-        if identity.selection.sentenceContext == nil, let translationScope,
+        if let translationScope, translationScope.preferred || identity.selection.sentenceContext == nil,
            let phraseRequest = try? ContextualTranslationRequest.make(from: translationScope.context,
                                                                        verifiedPhraseGroupSpan: translationScope.span) {
             request = phraseRequest
@@ -223,8 +223,10 @@ final class ContextualTranslationDriver: ObservableObject {
     }
 
     private func translateLocally(_ identity: Identity, generation: UInt64) async {
-        guard let context = identity.selection.sentenceContext,
-              let input = LocalTranslationInput(context: context) else {
+        let scope = identity.selection.verifiedPhraseTranslationScope
+        let phraseInput = scope.flatMap { $0.preferred ? LocalTranslationInput(context: $0.context) : nil }
+        let selectionInput = identity.selection.sentenceContext.flatMap(LocalTranslationInput.init(context:))
+        guard let input = phraseInput ?? selectionInput else {
             state = .noAlignedResult
             return
         }

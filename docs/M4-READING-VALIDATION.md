@@ -32,7 +32,7 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 | Qwen3.5 2B Q4_K_M，短提示与约束 | 32/32 | 20/32 | 1.27 秒 |
 | Qwen3.5 4B Q4_K_M，短提示与约束 | 32/32 | 29/32 | 2.84 秒 |
 
-完全匹配会漏计正确的同义词。逐条检查仍发现错误。Hy-MT2 把物理语境中的 work 译成「起作用」，把应显示「无」的从句连接词译成「似乎」。Qwen 0.8B 误解 hardly 的否定，Qwen 2B 把 strain 译为「张力」。Qwen 4B 正确处理了应变、拉应力和偏导数，仍会遗漏 hardly 的否定含义。4B 已加到 16 GB 档开发构建的 Metal 评测入口。这些桌面延迟仅用于本轮筛选。 [Qwen 原始权重与许可](https://huggingface.co/Qwen/Qwen3.5-0.8B) [0.8B 量化来源](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d) [2B 量化来源](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae) [4B 量化来源](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523)
+完全匹配会漏计正确的同义词。逐条检查仍发现错误。Hy-MT2 把物理语境中的 work 译成「起作用」，把应显示「无」的从句连接词译成「似乎」。Qwen 0.8B 误解 hardly 的否定，Qwen 2B 把 strain 译为「张力」。Qwen 4B 正确处理了应变、拉应力和偏导数，仍会遗漏 hardly 的否定含义。4B 已加到 16 GB 档开发构建的 Metal 评测入口。用应用相同的 GBNF 结构约束复测 4B，32 条均可解码，逐条结果与原测试一致。这些桌面延迟仅用于本轮筛选。 [Qwen 原始权重与许可](https://huggingface.co/Qwen/Qwen3.5-0.8B) [0.8B 量化来源](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d) [2B 量化来源](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae) [4B 量化来源](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523)
 
 ## 设备记录
 
@@ -51,7 +51,10 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 
 ## CI 与截图
 
-候选提交 `837ed5f` 的未签名 IPA 构建成功。下载后检查了产物与 IPA 的 ZIP CRC、Info.plist 和 llama.framework。版本为 0.73.0，构建 124，最低系统为 iPadOS 26.0。包大小为 56,918,585 字节，SHA-256 为 `2357CC401F594544FD5A093C111D7E86DC7FCB22B7C3A694E4A419D6425F6CBA`。 [构建与产物](https://github.com/lei11118/pdf-vocab/actions/runs/44264189778)
+候选提交 `3336259` 的 ARM64 发布配置与开发配置 IPA 均已构建并下载检查。版本为 0.73.0，构建 124，最低系统为 iPadOS 26.0。两包均未签名，均包含 llama.framework 和 Qwen 许可。开发配置提供「设置 → 语境阅读 → 翻译模型」的端侧候选。
+
+- 发布配置为 56,926,678 字节。SHA-256 为 `C59BC78A1D0DC432BA26A93F583A04CA990CCC66553D8722E78DCD4E82238421`。 [发布配置构建](https://github.com/lei11118/pdf-vocab/actions/runs/44321296157)
+- 开发配置为 62,146,537 字节。SHA-256 为 `56BAF3EBBE5FBE4950BAEEBF1173443F11D3CF9388D1224BAE12531E64224FE2`。 [开发配置构建](https://github.com/lei11118/pdf-vocab/actions/runs/44321281360)
 
 早期候选 `ed5be66` 的完整回归通过 341/342 个单元测试和 8/10 个 UI 测试。截图确认行内公式整体选区和重绘，同时复现分式初次长按与行内公式再次长按的失败。该结果对应手势修正前的版本。 [回归与截图](https://github.com/lei11118/pdf-vocab/actions/runs/44252271013)
 
@@ -62,3 +65,5 @@ xcrun coremlcompiler compile Hy-MT2-1.8B.mlpackage .
 第一次分式专项的失败截图和可访问性树显示开关已在等待结束后变为目标值。测试现额外读取一次最终状态，避免再次点击已经成功的开关。 [开关复测](https://github.com/lei11118/pdf-vocab/actions/runs/44313592934)
 
 `d2abadc` 的 3 项阅读器 UI 专项全部通过。实际查看了分式整体与单数字选区截图。全量任务中先通过 344 项单元测试与 3 项 UI，随后达到 30 分钟的作业上限。全量作业上限调整到 45 分钟后已重新运行。 [截图与专项结果](https://github.com/lei11118/pdf-vocab/actions/runs/44311569350) [延长时限后的全量回归](https://github.com/lei11118/pdf-vocab/actions/runs/44317275153)
+
+提交 `3098163` 的全量回归通过了 344 项单元测试和 10 项 UI 测试。最新候选 `3336259` 的 346 项单元测试全部通过，包括 4B 提示的重复词定位与控制标记转义。 [全量回归](https://github.com/lei11118/pdf-vocab/actions/runs/44317275153) [最新单元测试](https://github.com/lei11118/pdf-vocab/actions/runs/44321308601)

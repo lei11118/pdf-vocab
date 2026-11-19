@@ -190,12 +190,10 @@ enum NativeLayoutBlockContextBuilder {
                                                                  sourceSpan: trustedSourceBlock.sourceSpan),
               !rows.isEmpty else { return nil }
 
-        let selectedRows = rows.indices.filter { index in
+        guard let selectedRow = rows.indices.first(where: { index in
             guard let rowEnd = rows[index].endExclusive else { return false }
-            return rows[index].location <= selectionStart && selectionEnd <= rowEnd
-        }
-        guard selectedRows.count == 1,
-              let selectedRow = selectedRows.first else { return nil }
+            return rows[index].location <= selectionStart && selectionStart < rowEnd
+        }) else { return nil }
 
         let seedKind = rows[selectedRow].substring(in: sourceText).flatMap {
             LayoutBlockContextBuilder.boundaryKind(for: $0)
@@ -226,7 +224,7 @@ enum NativeLayoutBlockContextBuilder {
             }
         }
         guard let end = rows[last].endExclusive,
-              end > rows[first].location else { return nil }
+              end > rows[first].location, selectionEnd <= end else { return nil }
         let boundedSpan = UTF16Span(location: rows[first].location,
                                     length: end - rows[first].location)
         let blockID = "native-layout-\(pageIndex)-\(boundedSpan.location)-\(boundedSpan.length)"

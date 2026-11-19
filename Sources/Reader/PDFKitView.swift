@@ -38,6 +38,7 @@ struct PDFKitView: UIViewRepresentable {
     var onHoverUpdate: ((String, String, CGPoint, ContextualSelection?) -> Void)? = nil
     var onHoverEnd: (() -> Void)? = nil
     var markMode: Bool = false
+    var onFormulaCircleOutcome: ((String?) -> Void)? = nil
     var contextReadingEnabled: Bool = false
     var contextReadingGeneration: Int = 0
     var contextOCRPage: ContextOCRPage? = nil
@@ -73,6 +74,7 @@ struct PDFKitView: UIViewRepresentable {
         coordinator.onHoverUpdate = onHoverUpdate
         coordinator.onHoverEnd = onHoverEnd
         coordinator.markMode = markMode
+        coordinator.onFormulaCircleOutcome = onFormulaCircleOutcome
         coordinator.contextReadingEnabled = contextReadingEnabled
         coordinator.contextReadingGeneration = contextReadingGeneration
         coordinator.toolSession = toolSession
@@ -167,6 +169,7 @@ struct PDFKitView: UIViewRepresentable {
         context.coordinator.onHoverEnd = onHoverEnd
         context.coordinator.onVocabJumpPerformed = onVocabJumpPerformed
         context.coordinator.setMarkMode(markMode)
+        context.coordinator.onFormulaCircleOutcome = onFormulaCircleOutcome
         context.coordinator.toolSession = toolSession
         context.coordinator.onPencilSqueeze = onPencilSqueeze
         context.coordinator.onFocusToggle = onFocusToggle

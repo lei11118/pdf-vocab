@@ -41,6 +41,8 @@ struct ReaderView: View {
     /// v0.24.0:改成**按书记忆**(pencil.doc.<sha>.mark),回主页不再强制退出书写 ——
     /// 用户反馈"用过的工具回到主界面再进来就被重置了"。设置里可关掉"恢复上次书写状态"。
     @State private var markMode = false
+    @State private var formulaCircleActive = false
+    @State private var formulaCircleMessage: String?
     /// v0.11.0(M4-B):Pencil 悬停预览 / 触觉开关
     @AppStorage("pencilHoverPreview") private var pencilHoverPreview = true
     @AppStorage("pencilHaptics") private var pencilHaptics = true
@@ -151,7 +153,10 @@ struct ReaderView: View {
             .onChange(of: translationBackend) { _, _ in scheduleTranslationPrefetch() }
             .onChange(of: capturing || anySheetOpen) { _, blocked in
                 readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
-                if blocked { readerHandle.coordinator?.clearHover() }
+                if blocked {
+                    readerHandle.coordinator?.clearHover()
+                    if formulaCircleActive { setFormulaCircle(false) }
+                }
             }
             .onChange(of: arcAnchor != nil) { _,open in if open { readerHandle.coordinator?.clearHover(); wordInteraction.clear() } }
             .onChange(of: markMode) { _, on in
@@ -159,7 +164,10 @@ struct ReaderView: View {
                 UserDefaults.standard.set(on, forKey: "pencil.doc.\(doc.sha256).mark")
                 UserDefaults.standard.set(on, forKey: "readerMarkMode")
                 DiagLog.log("reader: markMode=\(on) saved")
-                if on { cancelPendingOCRCharacterRefinement() }
+                if on {
+                    cancelPendingOCRCharacterRefinement()
+                    if formulaCircleActive { setFormulaCircle(false) }
+                }
             }
             .onChange(of: dockBounds) { _, size in
                 // v0.24.0:容器尺寸变化(旋转/分屏)时按归一化比例重新落位
@@ -702,26 +710,55 @@ struct ReaderView: View {
             .animation(dockDragActive || reduceMotion ? nil : DS.Motion.spring, value: dockOffset)
             .animation(reduceMotion ? nil : DS.Motion.quickSpring, value: dockDragActive)
             .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-        } else if !focusMode {
-            HStack(spacing: 3) {
-                readingModeSegment(
-                    title: "阅读模式",
-                    systemImage: "text.cursor",
-                    active: true
-                ) {}
-                readingModeSegment(
-                    title: "标记模式",
-                    systemImage: "pencil.tip",
-                    active: false
-                ) {
-                    markMode = true
+        } else if !focusMode || formulaCircleActive {
+            VStack(spacing: DS.Space.xs) {
+                if formulaCircleActive {
+                    Text(formulaCircleMessage ?? "用手指或 Apple Pencil 沿公式外缘画圈")
+                        .font(DS.Fonts.caption)
+                        .foregroundStyle(DS.foreground1)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .dsFloatingPanel(radius: DS.Radius.pill)
+                        .accessibilityIdentifier("reader.formula-circle-instruction")
                 }
+                HStack(spacing: 3) {
+                    readingModeSegment(
+                        title: "阅读模式",
+                        systemImage: "text.cursor",
+                        active: !formulaCircleActive
+                    ) { setFormulaCircle(false) }
+                    readingModeSegment(
+                        title: "标记模式",
+                        systemImage: "pencil.tip",
+                        active: false
+                    ) {
+                        if formulaCircleActive { setFormulaCircle(false) }
+                        markMode = true
+                    }
+                    readingModeSegment(
+                        title: "圈识公式",
+                        systemImage: "lasso",
+                        active: formulaCircleActive
+                    ) { setFormulaCircle(!formulaCircleActive) }
+                    .accessibilityIdentifier("reader.formula-circle-tool")
+                }
+                .padding(4)
+                .dsFloatingPanel(radius: DS.Radius.pill)
             }
-            .padding(4)
-            .dsFloatingPanel(radius: DS.Radius.pill)
             .padding(.bottom, DS.Space.m)
             .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    private func setFormulaCircle(_ active: Bool) {
+        guard let coordinator = readerHandle.coordinator else { return }
+        if active {
+            wordInteraction.clear()
+            translationPrefetch?.cancel()
+        }
+        formulaCircleActive = active
+        formulaCircleMessage = nil
+        coordinator.setFormulaCircleActive(active)
     }
 
     /// Reading actions live next to the page rather than in the document header.
@@ -1142,6 +1179,10 @@ struct ReaderView: View {
                     },
                     onHoverEnd: { wordInteraction.clear() },
                     markMode: markMode,
+                    onFormulaCircleOutcome: { message in
+                        formulaCircleMessage = message
+                        if message == nil { formulaCircleActive = false }
+                    },
                     contextReadingEnabled: contextReadingEnabled,
                     contextReadingGeneration: contextReadingGeneration,
                     contextOCRPage: contextOCRPage,
@@ -1294,9 +1335,7 @@ struct ReaderView: View {
             }
         }
         currentSelectionInfo = info
-        if contextReadingEnabled,
-           mathReadingEnabled,
-           let math = info.mathReadingResult {
+        if let math = info.mathReadingResult {
             translationRequest = nil
             cardContent = .math(math)
             return
@@ -1332,8 +1371,6 @@ struct ReaderView: View {
     private func translateSelection(_ text: String) {
         if let info = currentSelectionInfo,
            info.text == text || info.mathReadingResult?.sourceText == text,
-           contextReadingEnabled,
-           mathReadingEnabled,
            (info.contextual == nil
                 || info.contextual?.generation == contextReadingGeneration),
            let math = info.mathReadingResult {
@@ -1378,7 +1415,7 @@ struct ReaderView: View {
     private func scheduleTranslationPrefetch() {
         translationPrefetch?.cancel()
         guard contextReadingEnabled, translationModelID != TranslationModel.systemID,
-              scenePhase == .active, !markMode, cardContent == nil, wordInteraction.preview == nil else { return }
+              scenePhase == .active, !markMode, !formulaCircleActive, cardContent == nil, wordInteraction.preview == nil else { return }
         let modelID = translationModelID
         let backend = translationBackend
         translationPrefetch = Task(priority: .utility) { @MainActor in

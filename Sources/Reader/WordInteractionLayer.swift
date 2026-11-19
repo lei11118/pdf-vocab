@@ -109,13 +109,13 @@ enum WordInteraction {
                                      exactEntry: (String) -> DictEntry?,
                                      memberEntry: (String) -> DictEntry?) -> String? {
         let key = normalizedExactPhraseKey(phrase)
-        guard !key.isEmpty, key.count <= VerifiedPhraseGroupResolver.maximumCharacters else { return nil }
+        guard !key.isEmpty, key.count <= ReadingPhraseGrouper.maximumCharacters else { return nil }
         if let entry = exactEntry(key), let detail = hoverDetail(entry) {
             return detail
         }
 
         guard !memberWords.isEmpty,
-              memberWords.count <= VerifiedPhraseGroupResolver.maximumWords else { return nil }
+              memberWords.count <= ReadingPhraseGrouper.maximumWords else { return nil }
         var lines = ["构成词释义"]
         for word in memberWords {
             guard let entry = memberEntry(word),
@@ -129,7 +129,7 @@ enum WordInteraction {
                                               span: UTF16Span) -> [String] {
         guard selection.sourceSpans == [span], span.length > 0 else { return [] }
         let members = selection.tokens.sorted { $0.span.location < $1.span.location }
-        guard (2...VerifiedPhraseGroupResolver.maximumWords).contains(members.count) else { return [] }
+        guard (2...ReadingPhraseGrouper.maximumWords).contains(members.count) else { return [] }
         return members.map(\.sourceSurface)
     }
 

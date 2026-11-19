@@ -59,7 +59,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("语境阅读", isOn: $contextReadingEnabled)
                         .accessibilityIdentifier("context-reading-toggle")
-                    Toggle("数学符号与公式", isOn: $mathReadingEnabled)
+                    Toggle("长按识别公式（兼容操作）", isOn: $mathReadingEnabled)
                         .disabled(!contextReadingEnabled)
                         .accessibilityIdentifier("math-reading-toggle")
                     NavigationLink("翻译模型") { TranslationModelsView() }

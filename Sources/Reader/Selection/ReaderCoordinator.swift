@@ -97,6 +97,11 @@ final class ReaderCoordinator: NSObject {
     /// v0.8.3:拖柄对齐自检——每次选区变化只记一行(柄中线 vs 高亮边缘)
     private var lastHandleCheckKey: String?
     private var selectionText = ""
+    private var formulaCircleGesture: MathCircleGesture?
+    private let formulaCircleTrace = CAShapeLayer()
+    private(set) var formulaCircleActive = false
+    private var formulaScanTask: Task<Void, Never>?
+    var onFormulaCircleOutcome: ((String?) -> Void)?
     var contextReadingEnabled = false
     var contextReadingGeneration = 0
 
@@ -107,7 +112,8 @@ final class ReaderCoordinator: NSObject {
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
     private var hoverEntry: (page: PDFPage, rect: CGRect, annotation: PDFAnnotation)?
-    private var verifiedPhraseLookup: VerifiedPhraseGroupLookup?
+    private let verifiedPhraseLookup: VerifiedPhraseGroupLookup?
+    private var readingPhraseCache: (context: SentenceContext, allowsLineWrap: Bool, result: VerifiedPhraseGroup?)?
 
     /// v0.11.0(M6):扫描版 OCR 取词
     var ocrStore: OCRStore?
@@ -380,6 +386,8 @@ final class ReaderCoordinator: NSObject {
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
     func prepareForTeardown() {
+        cancelFormulaCircle()
+        formulaCircleTrace.removeFromSuperlayer()
         activeNativeMathParent = nil
         releaseNativeFractionPageCache()
         metalHost?.detach()
@@ -407,6 +415,7 @@ final class ReaderCoordinator: NSObject {
 
     private func documentDidChange() {
         guard let pdfView else { return }
+        cancelFormulaCircle()
         activeNativeMathParent = nil
         releaseNativeFractionPageCache()
         clearHover()
@@ -436,6 +445,7 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func pageDidChange() {
+        if formulaScanTask != nil { finishFormulaCircle() }
         activeNativeMathParent = nil
         // v0.41.0:翻页要把单画布的窗口挪到新页(墨迹留在文档坐标,只换窗口原点)
         inkSurface?.refreshWindow()
@@ -493,6 +503,31 @@ final class ReaderCoordinator: NSObject {
     // MARK: - 手势安装
 
     func installGestures(on view: PDFView) {
+        let circle = MathCircleGesture(target: nil, action: nil)
+        circle.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue),
+                                    NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        circle.isEnabled = false
+        circle.delegate = self
+        circle.didTrace = { [weak self] points in
+            guard let self else { return }
+            if !points.isEmpty, let scan = self.formulaScanTask {
+                scan.cancel()
+                self.formulaScanTask = nil
+            }
+            self.traceFormulaCircle(points)
+        }
+        circle.didFinish = { [weak self] points in
+            Task { @MainActor in self?.completeFormulaCircle(points) }
+        }
+        view.addGestureRecognizer(circle)
+        formulaCircleGesture = circle
+        formulaCircleTrace.fillColor = UIColor.clear.cgColor
+        formulaCircleTrace.strokeColor = UIColor.systemIndigo.cgColor
+        formulaCircleTrace.lineWidth = 2.5
+        formulaCircleTrace.lineCap = .round
+        formulaCircleTrace.lineJoin = .round
+        formulaCircleTrace.zPosition = 500
+        view.layer.addSublayer(formulaCircleTrace)
         // 长按选词(手指 0.5s / Pencil 0.45s)
         let fingerPress = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
         fingerPress.delegate = self
@@ -856,16 +891,34 @@ final class ReaderCoordinator: NSObject {
     }
 
     func nativeMathPressTarget(on page: PDFPage, at point: CGPoint) -> SelectionGeometry.NativeMathPressTarget? {
-        guard contextReadingEnabled,
-              FeatureFlags.mathEnabled(),
+        guard (activeNativeMathParent?.page === page || (contextReadingEnabled && FeatureFlags.mathEnabled())),
               !docScanned,
-              let target = SelectionGeometry.nativeMathPressTarget(on: page, at: point),
+              let target = activeScopedMathGlyph(on: page, at: point)
+                ?? SelectionGeometry.nativeMathPressTarget(on: page, at: point),
               !page.annotations.contains(where: {
                   VocabPDFView.hasTapAction($0)
                       && $0.type != "Widget"
                       && $0.bounds.intersects(target.lineBounds)
               }) else { return nil }
         return target
+    }
+
+    private func activeScopedMathGlyph(on page: PDFPage, at point: CGPoint)
+        -> SelectionGeometry.NativeMathPressTarget? {
+        guard let active = activeNativeMathParent, active.page === page,
+              case .line(let range, let identity, _) = active.kind,
+              let source = page.string,
+              let selection = page.selection(for: range),
+              let glyph = SelectionGeometry.initialCharacter(on: page, at: point, tolerance: 0, within: range),
+              let actual = SelectionGeometry.sourceRanges(of: glyph, on: page).first,
+              let surface = UTF16Span(range: actual, in: source)?.substring(in: source),
+              let symbolStart = surface.firstIndex(where: { !$0.isWhitespace }) else { return nil }
+        let symbol = surface[symbolStart]
+        let glyphRange = NSRange(location: actual.location + surface[..<symbolStart].utf16.count,
+                                 length: String(symbol).utf16.count)
+        guard NSIntersectionRange(glyphRange, range) == glyphRange else { return nil }
+        return SelectionGeometry.NativeMathPressTarget(lineSelection: selection, lineRange: range, lineIdentity: identity,
+            glyphSelection: glyph, glyphRange: glyphRange, lineBounds: SelectionGeometry.placedBounds(of: selection, on: page))
     }
 
     func nativeFractionPressTarget(on page: PDFPage, at point: CGPoint) -> NativeFractionPressTarget? {
@@ -875,7 +928,8 @@ final class ReaderCoordinator: NSObject {
     }
 
     private func nativeFractionHitContext(on page: PDFPage, at point: CGPoint) -> NativeFractionHitContext? {
-        guard contextReadingEnabled, FeatureFlags.mathEnabled(), !docScanned else { return nil }
+        guard activeNativeMathParent?.page === page || (contextReadingEnabled && FeatureFlags.mathEnabled()),
+              !docScanned else { return nil }
         let all = cachedNativeFractions(on: page)
         return NativeFractionHitContext(candidates: all.filter { $0.region.contains(point) })
     }
@@ -912,18 +966,181 @@ final class ReaderCoordinator: NSObject {
                                          isActive: isActive)
     }
 
-    private func cachedNativeFractions(on page: PDFPage) -> [NativeFractionLayout.Fraction] {
+    private func cachedNativeFractions(on page: PDFPage,
+                                       scan: PDFTextLayout.PageScan? = nil) -> [NativeFractionLayout.Fraction] {
         let revision = SelectionGeometry.contextGeometryRevision(for: page)
         if let cache = nativeFractionPageCache,
            cache.page === page,
            cache.geometryRevision == revision {
             return cache.fractions
         }
-        let fractions = NativeFractionLayout.detect(in: PDFTextLayout.scan(on: page))
+        let fractions = NativeFractionLayout.detect(in: scan ?? PDFTextLayout.scan(on: page))
         nativeFractionPageCache = NativeFractionPageCache(page: page,
                                                           geometryRevision: revision,
                                                           fractions: fractions)
         return fractions
+    }
+
+    func setFormulaCircleActive(_ active: Bool) {
+        guard formulaCircleActive != active else { return }
+        if active {
+            drag = nil
+            clearSelection()
+        } else {
+            formulaScanTask?.cancel()
+        }
+        formulaCircleActive = active
+        formulaCircleGesture?.isEnabled = active
+        if !active { traceFormulaCircle([]) }
+    }
+
+    private func cancelFormulaCircle() {
+        let wasActive = formulaCircleActive
+        setFormulaCircleActive(false)
+        formulaScanTask?.cancel()
+        formulaScanTask = nil
+        if wasActive {
+            Task { @MainActor [weak self] in
+                guard let self, !self.formulaCircleActive else { return }
+                self.onFormulaCircleOutcome?(nil)
+            }
+        }
+    }
+
+    private func traceFormulaCircle(_ points: [CGPoint]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if points.count >= 2 {
+            let trace = CGMutablePath()
+            trace.addLines(between: points)
+            formulaCircleTrace.path = trace
+        } else {
+            formulaCircleTrace.path = nil
+        }
+        CATransaction.commit()
+    }
+
+    func completeFormulaCircle(_ screenPoints: [CGPoint]) {
+        traceFormulaCircle([])
+        guard formulaCircleActive, let pdfView, !markMode else { return }
+        formulaScanTask?.cancel()
+        formulaScanTask = nil
+        guard MathCircle.accepts(screenPoints) else {
+            onFormulaCircleOutcome?("沿公式外缘画一个接近闭合的圈。")
+            return
+        }
+        let points = screenPoints.compactMap(pageHit)
+        guard let page = points.first?.page, points.count == screenPoints.count,
+              points.allSatisfy({ $0.page === page }) else {
+            onFormulaCircleOutcome?("请在同一页圈选一个公式。")
+            return
+        }
+        let circle = MathCircle(points.map(\.point))
+        let scan = PDFTextLayout.scan(on: page)
+        let enclosedGlyphs = scan.glyphs.enumerated().filter {
+            !$0.element.text.allSatisfy(\.isWhitespace) && circle.enclosesCenter(of: $0.element.rect)
+        }
+        let indices = Set(enclosedGlyphs.map(\.offset))
+        let fractions = cachedNativeFractions(on: page, scan: scan).filter { fraction in
+            fraction.orderedGlyphs.contains { indices.contains($0.sourceIndex) }
+        }
+        if !fractions.isEmpty {
+            guard fractions.count == 1, let fraction = fractions.first,
+                  indices == Set(fraction.orderedGlyphs.map(\.sourceIndex)),
+                  let reading = NativeFractionReadingSelection.build(fraction: fraction, on: page) else {
+                onFormulaCircleOutcome?("请只圈住一个完整分式，包含分子与分母。")
+                return
+            }
+            let target = NativeFractionPressTarget(fraction: fraction,
+                                                   identity: nativeFractionIdentity(fraction),
+                                                   readingSelection: reading,
+                                                   detail: reading.whole, isActive: false)
+            activateNativeFraction(target, on: page)
+            applyNativeFraction(target)
+            finishFormulaCircle()
+            return
+        }
+
+        if let first = enclosedGlyphs.first?.element {
+            let seed = CGPoint(x: first.rect.midX, y: first.rect.midY)
+            if let line = SelectionGeometry.nativeMathPressTarget(on: page, at: seed),
+               circle.enclosesCenter(of: line.lineBounds),
+               scan.glyphs.filter({ !$0.text.allSatisfy(\.isWhitespace) &&
+                    line.lineBounds.contains(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) })
+                   .allSatisfy({ circle.enclosesCenter(of: $0.rect) }),
+               enclosedGlyphs.allSatisfy({ line.lineBounds.intersects($0.element.rect) }) {
+                activeNativeMathParent = ActiveNativeMathParent(page: page,
+                    kind: .line(sourceRange: line.lineRange, identity: line.lineIdentity, selectedRange: line.lineRange))
+                applySelection(line.lineSelection, src: "math-line", preservesNativeMathParent: true)
+                finishFormulaCircle()
+                return
+            }
+            // A formula can be embedded inside a prose line. Map exactly the
+            // enclosed glyphs and disallow holes or independent baseline rows.
+            let glyphs = enclosedGlyphs.map(\.element)
+            let bounds = glyphs.reduce(CGRect.null) { $0.union($1.rect) }
+            let sameVisualLine = bounds.height <= (glyphs.map { $0.rect.height }.max() ?? 0) * 1.65
+            if sameVisualLine,
+               let mapping = NativeMathGlyphSelection.map(glyphs, on: page, anchoredAt: page.characterIndex(at: seed),
+                                                           allowingInterveningWhitespace: true),
+               let start = mapping.ranges.map(\.location).min(),
+               let end = mapping.ranges.map(NSMaxRange).max(),
+               let source = page.string,
+               let surface = UTF16Span(location: start, length: end - start).substring(in: source),
+               !surface.contains(where: \.isNewline) {
+                let range = NSRange(location: start, length: end - start)
+                let coverage = ContextSelectionRouter.classifySourceRowRanges(requested: range,
+                                                                               returned: mapping.ranges,
+                                                                               sourceText: source)
+                if (coverage == .exact || coverage == .whitespaceOnly),
+                   let result = MathReadingService.resolve(surface), result.status == .parsedText,
+                   let selection = page.selection(for: range) {
+                    activeNativeMathParent = ActiveNativeMathParent(page: page,
+                        kind: .line(sourceRange: range, identity: SelectionGeometry.identity(for: selection), selectedRange: range))
+                    applySelection(selection, src: "math-line", preservesNativeMathParent: true,
+                                   explicitMathResult: result, mathHighlightRegion: bounds)
+                    finishFormulaCircle()
+                    return
+                }
+            }
+            onFormulaCircleOutcome?("未找到完整公式。请沿公式外缘重圈，避开旁边的文字。")
+            return
+        }
+
+        if (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || docScanned {
+            recognizeScannedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
+        } else {
+            onFormulaCircleOutcome?("圈内没有可识别的公式。")
+        }
+    }
+
+    private func finishFormulaCircle() {
+        setFormulaCircleActive(false)
+        onFormulaCircleOutcome?(nil)
+    }
+
+    private func recognizeScannedFormula(on page: PDFPage, circle: MathCircle, displayBox: PDFDisplayBox) {
+        let crop = circle.bounds.intersection(page.bounds(for: displayBox))
+        guard let image = renderMathCrop(on: page, crop: crop), let bitmap = image.cgImage else {
+            onFormulaCircleOutcome?("请缩小圈选范围到单个公式。")
+            return
+        }
+        formulaScanTask?.cancel()
+        onFormulaCircleOutcome?("正在识别扫描公式…")
+        let outline = circle.path
+        formulaScanTask = Task { [weak self, weak page] in
+            let result = await Task.detached(priority: .userInitiated) {
+                ScannedFormulaReading.recognize(in: bitmap, outline: outline, pageCrop: crop)
+            }.value
+            guard !Task.isCancelled, let self, let page, self.formulaCircleActive else { return }
+            self.formulaScanTask = nil
+            self.applyHighlightDesired([self.annotationKey(page, crop): (page, crop)],
+                                       rejected: 0, t0: CFAbsoluteTimeGetCurrent())
+            self.selectionText = result.sourceText
+            self.onSelectionInfo(SelectionInfo(text: result.sourceText, wordCount: 0, primaryTerm: "",
+                                               mathReadingResult: result, mathSourceImage: image))
+            self.finishFormulaCircle()
+        }
     }
 
     private func releaseNativeFractionPageCache() {
@@ -1352,6 +1569,7 @@ final class ReaderCoordinator: NSObject {
     // MARK: - 悬停预览(v0.11.0,M4-B)
 
     @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
+        guard !formulaCircleActive else { return }
         guard let pdfView else { return }
         // v0.23.0:无论选词还是书写模式都记录悬停位置 —— 挤压工具盘据此定位
         if gesture.state == .began || gesture.state == .changed {
@@ -1484,16 +1702,20 @@ final class ReaderCoordinator: NSObject {
 
     private func cachedPhraseGroup(in context: SentenceContext,
                                    selectedSourceSpans: [UTF16Span],
-                                   sourceText: String) -> VerifiedPhraseGroup? {
-        if verifiedPhraseLookup == nil {
-            verifiedPhraseLookup = VerifiedPhraseGroupLookup(
-                dictionaryRevision: { DictionaryStore.shared.exactPhraseLookupRevision },
-                exactPhraseExists: { DictionaryStore.shared.hasEnabledExactPhrase($0) }
-            )
+                                   sourceText: String,
+                                   allowsLineWrap: Bool = false) -> VerifiedPhraseGroup? {
+        if let verifiedPhraseLookup {
+            return verifiedPhraseLookup.resolve(in: context, selectedSourceSpans: selectedSourceSpans,
+                                                sourceText: sourceText)
         }
-        return verifiedPhraseLookup?.resolve(in: context,
-                                             selectedSourceSpans: selectedSourceSpans,
-                                             sourceText: sourceText)
+        guard let selected = selectedSourceSpans.first, selectedSourceSpans.count == 1 else { return nil }
+        if let cached = readingPhraseCache, cached.context == context, cached.allowsLineWrap == allowsLineWrap {
+            return cached.result
+        }
+        let result = ReadingPhraseGrouper.group(in: context, selected: selected,
+                                               sourceText: sourceText, allowsLineWrap: allowsLineWrap)
+        readingPhraseCache = (context, allowsLineWrap, result)
+        return result
     }
 
     private func verifiedNativePhraseExpansion(seed: PDFSelection,
@@ -1516,15 +1738,14 @@ final class ReaderCoordinator: NSObject {
               let selectedSpan = contextual.sourceSpans.first,
               let phrase = cachedPhraseGroup(in: sentenceContext,
                                              selectedSourceSpans: [selectedSpan],
-                                             sourceText: sourceText),
+                                             sourceText: sourceText,
+                                             allowsLineWrap: sentenceContext.kind == .layoutBlock),
               let phraseRange = phrase.sourceSpan.nsRange(in: sourceText),
               let phraseSelection = page.selection(for: phraseRange),
               phraseSelection.pages.count == 1,
               phraseSelection.pages.first === page,
               SelectionGeometry.isSane(phraseSelection, maxPages: 1, maxChars: 80),
-              SelectionGeometry.sourceRanges(of: phraseSelection, on: page) == [phraseRange],
-              phraseSelection.selectionsByLine().count == 1,
-              SelectionGeometry.isValid(SelectionGeometry.placedBounds(of: phraseSelection, on: page)),
+              (1...2).contains(phraseSelection.selectionsByLine().count),
               let expanded = ContextSelectionRouter.route(selection: phraseSelection,
                                                           page: page,
                                                           documentSHA256: docSha,
@@ -1532,13 +1753,16 @@ final class ReaderCoordinator: NSObject {
                                                           displaySurface: phrase.sourceSurface,
                                                           geometryQuality: .word,
                                                           generation: contextReadingGeneration,
-                                                          verifiedPhraseGroupSpan: phrase.sourceSpan),
+                                                          verifiedPhraseGroupSpan: phrase.sourceSpan,
+                                                          verifiedPhraseAnchorSpan: selectedSpan),
               expanded.verifiedPhraseGroupSpan == phrase.sourceSpan,
-              hasAdjacentNativeTokenGeometry(expanded.tokens, on: page) else { return nil }
+              hasAdjacentNativeTokenGeometry(expanded.tokens, on: page,
+                                              allowsLineWrap: sentenceContext.kind == .layoutBlock) else { return nil }
         return (phraseSelection, phrase, expanded)
     }
 
-    private func hasAdjacentNativeTokenGeometry(_ tokens: [SourceToken], on page: PDFPage) -> Bool {
+    private func hasAdjacentNativeTokenGeometry(_ tokens: [SourceToken], on page: PDFPage,
+                                                allowsLineWrap: Bool) -> Bool {
         let ordered = tokens.sorted { $0.span.location < $1.span.location }
         guard ordered.count >= 2, ordered.allSatisfy({ $0.kind == .word }) else { return false }
         let rects: [CGRect] = ordered.compactMap { token in
@@ -1551,8 +1775,18 @@ final class ReaderCoordinator: NSObject {
             return SelectionGeometry.isValid(rect) ? rect : nil
         }
         guard rects.count == ordered.count else { return false }
-        for pair in zip(rects, rects.dropFirst()) {
+        for index in 0..<(rects.count - 1) {
+            let pair = (rects[index], rects[index + 1])
             let maximumHeight = max(pair.0.height, pair.1.height)
+            if allowsLineWrap,
+               let leftEnd = ordered[index].span.endExclusive,
+               let source = page.string,
+               let gap = UTF16Span(location: leftEnd, length: ordered[index + 1].span.location - leftEnd)
+                   .substring(in: source), gap.contains(where: \.isNewline) {
+                let verticalGap = pair.0.midY - pair.1.midY
+                guard verticalGap > maximumHeight * 0.6, verticalGap <= maximumHeight * 2.5 else { return false }
+                continue
+            }
             let horizontalGap = pair.1.minX - pair.0.maxX
             guard pair.1.midX > pair.0.midX,
                   abs(pair.0.midY - pair.1.midY) <= maximumHeight * 0.6,
@@ -1649,6 +1883,7 @@ final class ReaderCoordinator: NSObject {
 
     func clearHover() {
         verifiedPhraseLookup?.clear()
+        readingPhraseCache = nil
         guard hoverKey != "" || hoverEntry != nil else { return }
         hoverKey = ""
         removeHoverAnnotation()
@@ -2073,7 +2308,7 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        readingSelection = contextual
+        var readingContext = contextual
         expandReadingPhrase = nil
         if let contextual, contextual.tokens.count == 1,
            let expansion = verifiedOCRPhraseExpansion(page: page, index: range.lowerBound) {
@@ -2082,9 +2317,14 @@ final class ReaderCoordinator: NSObject {
                 self.applyOCRSelection(page: page, range: expansion.range, src: "phrase-menu",
                                        verifiedPhraseGroupSpan: expansion.phrase.sourceSpan)
             }
+            if verifiedPhraseLookup == nil {
+                readingContext = contextual.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual,
+                                                                                   preferred: true) ?? contextual
+            }
         }
+        readingSelection = readingContext
         onSelectionInfo(SelectionInfo(text: display, wordCount: wordCount, primaryTerm: primaryTerm,
-                                      contextual: contextual))
+                                      contextual: readingContext))
         if wordCount <= 1, !primaryTerm.isEmpty {
             vocabDidSelectWord(term: primaryTerm)
         }
@@ -2289,7 +2529,7 @@ final class ReaderCoordinator: NSObject {
                                src: source,
                                contextRoute: true,
                                geometryQuality: .word,
-                               verifiedPhraseGroupSpan: phraseExpansion.phrase.sourceSpan)
+                               contextualOverride: phraseExpansion.contextual)
             } else {
                 applySelection(selection,
                                src: source,
@@ -2342,11 +2582,13 @@ final class ReaderCoordinator: NSObject {
                                 src: String,
                                 contextRoute: Bool = false,
                                 geometryQuality: SourceGeometryQuality = .approximate,
-                                verifiedPhraseGroupSpan: UTF16Span? = nil,
+                                contextualOverride: ContextualSelection? = nil,
                                 preservesNativeMathParent: Bool = false,
                                 verifiedFractionDetail: NativeFractionReadingSelection.Detail? = nil,
+                                explicitMathResult: MathReadingResult? = nil,
                                 mathHighlightRegion: CGRect? = nil) {
-        let text = verifiedFractionDetail?.sourceText ?? SelectionGeometry.lookupText(for: selection)
+        let text = verifiedFractionDetail?.sourceText ?? explicitMathResult?.sourceText
+            ?? contextualOverride?.displaySurface ?? SelectionGeometry.lookupText(for: selection)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if !preservesNativeMathParent { activeNativeMathParent = nil }
         lastAnySelectionChangeTime = CFAbsoluteTimeGetCurrent()
@@ -2366,9 +2608,7 @@ final class ReaderCoordinator: NSObject {
             ocrContextOverride = nil
         }
         let pageIndex = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) } ?? -1
-        let mathKey = verifiedFractionDetail.map {
-            "|\(src)|\($0.readingResult?.latex ?? "")"
-        } ?? ""
+        let mathKey = preservesNativeMathParent ? "|\(src)|" : ""
         let key = "\(pageIndex)|\(SelectionGeometry.identity(for: selection))|\(text)\(mathKey)"
         guard key != appliedKey else { return }
         appliedKey = key
@@ -2380,7 +2620,7 @@ final class ReaderCoordinator: NSObject {
         let display = text.count > 400 ? String(text.prefix(400)) + "…" : text
         let wordCount = SelectionGeometry.isSingleWordText(text) ? 1:WordPicker.countWords(in:text)
         let primaryTerm = WordPicker.firstLexicalWord(in: text) ?? ""
-        let contextual: ContextualSelection? = {
+        var contextual: ContextualSelection? = contextualOverride ?? {
             guard contextRoute, contextReadingEnabled, pageIndex >= 0,
                   let page = selection.pages.first else { return nil }
             return ContextSelectionRouter.route(selection: selection,
@@ -2389,8 +2629,7 @@ final class ReaderCoordinator: NSObject {
                                                 pageIndex: pageIndex,
                                                 displaySurface: text,
                                                 geometryQuality: geometryQuality,
-                                                generation: contextReadingGeneration,
-                                                verifiedPhraseGroupSpan: verifiedPhraseGroupSpan)
+                                                generation: contextReadingGeneration)
         }()
         expandReadingPhrase = nil
         if let base = contextual,
@@ -2403,7 +2642,10 @@ final class ReaderCoordinator: NSObject {
                                                          baseContextual: base) {
             expandReadingPhrase = { [weak self] in
                 self?.applySelection(expansion.selection, src: "phrase-menu", contextRoute: true,
-                                     geometryQuality: .word, verifiedPhraseGroupSpan: expansion.phrase.sourceSpan)
+                                     geometryQuality: .word, contextualOverride: expansion.contextual)
+            }
+            if verifiedPhraseLookup == nil {
+                contextual = base.borrowingVerifiedPhraseTranslationScope(from: expansion.contextual, preferred: true) ?? base
             }
         }
         readingSelection = contextual
@@ -2418,7 +2660,11 @@ final class ReaderCoordinator: NSObject {
             primaryTerm: primaryTerm,
             contextual: contextual,
             mathDetail: isFractionGlyph || src == "math-glyph" || src == "math-fraction-glyph",
-            mathReadingResult: verifiedFractionDetail?.readingResult,
+            mathReadingResult: verifiedFractionDetail?.readingResult ?? explicitMathResult
+                ?? (preservesNativeMathParent
+                    ? MathCardRouting.resolve(sourceText: text, contextReadingEnabled: true, mathEnabled: true,
+                                              isMathDetail: src == "math-glyph" || src == "math-fraction-glyph")
+                    : nil),
             mathSourceImage: preservesNativeMathParent ? sourceMathImage(selection, region: mathHighlightRegion) : nil
         ))
         let isMathSelection = src == "math-line" || src == "math-glyph" || src.hasPrefix("math-fraction")
@@ -2762,6 +3008,7 @@ final class ReaderCoordinator: NSObject {
         let changed = markMode != on
         markMode = on
         if changed { activeNativeMathParent = nil }
+        if on { cancelFormulaCircle() }
         (pdfView as? VocabPDFView)?.handwritingMode = on
         // v0.13.1(紧急修复):值未变也要幂等重臂 —— PDFView 加载文档/翻页/重排会重建内部
         // 手势层级,一次性设置会被顶掉;SwiftUI 每次 updateUIView 都走这里,天然成为重臂时机。
@@ -3438,7 +3685,11 @@ final class ReaderCoordinator: NSObject {
         let bounds = pageRef.getBoxRect(.mediaBox)
         let crop = (region ?? SelectionGeometry.placedBounds(of: selection, on: page))
             .insetBy(dx: -2, dy: -2).intersection(bounds)
-        guard SelectionGeometry.isValid(crop), crop.width <= 1_200, crop.height <= 600 else { return nil }
+        return renderMathCrop(on: page, crop: crop)
+    }
+
+    private func renderMathCrop(on page: PDFPage, crop: CGRect) -> UIImage? {
+        guard let pageRef = page.pageRef, SelectionGeometry.isValid(crop), crop.width <= 1_200, crop.height <= 600 else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.opaque = true
         format.scale = 2
@@ -3966,6 +4217,11 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         if gestureRecognizer === fingerPressRef {
             pendingContextFingerAnchor = nil
         }
+        if gestureRecognizer === formulaCircleGesture {
+            guard formulaCircleActive, !markMode, let pdfView else { return false }
+            return pageHit(touch.location(in: pdfView)) != nil
+        }
+        if formulaCircleActive { return false }
         if menu.containsToolbar(touch.view) { return false }
         // A drawing Pencil (including laser) cannot enter any selection path.
         if markMode && touch.type == .pencil { return false }
@@ -4021,10 +4277,17 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         return true
     }
 
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === formulaCircleGesture && formulaCircleActive
+            && (otherGestureRecognizer is UIPanGestureRecognizer || otherGestureRecognizer is UITapGestureRecognizer)
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
+        if gestureRecognizer === formulaCircleGesture || otherGestureRecognizer === formulaCircleGesture { return false }
         if gestureRecognizer.view is SelectionHandleView || otherGestureRecognizer.view is SelectionHandleView { return false }
         // A press selecting linked text and a tap activating it are mutually exclusive.
         if gestureRecognizer is UITapGestureRecognizer || otherGestureRecognizer is UITapGestureRecognizer { return false }
