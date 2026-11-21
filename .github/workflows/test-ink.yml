@@ -109,6 +109,7 @@ jobs:
             TEST_ARGS=(
               -only-testing:PdfVocabTests/ReadingPhraseGrouperTests
               -only-testing:PdfVocabTests/MathCircleTests
+              -only-testing:PdfVocabTests/NativeFractionLayoutTests
               -only-testing:PdfVocabTests/LayoutBlockContextBuilderTests
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests

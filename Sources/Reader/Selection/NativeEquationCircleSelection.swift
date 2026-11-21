@@ -58,9 +58,16 @@ struct NativeEquationCircleSelection {
         let claimed = Set(fractionIndices)
         guard claimed.count == fractionIndices.count, claimed.isSubset(of: enclosedIndices) else { return nil }
         let inline = enclosedIndices.subtracting(claimed).map { glyphs[$0] }.sorted { $0.rect.midX < $1.rect.midX }
-        guard let equal = inline.first(where: { $0.text == "=" }),
-              inline.filter({ $0.text == "=" }).count == 1,
-              inline.allSatisfy({ abs($0.baseline.y - equal.baseline.y) <= max(1.5, equal.rect.height * 0.20) }),
+        // A sentence period after a stacked fraction is outside the equation.
+        var equationGlyphs = inline
+        if let period = inline.last, period.text == ".",
+           let finalFractionEdge = fractions.map(\.region.maxX).max(),
+           let precedingGlyph = inline.dropLast().last,
+           precedingGlyph.rect.maxX <= finalFractionEdge, finalFractionEdge <= period.rect.midX {
+            equationGlyphs.removeLast()
+        }
+        guard let equal = equationGlyphs.first(where: { $0.text == "=" }),
+              let layout = inlineLayout(equationGlyphs, baseline: equal.baseline.y, fontHeight: equal.rect.height),
               fractions.allSatisfy({ fraction in
                   let barY = (fraction.rule.start.y + fraction.rule.end.y) / 2
                   return abs(barY - equal.rect.midY) <= max(2, equal.rect.height * 0.45)
@@ -75,7 +82,7 @@ struct NativeEquationCircleSelection {
         var components = parts.enumerated().map {
             (x: $0.element.layout.region.midX, glyph: nil as PDFTextLayout.Glyph?, fraction: $0.offset)
         }
-        components += inline.map { (x: $0.rect.midX, glyph: $0, fraction: -1) }
+        components += layout.map { (x: $0.rect.midX, glyph: $0, fraction: -1) }
         components.sort { $0.x < $1.x }
         var surface = ""
         var latex = ""
@@ -103,10 +110,51 @@ struct NativeEquationCircleSelection {
         }
         guard let result = MathReadingService.resolve(latex), result.status == .parsedText else { return nil }
 
-        let region = inline.reduce(fractions.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
+        let region = equationGlyphs.reduce(fractions.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
         let original = MathReadingResult(sourceText: surface, latex: result.latex, unicode: result.unicode,
                                          explanation: result.explanation, status: result.status, ast: result.ast)
-        return Self(whole: FormulaCircleDetail(region: region, result: original), fractions: parts, inlineGlyphs: inline)
+        return Self(whole: FormulaCircleDetail(region: region, result: original), fractions: parts, inlineGlyphs: equationGlyphs)
+    }
+
+    // Large parentheses may be drawn as two glyphs, and ordinary digits can be
+    // raised by a separate PDF text matrix. Preserve their source boxes for taps.
+    private static func inlineLayout(_ glyphs: [PDFTextLayout.Glyph], baseline: CGFloat,
+                                     fontHeight: CGFloat) -> [PDFTextLayout.Glyph]? {
+        let baselineTolerance = max(1.5, fontHeight * 0.20)
+        let digits = Dictionary(uniqueKeysWithValues: zip("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹"))
+        var pending = glyphs.sorted { $0.rect.midX < $1.rect.midX }
+        var output: [PDFTextLayout.Glyph] = []
+        while let first = pending.first {
+            pending.removeFirst()
+            let text: String
+            var bounds = first.rect
+            if ["⎛", "⎝", "⎞", "⎠"].contains(first.text) {
+                let isLeft = first.text == "⎛" || first.text == "⎝"
+                let isUpper = first.text == "⎛" || first.text == "⎞"
+                let mate = isLeft ? (isUpper ? "⎝" : "⎛") : (isUpper ? "⎠" : "⎞")
+                guard let next = pending.first, next.text == mate,
+                      abs(next.rect.midX - first.rect.midX) <= max(0.7, first.rect.width * 0.2),
+                      (isUpper ? first.rect.midY > next.rect.midY : first.rect.midY < next.rect.midY),
+                      abs(next.rect.midY - first.rect.midY) <= fontHeight * 1.25 else { return nil }
+                pending.removeFirst()
+                bounds = bounds.union(next.rect)
+                text = isLeft ? "(" : ")"
+            } else if abs(first.baseline.y - baseline) <= baselineTolerance {
+                text = first.text
+            } else {
+                let rise = first.baseline.y - baseline
+                guard let last = output.last, let base = last.text.last,
+                      base.isLetter || base.isNumber || ")]".contains(base),
+                      rise > baselineTolerance, rise <= fontHeight * 0.9,
+                      first.rect.height <= fontHeight * 0.95,
+                      first.rect.minX - last.rect.maxX <= fontHeight * 0.36,
+                      let digit = first.text.first, first.text.count == 1,
+                      let superscript = digits[digit] else { return nil }
+                text = String(superscript)
+            }
+            output.append(.init(text: text, rect: bounds, baseline: first.baseline))
+        }
+        return output
     }
 
     func detail(at point: CGPoint) -> FormulaCircleDetail? {

@@ -61,6 +61,40 @@ final class NativeFractionLayoutTests: XCTestCase {
         XCTAssertEqual(second.orderedGlyphs.map(\.glyph.text), ["u", "-", "x", "v", "w", "y"])
     }
 
+    func testEquationPreservesStackedFractionsAndPositionedExponent() throws {
+        // A raised ordinary digit and split font delimiters are common in typeset PDFs.
+        let glyphs = [
+            glyph("x", x: 3, y: 680, width: 4, height: 8, baselineY: 682),
+            glyph("=", x: 10, y: 680, width: 5, height: 10, baselineY: 682),
+            glyph("1", x: 21, y: 686, width: 4, height: 5, baselineY: 687),
+            glyph("3", x: 21, y: 679, width: 4, height: 5, baselineY: 680),
+            glyph("⎛", x: 29, y: 687, width: 2, height: 5, baselineY: 688),
+            glyph("⎝", x: 29, y: 682, width: 2, height: 5, baselineY: 683),
+            glyph("y", x: 32, y: 680, width: 4, height: 8, baselineY: 682),
+            glyph("+", x: 38, y: 680, width: 5, height: 8, baselineY: 682),
+            glyph("1", x: 45, y: 680, width: 4, height: 8, baselineY: 682),
+            glyph("⎞", x: 50, y: 687, width: 2, height: 5, baselineY: 688),
+            glyph("⎠", x: 50, y: 682, width: 2, height: 5, baselineY: 683),
+            glyph("2", x: 52, y: 686, width: 3, height: 6, baselineY: 687),
+            glyph("−", x: 57, y: 680, width: 5, height: 8, baselineY: 682),
+            glyph("2", x: 68, y: 686, width: 4, height: 5, baselineY: 687),
+            glyph("3", x: 68, y: 679, width: 4, height: 5, baselineY: 680),
+            glyph(".", x: 75, y: 680, width: 2, height: 8, baselineY: 682)
+        ]
+        let scan = PDFTextLayout.PageScan(glyphs: glyphs,
+                                           horizontalRules: [rule(x: 20, length: 6), rule(x: 67, length: 6)])
+        let fractions = NativeFractionLayout.detect(in: scan)
+        XCTAssertEqual(fractions.count, 2)
+        let result = try XCTUnwrap(NativeEquationCircleSelection.build(glyphs: glyphs,
+                                                                      enclosedIndices: Set(glyphs.indices),
+                                                                      fractions: fractions))
+        let expected = try XCTUnwrap(MathReadingService.resolve(#"x=rac{1}{3}(y+1)^{2}-rac{2}{3}"#))
+        XCTAssertEqual(result.whole.readingResult?.latex, expected.latex)
+        XCTAssertEqual(result.whole.readingResult?.ast, expected.ast)
+        XCTAssertEqual(result.detail(at: CGPoint(x: 53.5, y: 689))?.readingResult?.sourceText, "2")
+        XCTAssertNil(result.detail(at: CGPoint(x: 76, y: 684)))
+    }
+
     func testRejectsMissingSideCrowdedRowsAndWideTableRule() {
         let narrowRule = rule(x: 20, length: 6)
         let upper = glyph("n", x: 21, y: 683.5, width: 4.2, height: 5, baselineY: 684.5)
