@@ -64,6 +64,8 @@ struct HoverTipView: View {
             return "语境：无"
         case .failed(let message):
             return "语境译义出错\n\(message)"
+        case .translating:
+            return "翻译中"
         default:
             return nil
         }
