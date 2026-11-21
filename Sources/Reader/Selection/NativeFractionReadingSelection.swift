@@ -207,11 +207,11 @@ struct NativeFractionReadingSelection {
                       readingResult: readingResult)
     }
 
-    static func safeParserText(_ displayText: String) -> String? {
+    static func safeParserText(_ displayText: String, includesRootScopeMarkers: Bool = false) -> String? {
         guard !hasLongASCIIWord(displayText),
               !hasSentencePunctuation(displayText),
               hasBalancedGroups(displayText) else { return nil }
-        return MathReadingService.latexForLayoutFragment(displayText)
+        return MathReadingService.latexForLayoutFragment(displayText, includesRootScopeMarkers: includesRootScopeMarkers)
     }
 
     private static func rowResult(sourceText: String, parserText: String) -> MathReadingResult? {

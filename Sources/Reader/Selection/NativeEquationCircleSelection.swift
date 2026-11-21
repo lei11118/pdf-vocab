@@ -142,7 +142,7 @@ struct NativeEquationCircleSelection {
                   mark.overbar.end.x - right <= mark.region.height * 0.50 else { return nil }
             let operand = indices.map { layout[$0].text }.joined()
             guard NativeFractionReadingSelection.safeParserText(operand) != nil else { return nil }
-            starts[first] = "√(" + operand + ")"
+            starts[first] = "√{" + operand + "}"
             claimed.formUnion(indices)
         }
         for index in layout.indices {
@@ -152,7 +152,7 @@ struct NativeEquationCircleSelection {
                 surface += layout[index].text
             }
         }
-        guard let latex = NativeFractionReadingSelection.safeParserText(surface),
+        guard let latex = NativeFractionReadingSelection.safeParserText(surface, includesRootScopeMarkers: true),
               let result = MathReadingService.resolve(latex), result.status == .parsedText else { return nil }
         let region = glyphs.reduce(marks.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
         let original = MathReadingResult(sourceText: surface, latex: result.latex, unicode: result.unicode,

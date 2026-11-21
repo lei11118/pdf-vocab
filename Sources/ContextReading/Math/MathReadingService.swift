@@ -324,13 +324,14 @@ public enum MathReadingService {
 
     /// Converts a fragment of a geometry-verified PDF equation before it is
     /// combined with structural LaTeX, such as a fraction command.
-    static func latexForLayoutFragment(_ text: String) -> String? {
+    static func latexForLayoutFragment(_ text: String, includesRootScopeMarkers: Bool = false) -> String? {
         guard !text.isEmpty, text.utf16.count <= maximumUTF16Length,
               text.allSatisfy({ character in
                   character.isASCII && (character.isLetter || character.isNumber ||
                       "+-*/^_().[]<>=, ".contains(character))
                       || MathSymbolLexicon.entry(for: String(character)) != nil
                       || scriptKind(for: character) != nil
+                      || (includesRootScopeMarkers && "{}".contains(character))
               }) else { return nil }
         return latexInput(for: text.replacingOccurrences(of: "−", with: "-"))
     }
@@ -413,6 +414,10 @@ public enum MathReadingService {
                 if characters[cursor] == matching {
                     depth -= 1
                     if depth == 0 {
+                        if opener == "{" {
+                            guard cursor > index + 1 else { return nil }
+                            return (String(characters[(index + 1)..<cursor]), cursor + 1)
+                        }
                         return (String(characters[index...cursor]), cursor + 1)
                     }
                 }
