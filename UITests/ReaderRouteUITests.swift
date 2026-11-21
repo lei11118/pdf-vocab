@@ -604,8 +604,13 @@ extension ReaderRouteUITests {
         XCTAssertTrue(search.waitForExistence(timeout: 20))
 
         for marking in [false, true] {
-            if marking { app.buttons["标记模式"].tap() }
-            search.tap()
+            if marking {
+                app.buttons["标记模式"].tap()
+                app.buttons["reader.more-menu"].tap()
+                app.cells.buttons["全文搜索"].firstMatch.tap()
+            } else {
+                search.tap()
+            }
             let field = app.textFields["在文档中搜索"].firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 10))
             let before = try XCTUnwrap(waitForAudit(observer, timeout: 10) { $0["scrollY"] is Double }?["scrollY"] as? Double)

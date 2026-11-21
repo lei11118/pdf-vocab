@@ -476,16 +476,38 @@ final class ReaderCoordinator: NSObject {
         circle.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         circle.isEnabled = false
         circle.delegate = self
+        var strokeAnchor: (page: PDFPage, pagePoint: CGPoint, screenPoint: CGPoint, scale: CGFloat)?
+        circle.didBegin = { [weak self] start in
+            strokeAnchor = nil
+            guard let self, let pdfView = self.pdfView, let hit = self.pageHit(start) else { return }
+            strokeAnchor = (hit.page, hit.point, start, pdfView.scaleFactor)
+        }
         circle.didTrace = { [weak self] points in
             guard let self else { return }
             if !points.isEmpty, let scan = self.formulaScanTask {
                 scan.cancel()
                 self.formulaScanTask = nil
             }
+            if points.isEmpty { strokeAnchor = nil }
             self.traceFormulaCircle(points)
         }
         circle.didFinish = { [weak self] points in
-            Task { @MainActor in self?.completeFormulaCircle(points) }
+            guard let anchor = strokeAnchor else { return }
+            Task { @MainActor in
+                guard let self, self.formulaCircleActive, let view = self.pdfView else { return }
+                guard anchor.page.document === view.document,
+                      abs(view.scaleFactor - anchor.scale) < 0.001,
+                      self.pageHit(anchor.screenPoint)?.page === anchor.page else {
+                    self.onFormulaCircleOutcome?("页面在圈选时移动了，请重新画圈。")
+                    return
+                }
+                let projected = view.convert(anchor.pagePoint, from: anchor.page)
+                guard hypot(projected.x - anchor.screenPoint.x, projected.y - anchor.screenPoint.y) < 2 else {
+                    self.onFormulaCircleOutcome?("页面在圈选时移动了，请重新画圈。")
+                    return
+                }
+                self.completeFormulaCircle(points)
+            }
         }
         view.addGestureRecognizer(circle)
         formulaCircleGesture = circle

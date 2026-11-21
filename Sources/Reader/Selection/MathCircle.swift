@@ -41,6 +41,7 @@ struct MathCircle {
 /// Dedicated input recognizer for the active formula tool. Its view is the
 /// viewport, so the trace is separate from PDF annotations and saved ink.
 final class MathCircleGesture: UIGestureRecognizer {
+    var didBegin: ((CGPoint) -> Void)?
     var didTrace: (([CGPoint]) -> Void)?
     var didFinish: (([CGPoint]) -> Void)?
     private var points: [CGPoint] = []
@@ -53,7 +54,9 @@ final class MathCircleGesture: UIGestureRecognizer {
             return
         }
         tracked = touch
-        points = [touch.location(in: view)]
+        let start = touch.location(in: view)
+        points = [start]
+        didBegin?(start)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {

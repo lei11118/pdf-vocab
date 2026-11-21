@@ -132,8 +132,15 @@ struct MathMeaningCard: View {
                         ViewThatFits(in: .horizontal) {
                             formula(latex, fontSize: formulaFontSize)
                             formula(latex, fontSize: formulaFontSize * 0.76)
-                            ScrollView(.horizontal) {
-                                formula(latex, fontSize: formulaFontSize)
+                            formula(latex, fontSize: formulaFontSize * 0.56)
+                            VStack(alignment: .leading, spacing: 0) {
+                                ScrollView(.horizontal) {
+                                    formula(latex, fontSize: formulaFontSize)
+                                }
+                                Text("左右滑动查看整式")
+                                    .font(DS.Fonts.caption)
+                                    .foregroundStyle(DS.foreground2)
+                                    .padding([.horizontal, .bottom], DS.Space.s)
                             }
                         }
                         .background(DS.background1, in: RoundedRectangle(cornerRadius: DS.Radius.sharp))
@@ -250,6 +257,12 @@ private struct MathFormulaLabel: UIViewRepresentable {
         label.setContentHuggingPriority(.required, for: .vertical)
         label.setContentCompressionResistancePriority(.required, for: .vertical)
         return label
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView label: MTMathUILabel, context: Context) -> CGSize? {
+        // Report SwiftMath's full typeset width so ViewThatFits can reject a clipped candidate.
+        let size = label.intrinsicContentSize
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
     }
 
     func updateUIView(_ label: MTMathUILabel, context: Context) {
