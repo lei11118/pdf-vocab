@@ -54,6 +54,14 @@ jobs:
         run: |
           python3 scripts/build_dict.py
           python3 scripts/build_science.py
+      - name: Fetch OpenStax PDF for original-page tests
+        if: ${{ inputs.reading_tools_only }}
+        run: |
+          fixture=Tests/Fixtures/OpenStax-CalculusVolume1-OP.pdf
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            https://assets.openstax.org/oscms-prodcms/media/documents/CalculusVolume1-OP.pdf \
+            --output "$fixture"
+          printf '202c86537285adf7e5abeb64057c39ee7333ad8c8473b6dd6a9ddf3e72443286  %s\n' "$fixture" | shasum -a 256 -c -
       - name: Generate project
         run: |
           brew install xcodegen

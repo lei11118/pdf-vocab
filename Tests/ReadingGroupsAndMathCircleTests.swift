@@ -210,6 +210,52 @@ final class MathCircleTests: XCTestCase {
     }
 
     @MainActor
+    func testOriginalOpenStaxCasesSurviveTheReaderCirclePath() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "OpenStax-CalculusVolume1-OP", withExtension: "pdf") else {
+            throw XCTSkip("The reader-tools workflow fetches the original textbook from the publisher.")
+        }
+        let pdf = try XCTUnwrap(PDFDocument(url: url))
+        XCTAssertEqual(pdf.pageCount, 873)
+        let page = try XCTUnwrap(pdf.page(at: 18))
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 645, height: 830))
+        view.displayMode = .singlePage
+        view.document = pdf
+        view.scaleFactor = 1
+        view.layoutDocumentView()
+        view.go(to: page)
+
+        let bounds = CGRect(x: 252, y: 585, width: 109, height: 36)
+        let selected = [
+            CGPoint(x: bounds.minX + 3, y: bounds.minY), CGPoint(x: bounds.midX, y: bounds.minY),
+            CGPoint(x: bounds.maxX - 3, y: bounds.minY), CGPoint(x: bounds.maxX, y: bounds.midY),
+            CGPoint(x: bounds.maxX - 3, y: bounds.maxY), CGPoint(x: bounds.midX, y: bounds.maxY),
+            CGPoint(x: bounds.minX + 3, y: bounds.maxY), CGPoint(x: bounds.minX, y: bounds.midY)
+        ]
+        let pagePoints = selected + [selected[0]]
+        var info: SelectionInfo?
+        var message: String?
+        let coordinator = ReaderCoordinator(onPageChanged: { _ in }, onSelectionInfo: { info = $0 })
+        coordinator.pdfView = view
+        coordinator.onFormulaCircleOutcome = { message = $0 }
+        coordinator.setFormulaCircleActive(true)
+        coordinator.completeFormulaCircle(pagePoints.map { view.convert($0, from: page) })
+
+        let scan = PDFTextLayout.scan(on: page)
+        let geometry = scan.glyphs.filter { bounds.intersects($0.rect) }
+            .map { "\($0.text) baseline=\($0.baseline) box=\($0.rect)" }.joined(separator: "\n")
+        let latex = try XCTUnwrap(info?.mathReadingResult?.latex, "\(message ?? "")\n\(geometry)")
+        XCTAssertEqual(info?.mathReadingResult?.status, .parsedText)
+        XCTAssertEqual(latex.replacingOccurrences(of: " ", with: ""),
+                       #"f(x)=\begin{cases}3x+1&x\geq2\\x^{2}&x<2\end{cases}"#)
+        let image = try XCTUnwrap(info?.mathSourceImage)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "OpenStax-original-piecewise-crop"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        coordinator.dismissSelection()
+    }
+
+    @MainActor
     func testReaderCircleRequiresCompleteFractionAndWorksWithContextDisabled() throws {
         let pdf = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.nativePDF()))
         let page = try XCTUnwrap(pdf.page(at: 0))

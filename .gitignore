@@ -34,3 +34,6 @@ tools/lexical-cache/
 .impeccable/review/
 .impeccable/questions/
 .codex-068-review-*/
+
+# Original OpenStax test input, fetched from the publisher by CI
+/Tests/Fixtures/OpenStax-CalculusVolume1-OP.pdf
