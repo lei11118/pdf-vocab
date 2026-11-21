@@ -624,6 +624,9 @@ extension ReaderRouteUITests {
                 return marking ? change < -40 : change > 40
             }, "PDF scrolls past the open search window; marking=\(marking)")
             XCTAssertTrue(field.exists, "Scrolling does not close the search window")
+            let close = app.buttons["关闭窗口"].firstMatch
+            XCTAssertTrue(close.exists)
+            XCTAssertLessThan(field.frame.maxX, close.frame.minX, "Search input leaves room for the close button")
             attachAuditScreenshot(marking ? "sidebar-scroll-marking" : "sidebar-scroll-reading", app: app)
             closeReaderPanel(in: app, title: "全文搜索")
         }

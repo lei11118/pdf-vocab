@@ -69,7 +69,8 @@ struct ReaderSearchSheet: View {
             .background(DS.background1)
             .safeAreaInset(edge:.top,spacing:0) {
                 DSSearchField(placeholder:"在文档中搜索",text:$query)
-                    .padding(.horizontal,16)
+                    .padding(.leading,16)
+                    .padding(.trailing, panelClose == nil ? 16 : 52)
                     .padding(.vertical,8)
                     .background(DS.background1)
             }
