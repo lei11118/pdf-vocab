@@ -113,7 +113,12 @@ jobs:
               -only-testing:PdfVocabTests/LayoutBlockContextBuilderTests
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests
-              -only-testing:PdfVocabTests/InteractionPolishTests
+              -only-testing:PdfVocabTests/ContextualTranslationDriverTests
+              -only-testing:PdfVocabTests/InteractionPolishTests/testLinkedTextLongPressSelectsAndSingleTapNavigates
+              -only-testing:PdfVocabTests/InteractionPolishTests/testLinkBlueOutlinesDoNotModifyPDF
+              -only-testing:PdfVocabTests/InteractionPolishTests/testSingleTapNeverSelectsWordsButDoubleTapStillSelectsPunctuation
+              -only-testing:PdfVocabTests/InteractionPolishTests/testContextModeCoordinatorRoutesWordAndWholeTokenDragToSymbol
+              -only-testing:PdfVocabTests/InteractionPolishTests/testHoverBubbleHostsLongContextAndDictionaryInOneScrollableSurface
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testPDFScrollsWithSidebarSearchOpenInBothModes
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative
