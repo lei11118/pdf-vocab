@@ -114,6 +114,7 @@ jobs:
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests
               -only-testing:PdfVocabTests/ContextualTranslationDriverTests
+              -only-testing:PdfVocabTests/InteractionPolishTests/testDoubleTapExpandsOnlyDictionaryVerifiedAdjacentPhrase
               -only-testing:PdfVocabTests/InteractionPolishTests/testLinkedTextLongPressSelectsAndSingleTapNavigates
               -only-testing:PdfVocabTests/InteractionPolishTests/testLinkBlueOutlinesDoNotModifyPDF
               -only-testing:PdfVocabTests/InteractionPolishTests/testSingleTapNeverSelectsWordsButDoubleTapStillSelectsPunctuation

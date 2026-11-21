@@ -112,7 +112,8 @@ final class ReaderCoordinator: NSObject {
     var onHoverEnd: (() -> Void)?
     private var hoverKey = ""
     private var hoverEntry: (page: PDFPage, rect: CGRect, annotation: PDFAnnotation)?
-    private var readingPhraseCache: (context: SentenceContext, allowsLineWrap: Bool, result: ReadingPhraseGroup?)?
+    private var readingPhraseCache: (context: SentenceContext, selected: UTF16Span, allowsLineWrap: Bool,
+                                     dictionaryRevision: Int, result: ReadingPhraseGroup?)?
 
     /// v0.11.0(M6):扫描版 OCR 取词
     var ocrStore: OCRStore?
@@ -1575,12 +1576,18 @@ final class ReaderCoordinator: NSObject {
                                    selected: UTF16Span,
                                    sourceText: String,
                                    allowsLineWrap: Bool = false) -> ReadingPhraseGroup? {
-        if let cached = readingPhraseCache, cached.context == context, cached.allowsLineWrap == allowsLineWrap {
+        let dictionary = DictionaryStore.shared
+        let revision = dictionary.exactPhraseLookupRevision
+        if let cached = readingPhraseCache, cached.context == context, cached.selected == selected,
+           cached.allowsLineWrap == allowsLineWrap, cached.dictionaryRevision == revision {
             return cached.result
         }
-        let result = ReadingPhraseGrouper.group(in: context, selected: selected,
-                                               sourceText: sourceText, allowsLineWrap: allowsLineWrap)
-        readingPhraseCache = (context, allowsLineWrap, result)
+        let result = ReadingPhraseGrouper.group(in: context, selected: selected, sourceText: sourceText,
+                                               allowsLineWrap: allowsLineWrap, exactPhraseExists: { term in
+            guard let entry = dictionary.entry(for: term) else { return false }
+            return entry.translation?.isEmpty == false || entry.definition?.isEmpty == false
+        })
+        readingPhraseCache = (context, selected, allowsLineWrap, revision, result)
         return result
     }
 

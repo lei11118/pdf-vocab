@@ -70,7 +70,8 @@ enum ReadingPhraseGrouper {
     ]
 
     static func group(in context: SentenceContext, selected: UTF16Span,
-                      sourceText: String?, allowsLineWrap: Bool) -> ReadingPhraseGroup? {
+                      sourceText: String?, allowsLineWrap: Bool,
+                      exactPhraseExists: ((String) -> Bool)? = nil) -> ReadingPhraseGroup? {
         let source: String
         if let sourceText {
             guard let raw = context.sourceSpan.substring(in: sourceText) else { return nil }
@@ -139,15 +140,35 @@ enum ReadingPhraseGrouper {
 
         var start = 0
         while ends[start] < target { start = ends[start] + 1 }
-        guard ends[start] > start else { return nil }
-        let range = NSRange(location: words[start].range.location,
-                            length: NSMaxRange(words[ends[start]].range) - words[start].range.location)
-        let raw = text.substring(with: range)
-        guard raw.count <= maximumCharacters else { return nil }
-        return ReadingPhraseGroup(
-            sourceSpan: UTF16Span(location: context.sourceSpan.location + range.location, length: range.length),
-            sourceSurface: raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        )
+        func group(from start: Int, through end: Int) -> ReadingPhraseGroup? {
+            let range = NSRange(location: words[start].range.location,
+                                length: NSMaxRange(words[end].range) - words[start].range.location)
+            let raw = text.substring(with: range)
+            guard raw.count <= maximumCharacters else { return nil }
+            return ReadingPhraseGroup(
+                sourceSpan: UTF16Span(location: context.sourceSpan.location + range.location, length: range.length),
+                sourceSurface: raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            )
+        }
+        if ends[start] > start { return group(from: start, through: ends[start]) }
+
+        // Preserve verified terms when uncommon vocabulary defeats the POS tagger.
+        // Search only the adjacent source words that contain the tapped occurrence.
+        guard let exactPhraseExists else { return nil }
+        for count in stride(from: min(4, words.count), through: 2, by: -1) {
+            let lower = max(0, target - count + 1)
+            let upper = min(target, words.count - count)
+            guard lower <= upper else { continue }
+            for first in lower...upper {
+                let last = first + count - 1
+                let frame = ([words[first].lemma] + words[(first + 1)...last].map(\.text)).joined(separator: " ")
+                if verbFrames.contains(frame), verbFrameEnd(at: first, in: words) != last { continue }
+                guard let candidate = group(from: first, through: last),
+                      exactPhraseExists(candidate.sourceSurface.lowercased()) else { continue }
+                return candidate
+            }
+        }
+        return nil
     }
 
     static let maximumCharacters = 80
