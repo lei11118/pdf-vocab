@@ -88,7 +88,7 @@ final class NativeFractionLayoutTests: XCTestCase {
         let result = try XCTUnwrap(NativeEquationCircleSelection.build(glyphs: glyphs,
                                                                       enclosedIndices: Set(glyphs.indices),
                                                                       fractions: fractions))
-        let expected = try XCTUnwrap(MathReadingService.resolve(#"x=rac{1}{3}(y+1)^{2}-rac{2}{3}"#))
+        let expected = try XCTUnwrap(MathReadingService.resolve(#"x=\frac{1}{3}(y+1)^{2}-\frac{2}{3}"#))
         XCTAssertEqual(result.whole.readingResult?.latex, expected.latex)
         XCTAssertEqual(result.whole.readingResult?.ast, expected.ast)
         XCTAssertEqual(result.detail(at: CGPoint(x: 53.5, y: 689))?.readingResult?.sourceText, "2")
