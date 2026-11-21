@@ -70,12 +70,14 @@ final class VocabPDFView: PDFView {
         let visiblePages: [VisiblePageFingerprint]
     }
 
-    private struct PageAnnotationSnapshot {
+    private struct PageLinkOutlines {
         let page: PDFPage
-        let annotations: [PDFAnnotation]
+        let annotationCount: Int
+        let bounds: [CGRect]
     }
 
     private var lastLinkOutlineFingerprint: LinkOutlineFingerprint?
+    private var visibleLinkOutlines: [ObjectIdentifier: PageLinkOutlines] = [:]
 
     /// Display-only overlay: never mutates PDF annotations or intercepts touches.
     func refreshLinkOutlines() {
@@ -95,23 +97,25 @@ final class VocabPDFView: PDFView {
             installLinkOutlineLayerIfNeeded()
             return
         }
+        if lastLinkOutlineFingerprint?.documentIdentity != fingerprint.documentIdentity {
+            visibleLinkOutlines.removeAll()
+        }
         lastLinkOutlineFingerprint = fingerprint
 
         let path = UIBezierPath()
-        if !handwritingMode {
-            let snapshots = pages.map { PageAnnotationSnapshot(page: $0, annotations: $0.annotations) }
-            let annotationCounts = snapshots.map { $0.annotations.count }
-            if !LinkOutlineRenderingPolicy.shouldSkipOutlines(annotationCounts: annotationCounts) {
-                var outlineCount = 0
-                pageLoop: for snapshot in snapshots {
-                    for annotation in snapshot.annotations {
-                        guard Self.hasTapAction(annotation) || annotation.type == "Widget" else { continue }
-                        let rect = convert(annotation.bounds, from: snapshot.page)
-                        guard rect.intersects(bounds), !rect.isEmpty else { continue }
-                        guard LinkOutlineRenderingPolicy.canAppendOutline(currentCount: outlineCount) else { break pageLoop }
-                        path.append(UIBezierPath(rect: rect))
-                        outlineCount += 1
-                    }
+        let snapshots = handwritingMode ? [] : pages.map { linkOutlines(on: $0) }
+        // Keep only visible pages. Scrolling or pinching no longer enumerates
+        // PDFKit annotations every time the same pages are repositioned.
+        visibleLinkOutlines = Dictionary(snapshots.map { (ObjectIdentifier($0.page), $0) },
+                                         uniquingKeysWith: { first, _ in first })
+        if !LinkOutlineRenderingPolicy.shouldSkipOutlines(annotationCounts: snapshots.map(\.annotationCount)) {
+            var outlineCount = 0
+            pageLoop: for snapshot in snapshots {
+                let viewportOnPage = convert(bounds, to: snapshot.page)
+                for pageRect in snapshot.bounds where viewportOnPage.intersects(pageRect) {
+                    guard LinkOutlineRenderingPolicy.canAppendOutline(currentCount: outlineCount) else { break pageLoop }
+                    path.append(UIBezierPath(rect: convert(pageRect, from: snapshot.page)))
+                    outlineCount += 1
                 }
             }
         }
@@ -125,6 +129,22 @@ final class VocabPDFView: PDFView {
         linkOutline.lineWidth = 1
         installLinkOutlineLayerIfNeeded()
         CATransaction.commit()
+    }
+
+    private func linkOutlines(on page: PDFPage) -> PageLinkOutlines {
+        if let snapshot = visibleLinkOutlines[ObjectIdentifier(page)] { return snapshot }
+        let annotations = page.annotations
+        let outlineBounds: [CGRect]
+        if annotations.count > LinkOutlineRenderingPolicy.maximumAnnotationsPerPage {
+            outlineBounds = []
+        } else {
+            outlineBounds = annotations.compactMap { annotation in
+                guard Self.hasTapAction(annotation) || annotation.type == "Widget" else { return nil }
+                let rect = annotation.bounds
+                return rect.isEmpty ? nil : rect
+            }
+        }
+        return PageLinkOutlines(page: page, annotationCount: annotations.count, bounds: outlineBounds)
     }
 
     private func installLinkOutlineLayerIfNeeded() {

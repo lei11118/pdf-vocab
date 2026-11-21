@@ -734,6 +734,15 @@ final class InteractionPolishTests:XCTestCase {
         XCTAssertFalse(try XCTUnwrap(outline.path).isEmpty)
         XCTAssertEqual(outline.lineWidth,1)
         XCTAssertEqual(page.annotations.count,before)
+        let originalWidth = try XCTUnwrap(outline.path).boundingBox.width
+        view.autoScales = false
+        view.scaleFactor *= 0.8
+        view.layoutDocumentView()
+        view.refreshLinkOutlines()
+        let scaled = try XCTUnwrap(outline.path).boundingBox
+        XCTAssertLessThan(scaled.width, originalWidth)
+        XCTAssertEqual(scaled.width, view.convert(textRect, from: page).width, accuracy: 0.5)
+        XCTAssertEqual(page.annotations.count, before)
         let image = UIGraphicsImageRenderer(size:view.bounds.size).image { _ in
             view.drawHierarchy(in:view.bounds,afterScreenUpdates:true)
         }

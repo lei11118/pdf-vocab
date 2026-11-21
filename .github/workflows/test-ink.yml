@@ -114,6 +114,8 @@ jobs:
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests
               -only-testing:PdfVocabTests/InteractionPolishTests
+              -only-testing:PdfVocabTests/GlyphSelectionTests/testLinkBlueOutlinesDoNotModifyPDF
+              -only-testing:PdfVocabTests/GlyphSelectionTests/testLinkedTextLongPressSelectsAndSingleTapNavigates
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testPDFScrollsWithSidebarSearchOpenInBothModes
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative
