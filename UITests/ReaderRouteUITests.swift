@@ -628,7 +628,14 @@ extension ReaderRouteUITests {
             XCTAssertTrue(close.exists)
             XCTAssertLessThan(field.frame.maxX, close.frame.minX, "Search input leaves room for the close button")
             attachAuditScreenshot(marking ? "sidebar-scroll-marking" : "sidebar-scroll-reading", app: app)
-            closeReaderPanel(in: app, title: "全文搜索")
+            if marking {
+                closeReaderPanel(in: app, title: "全文搜索")
+            } else {
+                XCTAssertTrue(search.isHittable, "The open panel leaves its sidebar action accessible")
+                search.tap()
+                let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
+                XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 10), .completed)
+            }
         }
     }
 

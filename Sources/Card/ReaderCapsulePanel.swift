@@ -1,7 +1,13 @@
 import SwiftUI
 
 private struct ReaderPanelCloseKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+private struct ReaderPanelTrailingInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues {
+    var readerPanelTrailingInset: CGFloat {
+        get { self[ReaderPanelTrailingInsetKey.self] }
+        set { self[ReaderPanelTrailingInsetKey.self] = newValue }
+    }
+
     var readerPanelClose: (() -> Void)? {
         get { self[ReaderPanelCloseKey.self] }
         set { self[ReaderPanelCloseKey.self] = newValue }
@@ -38,14 +44,19 @@ struct ReaderCapsulePanel<Content:View>: View {
     let bounds: CGSize
     let onClose: () -> Void
     @ViewBuilder let content: () -> Content
+    @Environment(\.readerPanelTrailingInset) private var trailingInset
+
     var body: some View {
-        ReaderWindowSurface(bounds:bounds,onClose:onClose,windowID:title,allowsCompact:false) {
+        let inset = min(trailingInset, max(0, bounds.width - 196))
+        let available = CGSize(width: bounds.width - inset, height: bounds.height)
+        ReaderWindowSurface(bounds:available,onClose:onClose,windowID:title,allowsCompact:false) {
             ReaderPanelContent(content:content().environment(\.readerPanelClose,onClose).tint(DS.accent))
         } compact: {
             EmptyView()
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-panel.\(title)")
+        .frame(width: available.width, alignment: .leading)
     }
 }
 

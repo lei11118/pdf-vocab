@@ -281,6 +281,7 @@ struct ReaderView: View {
                     Button("取消") { confirmClearInk = false }
                 }.padding()
             }
+            .environment(\.readerPanelTrailingInset, !focusMode && !markMode ? 64 : 0)
             .onChange(of: layoutMode) { _, mode in
                 readerHandle.coordinator?.setLayoutMode(mode)
             }
