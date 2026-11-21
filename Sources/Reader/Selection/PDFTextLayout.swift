@@ -7,10 +7,16 @@ final class PDFTextLayout {
     struct Glyph { let text: String; let rect: CGRect; let baseline: CGPoint }
     /// A stroke-geometry candidate only; it does not identify a math relation.
     struct HorizontalRule { let start: CGPoint; let end: CGPoint; let lineWidth: CGFloat }
+    struct RadicalMark {
+        let region: CGRect
+        let overbar: HorizontalRule
+    }
+
     struct PageScan {
         let glyphs: [Glyph]
         let horizontalRules: [HorizontalRule]
         var imageBounds: [CGRect] = []
+        var radicalMarks: [RadicalMark] = []
     }
     private struct Font {
         var unicode: [Int: String] = [:]
@@ -74,6 +80,8 @@ final class PDFTextLayout {
     private var resources: CGPDFDictionaryRef?
     private var glyphs: [Glyph] = []
     private var horizontalRules: [HorizontalRule] = []
+    private var radicalMarks: [RadicalMark] = []
+    private var recentSlopingStrokes: [(start: CGPoint, end: CGPoint)] = []
     private var imageBounds: [CGRect] = []
     private var pathState = PathState()
     private let collectsRules: Bool
@@ -102,7 +110,8 @@ final class PDFTextLayout {
         defer { CGPDFContentStreamRelease(stream) }
         layout.scan(stream)
         let glyphs = collectingRules ? recoverUnmappedMathGlyphs(layout.glyphs, on: page) : layout.glyphs
-        return PageScan(glyphs: glyphs, horizontalRules: layout.horizontalRules, imageBounds: layout.imageBounds)
+        return PageScan(glyphs: glyphs, horizontalRules: layout.horizontalRules,
+                        imageBounds: layout.imageBounds, radicalMarks: layout.radicalMarks)
     }
 
     private static func recoverUnmappedMathGlyphs(_ glyphs: [Glyph], on page: PDFPage) -> [Glyph] {
@@ -276,12 +285,20 @@ final class PDFTextLayout {
     private func discardPath() { pathState = PathState() }
     private func strokePath() {
         defer { discardPath() }
-        guard horizontalRules.count < Self.maximumHorizontalRules,
-              let end = pathState.candidate?.end,
+        guard let end = pathState.candidate?.end,
               let start = pathState.candidate?.start,
               start.x.isFinite, start.y.isFinite, end.x.isFinite, end.y.isFinite,
-              state.strokeWidth.isFinite, state.strokeWidth > 0, state.strokeWidth <= 1_000,
-              abs(end.y-start.y) <= 0.01 else { return }
+              state.strokeWidth.isFinite, state.strokeWidth > 0, state.strokeWidth <= 1_000 else {
+            recentSlopingStrokes.removeAll(keepingCapacity: true)
+            return
+        }
+        if abs(end.y-start.y) > 0.01 {
+            if recentSlopingStrokes.count == 3 { recentSlopingStrokes.removeFirst() }
+            recentSlopingStrokes.append((start, end))
+            return
+        }
+        defer { recentSlopingStrokes.removeAll(keepingCapacity: true) }
+        guard horizontalRules.count < Self.maximumHorizontalRules else { return }
         let length = abs(end.x-start.x)
         let determinant = state.ctm.a*state.ctm.d-state.ctm.b*state.ctm.c
         guard length >= 0.1, length <= 1_000_000, determinant.isFinite, abs(determinant) > 0 else { return }
@@ -293,7 +310,35 @@ final class PDFTextLayout {
         guard width.isFinite, width > 0, width <= 1_000 else { return }
         let left = start.x <= end.x ? start : end
         let right = start.x <= end.x ? end : start
-        horizontalRules.append(HorizontalRule(start:left,end:right,lineWidth:width))
+        let rule = HorizontalRule(start: left, end: right, lineWidth: width)
+        if let mark = radicalMark(endingWith: rule) {
+            radicalMarks.append(mark)
+        } else {
+            horizontalRules.append(rule)
+        }
+    }
+
+    /// A root sign can be painted as a connected tick, dip, rise and bar
+    /// while the operand alone is stored as text.
+    private func radicalMark(endingWith rule: HorizontalRule) -> RadicalMark? {
+        guard recentSlopingStrokes.count == 3, radicalMarks.count < 128 else { return nil }
+        let tick = recentSlopingStrokes[0]
+        let dip = recentSlopingStrokes[1]
+        let rise = recentSlopingStrokes[2]
+        let height = rise.end.y - rise.start.y
+        let barLength = rule.end.x - rule.start.x
+        let tolerance = min(0.5, max(0.03, barLength * 0.035))
+        guard height >= 2, barLength >= height * 0.30, barLength <= height * 20,
+              tick.end.x > tick.start.x, tick.end.y > tick.start.y,
+              dip.end.x > dip.start.x, dip.start.y - dip.end.y >= height * 0.35,
+              rise.end.x > rise.start.x, rise.end.x - rise.start.x <= height * 0.70,
+              tick.end.y - tick.start.y <= height * 0.45,
+              hypot(tick.end.x - dip.start.x, tick.end.y - dip.start.y) <= tolerance,
+              hypot(dip.end.x - rise.start.x, dip.end.y - rise.start.y) <= tolerance,
+              hypot(rise.end.x - rule.start.x, rise.end.y - rule.start.y) <= tolerance else { return nil }
+        let region = CGRect(x: tick.start.x, y: rise.start.y,
+                            width: rule.end.x - tick.start.x, height: height)
+        return RadicalMark(region: region, overbar: rule)
     }
     private func showString(_ scanner: CGPDFScannerRef) {
         var string: CGPDFStringRef?

@@ -966,6 +966,25 @@ final class ReaderCoordinator: NSObject {
             recognizeScannedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
             return
         }
+        let radicals = scan.radicalMarks.filter { mark in
+            circle.contains(mark.overbar.start) || circle.contains(mark.overbar.end)
+                || circle.enclosesCenter(of: mark.region)
+        }
+        if !radicals.isEmpty {
+            let completeMarks = radicals.allSatisfy { mark in
+                circle.contains(mark.overbar.start) && circle.contains(mark.overbar.end)
+            }
+            if fractions.isEmpty, completeMarks, let equation = NativeEquationCircleSelection.buildVectorRadicals(
+                glyphs: enclosedGlyphs.map(\.element), marks: radicals
+            ) {
+                beginFormulaSelection(equation.whole, on: page, detailAt: equation.detail(at:))
+                finishFormulaCircle()
+            } else {
+                _ = presentUnverifiedFormula(on: page, circle: circle, displayBox: pdfView.displayBox)
+            }
+            return
+        }
+
         let hasEquality = enclosedGlyphs.contains { $0.element.text == "=" }
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,

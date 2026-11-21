@@ -161,6 +161,40 @@ final class MathCircleTests: XCTestCase {
     }
 
     @MainActor
+    func testDrawnRadicalBarRecoversTheOperandAndKeepsTheRightParenthesisOutside() throws {
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 200))
+        let data = renderer.pdfData { context in
+            context.beginPage()
+            let font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            let attributes: [NSAttributedString.Key: Any] = [.font: font]
+            ("f(" as NSString).draw(at: CGPoint(x: 18, y: 97), withAttributes: attributes)
+            ("2" as NSString).draw(at: CGPoint(x: 45, y: 97), withAttributes: attributes)
+            (")=3" as NSString).draw(at: CGPoint(x: 54, y: 97), withAttributes: attributes)
+
+            let vertices = [CGPoint(x: 36, y: 105), CGPoint(x: 38, y: 102), CGPoint(x: 41, y: 115),
+                            CGPoint(x: 45, y: 97), CGPoint(x: 54, y: 97)]
+            for (start, end) in zip(vertices, vertices.dropFirst()) {
+                context.cgContext.setLineWidth(0.4)
+                context.cgContext.move(to: start)
+                context.cgContext.addLine(to: end)
+                context.cgContext.strokePath()
+            }
+        }
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let scan = PDFTextLayout.scan(on: page)
+        let mark = try XCTUnwrap(scan.radicalMarks.first)
+        XCTAssertEqual(scan.radicalMarks.count, 1)
+        XCTAssertTrue(scan.horizontalRules.isEmpty)
+        let glyphs = scan.glyphs.filter { !$0.text.allSatisfy(\.isWhitespace) }
+        let equation = try XCTUnwrap(NativeEquationCircleSelection.buildVectorRadicals(glyphs: glyphs, marks: [mark]))
+        let expected = try XCTUnwrap(MathReadingService.resolve(#"f(\sqrt{2})=3"#))
+        XCTAssertEqual(equation.whole.readingResult?.latex, expected.latex)
+        XCTAssertEqual(equation.whole.readingResult?.ast, expected.ast)
+        XCTAssertEqual(equation.detail(at: CGPoint(x: 40, y: 92))?.readingResult?.sourceText, "√")
+    }
+
+    @MainActor
     func testReaderCircleRequiresCompleteFractionAndWorksWithContextDisabled() throws {
         let pdf = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.nativePDF()))
         let page = try XCTUnwrap(pdf.page(at: 0))

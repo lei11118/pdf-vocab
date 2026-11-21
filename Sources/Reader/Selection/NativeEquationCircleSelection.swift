@@ -116,6 +116,56 @@ struct NativeEquationCircleSelection {
         return Self(whole: FormulaCircleDetail(region: region, result: original), fractions: parts, inlineGlyphs: equationGlyphs)
     }
 
+    static func buildVectorRadicals(glyphs: [PDFTextLayout.Glyph],
+                                    marks: [PDFTextLayout.RadicalMark]) -> Self? {
+        guard !marks.isEmpty, !glyphs.isEmpty, glyphs.count <= 64,
+              let baseline = glyphs.first(where: { $0.text == "=" })
+                ?? glyphs.max(by: { $0.rect.height < $1.rect.height }),
+              let layout = inlineLayout(glyphs, baseline: baseline.baseline.y,
+                                        fontHeight: baseline.rect.height) else { return nil }
+        var surface = ""
+        var starts: [Int: String] = [:]
+        var claimed = Set<Int>()
+        for mark in marks {
+            let indices = layout.indices.filter { index in
+                let glyph = layout[index]
+                return glyph.rect.midX > mark.overbar.start.x && glyph.rect.midX < mark.overbar.end.x
+                    && glyph.baseline.y < mark.overbar.start.y
+                    && glyph.baseline.y >= mark.region.minY - mark.overbar.lineWidth
+            }
+            guard let first = indices.first, let last = indices.last,
+                  indices.count == last - first + 1, claimed.isDisjoint(with: indices),
+                  let left = indices.map({ layout[$0].rect.minX }).min(),
+                  let right = indices.map({ layout[$0].rect.maxX }).max(),
+                  left >= mark.overbar.start.x - mark.overbar.lineWidth,
+                  right <= mark.overbar.end.x + mark.overbar.lineWidth,
+                  mark.overbar.end.x - right <= mark.region.height * 0.50 else { return nil }
+            let operand = indices.map { layout[$0].text }.joined()
+            guard NativeFractionReadingSelection.safeParserText(operand) != nil else { return nil }
+            starts[first] = "√(" + operand + ")"
+            claimed.formUnion(indices)
+        }
+        for index in layout.indices {
+            if let root = starts[index] {
+                surface += root
+            } else if !claimed.contains(index) {
+                surface += layout[index].text
+            }
+        }
+        guard let latex = NativeFractionReadingSelection.safeParserText(surface),
+              let result = MathReadingService.resolve(latex), result.status == .parsedText else { return nil }
+        let region = glyphs.reduce(marks.reduce(CGRect.null) { $0.union($1.region) }) { $0.union($1.rect) }
+        let original = MathReadingResult(sourceText: surface, latex: result.latex, unicode: result.unicode,
+                                         explanation: result.explanation, status: result.status, ast: result.ast)
+        let radicalGlyphs = marks.map { mark in
+            let sign = CGRect(x: mark.region.minX, y: mark.region.minY,
+                              width: mark.overbar.start.x - mark.region.minX, height: mark.region.height)
+            return PDFTextLayout.Glyph(text: "√", rect: sign, baseline: baseline.baseline)
+        }
+        return Self(whole: FormulaCircleDetail(region: region, result: original),
+                    fractions: [], inlineGlyphs: glyphs + radicalGlyphs)
+    }
+
     // Large parentheses may be drawn as two glyphs, and ordinary digits can be
     // raised by a separate PDF text matrix. Preserve their source boxes for taps.
     private static func inlineLayout(_ glyphs: [PDFTextLayout.Glyph], baseline: CGFloat,
