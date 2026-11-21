@@ -350,7 +350,7 @@ final class ReaderCoordinator: NSObject {
         }
         reloadPermanentHighlights()
         autoHighlightCurrentPage()
-        if markMode { setScrollPanPencilExcluded(true) }   // v0.13.1:文档加载后重臂 Pencil 隔离
+        if markMode || formulaCircleActive { setScrollPanPencilExcluded(true) }
     }
 
     /// 视图拆卸前调用(先兜底保存,再停掉所有活动机制,防止悬挂)
@@ -405,11 +405,11 @@ final class ReaderCoordinator: NSObject {
         suppressNativeSelection(in: pdfView)
         observeScrolling()
         reloadPermanentHighlights()
-        if markMode { setScrollPanPencilExcluded(true) }   // v0.13.1:文档切换后重臂
+        if markMode || formulaCircleActive { setScrollPanPencilExcluded(true) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, let view = self.pdfView else { return }
             self.suppressNativeSelection(in: view)
-            if self.markMode { self.setScrollPanPencilExcluded(true) }   // 层级落定后再幂等重臂
+            if self.markMode || self.formulaCircleActive { self.setScrollPanPencilExcluded(true) }
         }
     }
 
@@ -444,7 +444,7 @@ final class ReaderCoordinator: NSObject {
         onPageChanged(index)
         fireReadingTick()
         autoHighlightCurrentPage()
-        if markMode { setScrollPanPencilExcluded(true) }   // v0.13.1:翻页后新页视图手势可能重建,幂等重臂
+        if markMode || formulaCircleActive { setScrollPanPencilExcluded(true) }
     }
 
     private func selectionDidChange() {
@@ -473,8 +473,7 @@ final class ReaderCoordinator: NSObject {
 
     func installGestures(on view: PDFView) {
         let circle = MathCircleGesture(target: nil, action: nil)
-        circle.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue),
-                                    NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        circle.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         circle.isEnabled = false
         circle.delegate = self
         circle.didTrace = { [weak self] points in
@@ -884,6 +883,7 @@ final class ReaderCoordinator: NSObject {
         }
         formulaCircleActive = active
         formulaCircleGesture?.isEnabled = active
+        setScrollPanPencilExcluded(markMode || active)
         if !active { traceFormulaCircle([]) }
     }
 
@@ -1177,13 +1177,6 @@ final class ReaderCoordinator: NSObject {
             suppressNativeSelection(in: pdfView)
             guard let hit = pageHit(viewPoint) else {
                 DiagLog.log("press.began(\(kind)): no page")
-                return
-            }
-            if let active = activeNativeMathParent, active.page === hit.page, let detail = active.detailAt(hit.point) {
-                holdMenuWork?.cancel()
-                holdMenuWork = nil
-                menu.dismiss()
-                applyFormulaDetail(detail)
                 return
             }
             if handleHitTest(viewPoint) { return }
@@ -2082,6 +2075,7 @@ final class ReaderCoordinator: NSObject {
         let snapshot: [String: Any] = [
             "page": pageIndex,
             "scale": Double(pdfView.scaleFactor),
+            "scrollY": Double(pdfScrollView(pdfView)?.contentOffset.y ?? 0),
             "selectedText": selectionText,
             "wordPoints": wordPoints,
             "mathGlyphPoints": mathGlyphPoints,
@@ -2332,6 +2326,11 @@ final class ReaderCoordinator: NSObject {
                 view.openLink(link)
                 return
             }
+            if !markMode, let detail = newFormulaDetail(on: page, at: pagePoint) {
+                menu.dismiss()
+                applyFormulaDetail(detail)
+                return
+            }
             // 命中判定留宽容差(行间隙/选区边缘的点击都算"点选区")
             let onSelection = rects.contains { $0.page === page && $0.rect.contains(pagePoint) }
             if onSelection {
@@ -2341,7 +2340,6 @@ final class ReaderCoordinator: NSObject {
                 DiagLog.log(menu.isPresented ? "tap: show menu (selection kept)" : "tap: dismiss menu (selection kept)")
                 return
             }
-            if contextReadingEnabled, !markMode, selectText(at: point, source: "singleTap") { return }
         }
         // 点空白:蓝色选区与编辑栏**一起消失**(与参考截图/原生一致)
         guard !rects.isEmpty || menu.isPresented else { return }
@@ -2361,14 +2359,14 @@ final class ReaderCoordinator: NSObject {
     @discardableResult
     private func selectText(at viewPoint: CGPoint, source: String) -> Bool {
         guard let pdfView, let hit = pageHit(viewPoint) else { return false }
-        let tolerance = source == "singleTap" ? CGFloat(0.5) : min(8, 6 / max(pdfView.scaleFactor, 0.1))
+        let tolerance = min(8, 6 / max(pdfView.scaleFactor, 0.1))
         let link = hit.page.annotations.contains { VocabPDFView.hasTapAction($0) && $0.bounds.contains(hit.point) }
         let roundTrip = pdfView.convert(hit.point, from: hit.page)
         DiagLog.log(String(format: "selection.hit: source=%@ page=%d view=(%.1f,%.1f) pdf=(%.1f,%.1f) scale=%.3f roundTrip=%.3f link=%d",
             source, currentPageIndexFor(page: hit.page), viewPoint.x, viewPoint.y,
             hit.point.x, hit.point.y, pdfView.scaleFactor, hypot(roundTrip.x-viewPoint.x,roundTrip.y-viewPoint.y), link ? 1 : 0))
         let wordSeed = SelectionGeometry.initialWord(on: hit.page, at: hit.point, tolerance: tolerance)
-        let characterSeed = wordSeed == nil && source != "singleTap"
+        let characterSeed = wordSeed == nil
             ? SelectionGeometry.initialCharacter(on: hit.page, at: hit.point, tolerance: tolerance)
             : nil
         if let selection = wordSeed ?? characterSeed {
@@ -2860,7 +2858,7 @@ final class ReaderCoordinator: NSObject {
         // 手势层级,一次性设置会被顶掉;SwiftUI 每次 updateUIView 都走这里,天然成为重臂时机。
         pencilPressRef?.isEnabled = !on
         guard changed else {
-            if on { setScrollPanPencilExcluded(true) }
+            if on || formulaCircleActive { setScrollPanPencilExcluded(true) }
             return
         }
         clearHover()
@@ -4051,7 +4049,7 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
             guard formulaCircleActive, !markMode, let pdfView else { return false }
             return pageHit(touch.location(in: pdfView)) != nil
         }
-        if formulaCircleActive { return false }
+        if formulaCircleActive, touch.type == .pencil { return false }
         if menu.containsToolbar(touch.view) { return false }
         // A drawing Pencil (including laser) cannot enter any selection path.
         if markMode && touch.type == .pencil { return false }
@@ -4066,8 +4064,7 @@ extension ReaderCoordinator: UIGestureRecognizerDelegate {
         // A nearby handle's 44pt drag target must not swallow a new double/triple tap.
         let multiTap = (gestureRecognizer as? UITapGestureRecognizer).map { $0.numberOfTapsRequired >= 2 } ?? false
         if !multiTap, let pdfView, handleHitTest(touch.location(in: pdfView)) {
-            guard gestureRecognizer === fingerPressRef || gestureRecognizer === pencilPressRef,
-                  activeNativeMathParent != nil,
+            guard gestureRecognizer === tapRef,
                   let hit = pageHit(touch.location(in: pdfView)) else { return false }
             guard newFormulaDetail(on: hit.page, at: hit.point) != nil else { return false }
         }

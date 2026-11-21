@@ -338,9 +338,7 @@ final class InteractionPolishTests:XCTestCase {
         coordinator.dismissSelection()
         let beforeSingleTap = events.count
         coordinator.perform(NSSelectorFromString("handleTap:"), with: CompletedWordTap(point: chargePoint))
-        XCTAssertEqual(events.count, beforeSingleTap + 1)
-        XCTAssertEqual(events.compactMap { $0 }.last?.contextual?.tokens.map(\.sourceSurface), ["charge"])
-        coordinator.dismissSelection()
+        XCTAssertEqual(events.count, beforeSingleTap, "Context reading must also leave ordinary single taps unselected")
 
         let press = MutableContextPress(point: chargePoint)
         coordinator.perform(NSSelectorFromString("handlePress:"), with: press)

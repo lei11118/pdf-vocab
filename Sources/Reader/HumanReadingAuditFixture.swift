@@ -14,6 +14,9 @@ enum HumanReadingAuditFixture {
         for key in ["readerCardX", "readerCardY", "readerCardW", "readerCardH"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        for axis in ["X", "Y", "W", "H"] {
+            UserDefaults.standard.removeObject(forKey: "readerWindow.全文搜索.\(axis)")
+        }
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
         if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger") {

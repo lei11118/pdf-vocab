@@ -147,9 +147,8 @@ struct ReaderView: View {
             }
             .onChange(of: translationModelID) { _, _ in scheduleTranslationPrefetch() }
             .onChange(of: translationBackend) { _, _ in scheduleTranslationPrefetch() }
-            .onChange(of: capturing || anySheetOpen) { _, blocked in
-                readerHandle.coordinator?.pdfView?.isUserInteractionEnabled = !blocked
-                if blocked {
+            .onChange(of: capturing) { _, active in
+                if active {
                     readerHandle.coordinator?.clearHover()
                     if formulaCircleActive { setFormulaCircle(false) }
                 }
@@ -605,6 +604,11 @@ struct ReaderView: View {
                         } label: { Label("在新窗口打开当前 PDF", systemImage: "macwindow.badge.plus") }
                     }
                     Button("弧形工具设置") { showToolCustomization = true }
+                    Button {
+                        setFormulaCircle(!formulaCircleActive)
+                    } label: {
+                        Label(formulaCircleActive ? "退出圈识公式" : "圈识公式", systemImage: "lasso")
+                    }
                     Button("全文搜索") { showSearch = true }
                     Button("目录与书签") { showOutline = true }
                     Button("生词本") { showVocab = true }
@@ -709,7 +713,7 @@ struct ReaderView: View {
         } else if !focusMode || formulaCircleActive {
             VStack(spacing: DS.Space.xs) {
                 if formulaCircleActive {
-                    Text(formulaCircleMessage ?? "用手指或 Apple Pencil 沿公式外缘画圈")
+                    Text(formulaCircleMessage ?? "用 Apple Pencil 沿公式外缘画圈，抬笔识别")
                         .font(DS.Fonts.caption)
                         .foregroundStyle(DS.foreground1)
                         .padding(.horizontal, 12)
@@ -749,6 +753,11 @@ struct ReaderView: View {
     private func setFormulaCircle(_ active: Bool) {
         guard let coordinator = readerHandle.coordinator else { return }
         if active {
+            if markMode {
+                markMode = false
+                coordinator.setMarkMode(false)
+            }
+            arcAnchor = nil
             wordInteraction.clear()
             translationPrefetch?.cancel()
         }
@@ -1213,7 +1222,7 @@ struct ReaderView: View {
                     },
                     toolSession: pencilTools,
                     onPencilSqueeze: { point in
-                        guard !showGraph, !capturing else { return }
+                        guard !capturing, !formulaCircleActive else { return }
                         if arcAnchor != nil { arcAnchor = nil; return }
                         if !markMode, wordInteraction.squeeze() { return }
                         // v0.19.0:挤压 = 开关工具栏 —— 第一次打开弧形工具盘,再挤一次收起
@@ -1252,6 +1261,7 @@ struct ReaderView: View {
                     onTranslate: translateSelection
                 )
                 .id(pdfLoadAttempt)
+                .allowsHitTesting(!capturing)
             } else {
                 VStack(spacing: 10) {
                     ProgressView()

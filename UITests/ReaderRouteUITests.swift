@@ -488,7 +488,7 @@ extension ReaderRouteUITests {
         XCTAssertEqual(latex.components(separatedBy: "\\partial").count - 1, 4)
         attachAuditScreenshot("schrodinger-original-and-rendered", app: app)
 
-        coordinate(for: leaf, in: app).press(forDuration: 1)
+        coordinate(for: leaf, in: app).tap()
         XCTAssertNotNil(waitForAudit(observer, timeout: 15) { ($0["selectedText"] as? String) == "∂" })
         XCTAssertEqual(source.label, "∂")
         XCTAssertEqual(app.staticTexts["math-card-latex"].firstMatch.label.trimmingCharacters(in: .whitespaces),
@@ -512,9 +512,9 @@ extension ReaderRouteUITests {
         native.tap()
         let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
         let initial = waitForAudit(observer, timeout: 20) {
-            self.point(in: $0, key: "wordPoints", text: "91", source: "text", edge: .end) != nil
+            $0["scrollY"] is Double && self.point(in: $0, key: "wordPoints", text: "91", source: "text", edge: .end) != nil
         }
-        let leaf = try XCTUnwrap(point(in: initial, key: "wordPoints", text: "91", source: "text", edge: .end))
+        let initialOffset = try XCTUnwrap(initial?["scrollY"] as? Double)
         let tool = app.buttons["reader.formula-circle-tool"]
         XCTAssertTrue(tool.waitForExistence(timeout: 10))
         tool.tap()
@@ -522,13 +522,21 @@ extension ReaderRouteUITests {
         XCTAssertTrue(instruction.waitForExistence(timeout: 5))
         attachAuditScreenshot("formula-circle-tool-active", app: app)
 
-        // XCTest exposes a single straight drag. Check that a straight finger
-        // gesture takes the circle path and is rejected without moving the page.
-        let start = coordinate(for: leaf, in: app).withOffset(CGVector(dx: -38, dy: -18))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 70, dy: 12)),
+        // XCTest drags use a finger. The armed Pencil tool must leave PDF scrolling available.
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.63))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -86)),
                     withVelocity: .slow, thenHoldForDuration: 0)
-        XCTAssertTrue(instruction.label.contains("接近闭合"))
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) {
+            abs(($0["scrollY"] as? Double ?? initialOffset) - initialOffset) > 24 && ($0["page"] as? Int) == 0
+        }, "Finger drag scrolls the PDF with the Pencil formula tool armed")
+        XCTAssertTrue(instruction.label.contains("Apple Pencil"))
         XCTAssertFalse(app.staticTexts["math-card-source"].exists)
+        start.withOffset(CGVector(dx: 0, dy: -86)).press(
+            forDuration: 0.05, thenDragTo: start,
+            withVelocity: .slow, thenHoldForDuration: 0)
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) {
+            abs(($0["scrollY"] as? Double ?? initialOffset) - initialOffset) < 27 && ($0["page"] as? Int) == 0
+        }, "Return the fraction to its original screen area before opening the math card")
 
         // Feed a sampled closed contour through the production completion path.
         let replay = app.buttons["reader.audit-replay-formula-circle"]
@@ -542,7 +550,11 @@ extension ReaderRouteUITests {
         XCTAssertFalse(instruction.exists)
         attachAuditScreenshot("formula-circle-original-and-rendered-fraction", app: app)
 
-        coordinate(for: leaf, in: app).press(forDuration: 1)
+        let detailSnapshot = waitForAudit(observer, timeout: 10) {
+            self.point(in: $0, key: "wordPoints", text: "91", source: "text", edge: .end) != nil
+        }
+        let leaf = try XCTUnwrap(point(in: detailSnapshot, key: "wordPoints", text: "91", source: "text", edge: .end))
+        coordinate(for: leaf, in: app).tap()
         XCTAssertNotNil(waitForAudit(observer, timeout: 15) {
             ($0["selectedText"] as? String) == "1"
         })
@@ -579,6 +591,38 @@ extension ReaderRouteUITests {
     }
 
 
+
+    @objc func testPDFScrollsWithSidebarSearchOpenInBothModes() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let document = app.buttons.containing(.staticText, identifier: "Human-reading-audit-text").firstMatch
+        XCTAssertTrue(document.waitForExistence(timeout: 20))
+        document.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let search = app.buttons["全文搜索"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 20))
+
+        for marking in [false, true] {
+            if marking { app.buttons["标记模式"].tap() }
+            search.tap()
+            let field = app.textFields["在文档中搜索"].firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 10))
+            let before = try XCTUnwrap(waitForAudit(observer, timeout: 10) { $0["scrollY"] is Double }?["scrollY"] as? Double)
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.70))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.40))
+            let from = marking ? end : start
+            let to = marking ? start : end
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
+            XCTAssertNotNil(waitForAudit(observer, timeout: 10) {
+                let change = ($0["scrollY"] as? Double ?? before) - before
+                return marking ? change < -40 : change > 40
+            }, "PDF scrolls past the open search window; marking=\(marking)")
+            XCTAssertTrue(field.exists, "Scrolling does not close the search window")
+            attachAuditScreenshot(marking ? "sidebar-scroll-marking" : "sidebar-scroll-reading", app: app)
+            closeReaderPanel(in: app, title: "全文搜索")
+        }
+    }
 
     @objc func testHumanReadingAuditUsesLiveTranslationSearchZoomLayoutAndVisionOCR() throws {
         let app = XCUIApplication()

@@ -130,6 +130,8 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
     }
 
     var body: some View {
+        let origin = currentPosition
+        let windowRect = CGRect(origin: origin, size: size)
         ZStack {
             fullBody
                 .environment(\.readerWindowSurfaceActive, windowStateRestored && !isCompact)
@@ -173,8 +175,8 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
             .padding(.trailing,isCompact ? gripZone : 0)
         }
         .background(DSReliefSurface(radius: cornerRadius))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .offset(x: currentPosition.x, y: currentPosition.y)
+        .position(x: windowRect.midX, y: windowRect.midY)
+        .contentShape(.interaction, ReaderWindowHitShape(windowRect: windowRect, cornerRadius: cornerRadius))
         .onAppear {
             if storedW >= minSize.width, storedH >= 0 {
                 size = CGSize(width: storedW, height: max(storedH, minSize.height))
@@ -339,6 +341,16 @@ struct ReaderWindowSurface<Expanded:View, Compact:View>: View {
         UserDefaults.standard.set(Double(currentPosition.y), forKey: storageKey("Y"))
         UserDefaults.standard.set(Double(size.width), forKey: storageKey("W"))
         UserDefaults.standard.set(Double(size.height), forKey: storageKey("H"))
+    }
+}
+
+private struct ReaderWindowHitShape: Shape {
+    let windowRect: CGRect
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .path(in: windowRect.offsetBy(dx: rect.minX, dy: rect.minY))
     }
 }
 

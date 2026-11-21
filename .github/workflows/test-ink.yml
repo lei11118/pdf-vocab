@@ -112,6 +112,9 @@ jobs:
               -only-testing:PdfVocabTests/LayoutBlockContextBuilderTests
               -only-testing:PdfVocabTests/ContextOCRSelectionTests
               -only-testing:PdfVocabTests/LocalContextTranslationTests
+              -only-testing:PdfVocabTests/InteractionPolishTests
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testPDFScrollsWithSidebarSearchOpenInBothModes
+              -only-testing:ReaderRouteUITests/ReaderRouteUITests/testResizeAcrossCapsuleThresholdAndKeepArcAnchoredWithSelectionBarOpen
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testFormulaCircleToolUsesOriginalCropAndPreservesFractionDetail
               -only-testing:ReaderRouteUITests/ReaderRouteUITests/testSchrodingerCirclePreservesRasterWithoutFlatteningFractions
