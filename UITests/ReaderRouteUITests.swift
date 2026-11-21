@@ -452,6 +452,48 @@ extension ReaderRouteUITests {
         XCTAssertFalse(app.switches["math-reading-toggle"].exists)
     }
 
+    @objc func testPiecewiseCirclePreservesBothRowsAndSelectsTheConditionSymbol() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",
+                               "--human-reading-audit-piecewise", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let document = app.buttons.containing(.staticText, identifier: "Piecewise-audit").firstMatch
+        XCTAssertTrue(document.waitForExistence(timeout: 20))
+        document.tap()
+        let observer = app.descendants(matching: .any).matching(identifier: "human-reading-audit.snapshot").firstMatch
+        let snapshot = waitForAudit(observer, timeout: 20) {
+            self.point(in: $0, key: "mathGlyphPoints", text: "≥", source: "math-glyph") != nil
+        }
+        let leaf = try XCTUnwrap(point(in: snapshot, key: "mathGlyphPoints", text: "≥", source: "math-glyph"))
+
+        let tool = app.buttons["reader.formula-circle-tool"]
+        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        tool.tap()
+        let replay = app.buttons["reader.audit-replay-formula-circle"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 5))
+        replay.tap()
+
+        let latex = app.staticTexts["math-card-latex"].firstMatch
+        guard latex.waitForExistence(timeout: 10) else {
+            attachAuditScreenshot("piecewise-circle-before-result", app: app)
+            attachAuditDiagnostics("piecewise-circle-before-result", app: app, observer: observer)
+            return XCTFail("Expected LaTeX with the two verified rows")
+        }
+        XCTAssertTrue(app.images["math-card-original-crop"].firstMatch.exists)
+        XCTAssertTrue(latex.label.contains(#"\begin{cases}3x+1 & x\geq"#) || latex.label.contains(#"\begin{cases}3x+1 & x\ge"#))
+        XCTAssertTrue(latex.label.contains(#"x^{2} & x<2\end{cases}"#))
+        let fullLatex = latex.label
+        attachAuditScreenshot("piecewise-original-and-rendered", app: app)
+
+        coordinate(for: leaf, in: app).tap()
+        XCTAssertNotNil(waitForAudit(observer, timeout: 10) { ($0["selectedText"] as? String) == "≥" })
+        XCTAssertEqual(app.staticTexts["math-card-source"].firstMatch.label, "≥")
+        let whole = app.buttons["math-card-select-whole"]
+        XCTAssertTrue(whole.waitForExistence(timeout: 5))
+        whole.tap()
+        XCTAssertEqual(latex.label, fullLatex)
+    }
+
     @objc func testSchrodingerCircleShowsOriginalAndExactEquationThenSelectsDerivative() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--human-reading-audit", "--human-reading-audit-circle",

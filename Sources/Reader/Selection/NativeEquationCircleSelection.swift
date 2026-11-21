@@ -168,7 +168,7 @@ struct NativeEquationCircleSelection {
 
     // Large parentheses may be drawn as two glyphs, and ordinary digits can be
     // raised by a separate PDF text matrix. Preserve their source boxes for taps.
-    private static func inlineLayout(_ glyphs: [PDFTextLayout.Glyph], baseline: CGFloat,
+    static func inlineLayout(_ glyphs: [PDFTextLayout.Glyph], baseline: CGFloat,
                                      fontHeight: CGFloat) -> [PDFTextLayout.Glyph]? {
         let baselineTolerance = max(1.5, fontHeight * 0.20)
         let digits = Dictionary(uniqueKeysWithValues: zip("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹"))

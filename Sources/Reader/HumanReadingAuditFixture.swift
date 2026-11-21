@@ -19,6 +19,13 @@ enum HumanReadingAuditFixture {
         }
 
         let temporaryDirectory = FileManager.default.temporaryDirectory
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-piecewise") {
+            let url = temporaryDirectory.appendingPathComponent("Piecewise-audit.pdf")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try piecewisePDF().write(to: url, options: .atomic)
+            _ = try store.importFile(from: url)
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger") {
             for raster in [false, true] {
                 let url = temporaryDirectory.appendingPathComponent(
@@ -40,6 +47,27 @@ enum HumanReadingAuditFixture {
         try scanPDF().write(to: scanURL, options: .atomic)
         _ = try store.importFile(from: nativeURL)
         _ = try store.importFile(from: scanURL)
+    }
+
+    static let piecewisePageRegion = CGRect(x: 120, y: 417, width: 250, height: 70)
+
+    static func piecewisePDF() -> Data {
+        UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
+            context.beginPage()
+            func draw(_ text: String, _ x: CGFloat, _ y: CGFloat, size: CGFloat = 24) {
+                let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+                (text as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: font])
+            }
+            draw("f(x)=", 140, 335)
+            draw("⎧", 217, 314)
+            draw("⎨", 217, 334)
+            draw("⎩", 217, 354)
+            draw("3x+1", 237, 318)
+            draw("x≥2", 322, 318)
+            draw("x", 237, 350)
+            draw("2", 251, 345, size: 17)
+            draw("x<2", 322, 350)
+        }
     }
 
     static func nativePDF() -> Data {

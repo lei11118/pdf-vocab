@@ -986,6 +986,16 @@ final class ReaderCoordinator: NSObject {
             return
         }
 
+        if NativePiecewiseSelection.hasBrace(in: enclosedGlyphs.map(\.element)) {
+            if fractions.isEmpty, let equation = NativePiecewiseSelection.build(on: scan.glyphs, enclosed: indices) {
+                beginFormulaSelection(equation.whole, on: page, detailAt: equation.detail(at:))
+                finishFormulaCircle()
+            } else if !presentUnverifiedFormula(on: page, circle: circle, displayBox: pdfView.displayBox) {
+                onFormulaCircleOutcome?("请圈住完整的左括号以及每一行的表达式和条件。")
+            }
+            return
+        }
+
         let hasEquality = enclosedGlyphs.contains { $0.element.text == "=" }
         if !fractions.isEmpty {
             if let equation = NativeEquationCircleSelection.build(glyphs: scan.glyphs, enclosedIndices: indices,
@@ -2002,8 +2012,14 @@ final class ReaderCoordinator: NSObject {
         let scan = PDFTextLayout.scan(on: page)
         let fraction = NativeFractionLayout.detect(in: scan).first
         let isSchrodinger = ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger")
-        let bounds = isSchrodinger ? HumanReadingAuditFixture.schrodingerPageRegion.insetBy(dx: -24, dy: -24)
-            : fraction?.region ?? CGRect(x: 43, y: 245, width: 235, height: 59)
+        let bounds: CGRect
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-piecewise") {
+            bounds = HumanReadingAuditFixture.piecewisePageRegion
+        } else if isSchrodinger {
+            bounds = HumanReadingAuditFixture.schrodingerPageRegion.insetBy(dx: -24, dy: -24)
+        } else {
+            bounds = fraction?.region ?? CGRect(x: 43, y: 245, width: 235, height: 59)
+        }
         let screen = pdfView.convert(bounds, from: page).insetBy(dx: -15, dy: -11)
         let points = (0...36).map { index in
             let angle = Double(index) * 2 * .pi / 36
@@ -2111,7 +2127,8 @@ final class ReaderCoordinator: NSObject {
         }
 
         let mathGlyphPoints: [[String: Any]]
-        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger") {
+        if ProcessInfo.processInfo.arguments.contains("--human-reading-audit-schrodinger")
+            || ProcessInfo.processInfo.arguments.contains("--human-reading-audit-piecewise") {
             mathGlyphPoints = PDFTextLayout.scan(on: page).glyphs.compactMap { glyph in
                 guard !glyph.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       let point = screenPoint(CGPoint(x: glyph.rect.midX, y: glyph.rect.midY)) else { return nil }

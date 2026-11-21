@@ -195,6 +195,21 @@ final class MathCircleTests: XCTestCase {
     }
 
     @MainActor
+    func testNativePiecewiseRowsPreserveExponentAndRejectMissingCondition() throws {
+        let document = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.piecewisePDF()))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let glyphs = PDFTextLayout.scan(on: page).glyphs
+        let indices = Set(glyphs.indices.filter { !glyphs[$0].text.allSatisfy(\.isWhitespace) })
+        let geometry = glyphs.map { "\($0.text) baseline=\($0.baseline) box=\($0.rect)" }.joined(separator: "\n")
+        let result = try XCTUnwrap(NativePiecewiseSelection.build(on: glyphs, enclosed: indices), geometry)
+        let latex = try XCTUnwrap(result.whole.readingResult?.latex)
+        XCTAssertTrue(latex.hasPrefix(#"f(x)=\begin{cases}"#))
+        XCTAssertTrue(latex.contains(#"x^{2} & x<2\end{cases}"#))
+        let last = try XCTUnwrap(glyphs.indices.last(where: { glyphs[$0].text == "2" && glyphs[$0].rect.midX > 300 }))
+        XCTAssertNil(NativePiecewiseSelection.build(on: glyphs, enclosed: indices.subtracting([last])))
+    }
+
+    @MainActor
     func testReaderCircleRequiresCompleteFractionAndWorksWithContextDisabled() throws {
         let pdf = try XCTUnwrap(PDFDocument(data: HumanReadingAuditFixture.nativePDF()))
         let page = try XCTUnwrap(pdf.page(at: 0))

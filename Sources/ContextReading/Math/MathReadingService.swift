@@ -45,6 +45,24 @@ public enum MathReadingService {
         resolve(sourceText, verifiedFragment: true)
     }
 
+    /// SwiftMath expands cases into a table and its left brace. Keep the
+    /// original cases command so reserializing cannot add a second brace.
+    static func resolveLayoutCases(sourceText: String, prefix: String,
+                                   rows: [(expression: String, condition: String)]) -> MathReadingResult? {
+        guard (2...5).contains(rows.count) else { return nil }
+        let cells = rows.map { $0.expression + " & " + $0.condition }.joined(separator: #" \\ "#)
+        let latex = prefix + #"\begin{cases}"# + cells + #"\end{cases}"#
+        guard preflight(latex, maximumUTF16Units: maximumLatexUTF16Length) else { return nil }
+        var parseError: NSError?
+        guard let list = MTMathListBuilder.build(fromString: latex, error: &parseError) else { return nil }
+        var budget = ASTBudget()
+        guard let ast = makeSequence(from: list, depth: 0, budget: &budget),
+              !budget.exceeded, ast.isComplete else { return nil }
+        return MathReadingResult(sourceText: sourceText, latex: latex, unicode: nil,
+                                 explanation: "按原页左括号与两列位置重建分段函数。点选表达式、条件或单个符号可查看细节。",
+                                 status: .parsedText, ast: ast)
+    }
+
     private static func resolve(_ sourceText: String, verifiedFragment: Bool) -> MathReadingResult? {
         guard !sourceText.isEmpty else { return nil }
         guard sourceText.utf16.count <= maximumUTF16Length else {
@@ -614,7 +632,7 @@ public enum MathReadingService {
         var children: [MathExpressionNode] = []
 
         for atom in list.atoms {
-            if atom.type == .style {
+            if atom.type == .style || atom.type == .space {
                 continue
             }
             guard let node = makeAtom(atom, depth: depth + 1, budget: &budget) else { return nil }
